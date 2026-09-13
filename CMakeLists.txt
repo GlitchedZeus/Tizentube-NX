@@ -36,6 +36,10 @@ if(TTNX_BUILD_TESTS)
     target_link_libraries(tizentube_nx_search_result_tests PRIVATE tizentube_nx_core)
     add_test(NAME search_result COMMAND tizentube_nx_search_result_tests)
 
+    add_executable(tizentube_nx_url_tests tests/url_tests.cpp)
+    target_link_libraries(tizentube_nx_url_tests PRIVATE tizentube_nx_core)
+    add_test(NAME url COMMAND tizentube_nx_url_tests)
+
     add_executable(tizentube_nx_network_policy_tests tests/network_policy_tests.cpp)
     target_link_libraries(tizentube_nx_network_policy_tests PRIVATE tizentube_nx_core)
     add_test(NAME network_policy COMMAND tizentube_nx_network_policy_tests)
