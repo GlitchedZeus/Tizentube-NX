@@ -10,6 +10,14 @@ enum class HttpMethod {
     Post,
 };
 
+enum class HttpFailureStage {
+    None,
+    Policy,
+    Tcp,
+    Tls,
+    Http,
+};
+
 struct HttpHeader {
     std::string name;
     std::string value;
@@ -33,6 +41,7 @@ struct HttpResult {
     bool ok{false};
     HttpResponse response;
     std::string error;
+    HttpFailureStage failure_stage{HttpFailureStage::None};
 };
 
 class HttpClient {
