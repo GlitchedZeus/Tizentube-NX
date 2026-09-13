@@ -56,6 +56,14 @@ if(TTNX_BUILD_TESTS)
     target_link_libraries(tizentube_nx_search_response_tests PRIVATE tizentube_nx_core)
     add_test(NAME search_response COMMAND tizentube_nx_search_response_tests)
 
+    add_executable(tizentube_nx_search_robustness_tests tests/search_robustness_tests.cpp)
+    target_link_libraries(tizentube_nx_search_robustness_tests PRIVATE tizentube_nx_core)
+    add_test(NAME search_robustness COMMAND tizentube_nx_search_robustness_tests)
+
+    add_executable(tizentube_nx_search_mutation_tests tests/search_mutation_tests.cpp)
+    target_link_libraries(tizentube_nx_search_mutation_tests PRIVATE tizentube_nx_core)
+    add_test(NAME search_mutation COMMAND tizentube_nx_search_mutation_tests)
+
     add_executable(tizentube_nx_guest_search_tests tests/guest_search_tests.cpp)
     target_link_libraries(tizentube_nx_guest_search_tests PRIVATE tizentube_nx_core)
     add_test(NAME guest_search COMMAND tizentube_nx_guest_search_tests)

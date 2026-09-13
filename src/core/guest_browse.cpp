@@ -10,6 +10,13 @@
 namespace ttnx::core {
 namespace {
 
+constexpr std::size_t kMaxResultIdBytes = 128;
+constexpr std::size_t kMaxTitleBytes = 512;
+constexpr std::size_t kMaxChannelTextBytes = 256;
+constexpr std::size_t kMaxMetadataTextBytes = 256;
+constexpr std::size_t kMaxAccessibilityBytes = 1024;
+constexpr std::size_t kMaxThumbnailUrlBytes = 2048;
+
 std::string lowercase(std::string_view value) {
     std::string out(value);
     std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
@@ -23,6 +30,39 @@ bool contains_any(std::string_view value, std::initializer_list<std::string_view
         if (value.find(needle) != std::string_view::npos) return true;
     }
     return false;
+}
+
+std::string bounded_text(const std::string& value, std::size_t max_bytes) {
+    return value.size() <= max_bytes ? value : std::string{};
+}
+
+bool safe_https_reference(std::string_view value) {
+    if (value.empty() || value.size() > kMaxThumbnailUrlBytes || !value.starts_with("https://")) {
+        return false;
+    }
+    for (const unsigned char c : value) {
+        if (c <= 0x20 || c == 0x7f) return false;
+    }
+    return true;
+}
+
+bool valid_duration_text(std::string_view value) {
+    if (value.empty()) return false;
+    if (value.size() > 32 || value.front() == ':' || value.back() == ':') return false;
+
+    bool previous_colon = false;
+    bool saw_digit = false;
+    for (const unsigned char c : value) {
+        if (c == ':') {
+            if (previous_colon) return false;
+            previous_colon = true;
+            continue;
+        }
+        if (!std::isdigit(c)) return false;
+        previous_colon = false;
+        saw_digit = true;
+    }
+    return saw_digit;
 }
 
 std::optional<BrowseResult> normalize_renderer_record(const RendererRecord& record) {
@@ -46,19 +86,26 @@ std::optional<BrowseResult> normalize_renderer_record(const RendererRecord& reco
             return std::nullopt;
     }
 
-    if (record.item.id.empty() || record.item.title.empty()) return std::nullopt;
+    if (record.item.id.empty() || record.item.id.size() > kMaxResultIdBytes ||
+        record.item.title.empty() || record.item.title.size() > kMaxTitleBytes) {
+        return std::nullopt;
+    }
 
     result.id = record.item.id;
     result.title = record.item.title;
-    result.channel_name = record.channel_title;
-    result.channel_id = record.channel_id;
-    result.thumbnail_url = record.thumbnail_url;
-    result.duration_text = record.duration_text;
-    result.view_count_text = record.view_count_text;
-    result.published_text = record.published_text;
-    result.subscriber_count_text = record.subscriber_count_text;
-    result.video_count_text = record.video_count_text;
-    result.accessibility_text = record.accessibility_text;
+    result.channel_name = bounded_text(record.channel_title, kMaxChannelTextBytes);
+    result.channel_id = bounded_text(record.channel_id, kMaxResultIdBytes);
+    result.thumbnail_url = safe_https_reference(record.thumbnail_url)
+        ? record.thumbnail_url
+        : std::string{};
+    result.duration_text = valid_duration_text(record.duration_text)
+        ? record.duration_text
+        : std::string{};
+    result.view_count_text = bounded_text(record.view_count_text, kMaxMetadataTextBytes);
+    result.published_text = bounded_text(record.published_text, kMaxMetadataTextBytes);
+    result.subscriber_count_text = bounded_text(record.subscriber_count_text, kMaxMetadataTextBytes);
+    result.video_count_text = bounded_text(record.video_count_text, kMaxMetadataTextBytes);
+    result.accessibility_text = bounded_text(record.accessibility_text, kMaxAccessibilityBytes);
     result.upcoming = record.upcoming;
     return result;
 }
