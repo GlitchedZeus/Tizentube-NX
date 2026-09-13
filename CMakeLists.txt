@@ -12,12 +12,15 @@ add_library(tizentube_nx_core
     src/core/search_presentation.cpp
     src/core/search_error.cpp
     src/core/search_model.cpp
+    src/core/home_model.cpp
     src/core/guest_browse.cpp
     src/core/guest_api.cpp
     src/core/session_bootstrap.cpp
     src/core/browse_response.cpp
     src/core/search_response.cpp
+    src/core/home_response.cpp
     src/core/guest_search.cpp
+    src/core/guest_home.cpp
     src/core/search_flow.cpp
     src/core/diagnostics.cpp
     src/core/outbound_policy.cpp
@@ -56,6 +59,10 @@ if(TTNX_BUILD_TESTS)
     target_link_libraries(tizentube_nx_search_model_tests PRIVATE tizentube_nx_core)
     add_test(NAME search_model COMMAND tizentube_nx_search_model_tests)
 
+    add_executable(tizentube_nx_home_model_tests tests/home_model_tests.cpp)
+    target_link_libraries(tizentube_nx_home_model_tests PRIVATE tizentube_nx_core)
+    add_test(NAME home_model COMMAND tizentube_nx_home_model_tests)
+
     add_executable(tizentube_nx_url_tests tests/url_tests.cpp)
     target_link_libraries(tizentube_nx_url_tests PRIVATE tizentube_nx_core)
     add_test(NAME url COMMAND tizentube_nx_url_tests)
@@ -81,6 +88,10 @@ if(TTNX_BUILD_TESTS)
     target_link_libraries(tizentube_nx_search_response_tests PRIVATE tizentube_nx_core)
     add_test(NAME search_response COMMAND tizentube_nx_search_response_tests)
 
+    add_executable(tizentube_nx_home_response_tests tests/home_response_tests.cpp)
+    target_link_libraries(tizentube_nx_home_response_tests PRIVATE tizentube_nx_core)
+    add_test(NAME home_response COMMAND tizentube_nx_home_response_tests)
+
     add_executable(tizentube_nx_search_metadata_tests tests/search_metadata_tests.cpp)
     target_link_libraries(tizentube_nx_search_metadata_tests PRIVATE tizentube_nx_core)
     add_test(NAME search_metadata COMMAND tizentube_nx_search_metadata_tests)
@@ -104,6 +115,10 @@ if(TTNX_BUILD_TESTS)
     add_executable(tizentube_nx_guest_search_tests tests/guest_search_tests.cpp)
     target_link_libraries(tizentube_nx_guest_search_tests PRIVATE tizentube_nx_core)
     add_test(NAME guest_search COMMAND tizentube_nx_guest_search_tests)
+
+    add_executable(tizentube_nx_guest_home_tests tests/guest_home_tests.cpp)
+    target_link_libraries(tizentube_nx_guest_home_tests PRIVATE tizentube_nx_core)
+    add_test(NAME guest_home COMMAND tizentube_nx_guest_home_tests)
 
     add_executable(tizentube_nx_search_executor_error_tests tests/search_executor_error_tests.cpp)
     target_link_libraries(tizentube_nx_search_executor_error_tests PRIVATE tizentube_nx_core)
