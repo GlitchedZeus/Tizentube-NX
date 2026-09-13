@@ -12,6 +12,7 @@ add_library(tizentube_nx_core
     src/core/guest_api.cpp
     src/core/session_bootstrap.cpp
     src/core/outbound_policy.cpp
+    src/core/http1.cpp
     src/core/settings.cpp
 )
 target_include_directories(tizentube_nx_core PUBLIC include)
@@ -30,6 +31,10 @@ if(TTNX_BUILD_TESTS)
     add_executable(tizentube_nx_network_policy_tests tests/network_policy_tests.cpp)
     target_link_libraries(tizentube_nx_network_policy_tests PRIVATE tizentube_nx_core)
     add_test(NAME network_policy COMMAND tizentube_nx_network_policy_tests)
+
+    add_executable(tizentube_nx_http1_tests tests/http1_tests.cpp)
+    target_link_libraries(tizentube_nx_http1_tests PRIVATE tizentube_nx_core)
+    add_test(NAME http1 COMMAND tizentube_nx_http1_tests)
 
     if(UNIX)
         add_executable(tizentube_nx_storage_tests tests/storage_tests.cpp switch/source/app_storage.cpp)
