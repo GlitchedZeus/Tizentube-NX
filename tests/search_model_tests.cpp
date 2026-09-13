@@ -142,6 +142,22 @@ int main() {
     expect(model.generation() == gen_new && model.state() == SearchViewState::Loading,
            "new query remains authoritative after stale callbacks");
 
+    SearchModel repeated;
+    const auto repeated_first = repeated.begin_query("same query");
+    const auto repeated_second = repeated.begin_query("same query");
+    expect(repeated_second > repeated_first,
+           "repeated Search action receives a new generation even for identical query text");
+    expect(!repeated.apply_first_page(repeated_first, first),
+           "first repeated Search completion cannot overwrite the newer Search action");
+    expect(repeated.apply_first_page(repeated_second, first),
+           "latest repeated Search completion remains authoritative");
+
+    SearchModel tab_switch;
+    const auto tab_generation = tab_switch.begin_query("tab switch");
+    tab_switch.reset();
+    expect(!tab_switch.apply_first_page(tab_generation, first),
+           "page/controller reset rejects a completion from a departed Search generation");
+
     const auto before_reset = model.generation();
     model.reset();
     expect(model.generation() > before_reset, "reset invalidates in-flight generation tokens");
