@@ -41,6 +41,10 @@ int main() {
            "empty result message is concise");
     expect(search_error_message(SearchErrorCode::ContinuationFailure).find("More results") != std::string::npos,
            "continuation failure is distinguishable");
+    expect(search_error_message(SearchErrorCode::MemoryPressure).find("memory") != std::string::npos,
+           "memory-pressure failure is explicit without leaking exception text");
+    expect(search_error_message(SearchErrorCode::InternalFailure).find("internal error") != std::string::npos,
+           "unexpected worker failure has bounded internal-error wording");
 
     for (const auto code : {
              SearchErrorCode::NetworkUnavailable,
@@ -49,7 +53,9 @@ int main() {
              SearchErrorCode::MalformedResponse,
              SearchErrorCode::UnsupportedResponse,
              SearchErrorCode::EmptyResults,
-             SearchErrorCode::ContinuationFailure}) {
+             SearchErrorCode::ContinuationFailure,
+             SearchErrorCode::MemoryPressure,
+             SearchErrorCode::InternalFailure}) {
         const auto message = search_error_message(code);
         expect(!message.empty(), "non-none error code has a user-facing message");
         expect(!contains_sensitive_marker(message), "UI error message contains no sensitive marker names");
