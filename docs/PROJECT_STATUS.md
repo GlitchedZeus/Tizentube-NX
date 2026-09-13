@@ -261,3 +261,16 @@ The next physical-Switch gate is:
 8. report any exact safe Search error/status text.
 
 Only after that physical result should live Search be called hardware-accepted.
+
+
+## Physical startup crash investigation — 2026-09-13
+
+- First hardware attempt of checkpoint `5b46829ead0a94089696e1521cb101637e2bfb3e` aborted immediately from Spaira before the TizenTube NX UI became visible. Atmosphère reported `std::abort (0xFFE)`.
+- No guest probe, Search tab interaction, keyboard, Search POST or live YouTube Search response occurred. Live Search hardware acceptance is therefore **FAILED / BLOCKED**, while the earlier guest-bootstrap checkpoint `96dbf0be46d7fddb38a5510d9269d267e74fcce2` remains physically accepted.
+- The exact bad NRO was reconstructed byte-for-byte. Its hardware offsets were symbolicated against the matching ELF/map. The reported PC `+0x89568` resolves inside pinned Borealis `SwitchVideoContext::updateWindowSize()` to a normal `ldr x21, [sp,#32]` in the display-resolution fallback path; the mixed stack-scan candidates do not form a trustworthy unwind chain. Root cause remains **UNKNOWN**.
+- Pinned Borealis creates TabFrame pages lazily. Initial focus creates Home; Search is not eagerly constructed, so `refresh_search_page()` is not on the normal pre-first-frame startup path.
+- Accepted-vs-bad binary review found identical `.bss`/TLS sizes. The bad image added about 168 KiB of allocatable sections, mostly code, which does not support a startup OOM conclusion.
+- Startup recovery build quarantines live Search UI/network execution, restores plain `ScrollingFrame` page ownership used by the accepted shell, and writes bounded last-stage boot markers through first-frame completion.
+- Preventative Search hardening is retained separately: `std::bad_alloc`, `std::exception` and unknown exceptions are contained by a no-throw worker boundary; exception text is discarded; publication has a no-throw emergency error path; first-page flow state is reset on fatal-like worker failures. This is **not** claimed as the cause of the physical startup crash.
+- Exact outbound policy remains `www.youtube.com:443`; Nintendo hard deny, TLS verification, redirect revalidation, IP-literal rejection and the absence of `switch-curl` remain unchanged.
+- Next hardware gate is startup only: launch, idle 30 seconds, navigate all tabs without Guest/Search networking, exit, and relaunch once.

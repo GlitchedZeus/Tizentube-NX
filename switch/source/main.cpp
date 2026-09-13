@@ -20,6 +20,7 @@
 #include "tizentube_nx/ui/navigation.hpp"
 #include "tizentube_nx/youtube/guest_api.hpp"
 #include "tizentube_nx/youtube/search_flow.hpp"
+#include "tizentube_nx/youtube/search_worker_guard.hpp"
 #include "tizentube_nx/youtube/session_bootstrap.hpp"
 
 namespace {
@@ -94,7 +95,9 @@ public:
     }
 
     brls::View* createContentView() override {
+        ttnx::record_boot_event("boot-07-create-content");
         auto* frame = new brls::TabFrame();
+        ttnx::record_boot_event("boot-08-tabframe");
         frame->setTitle("TizenTube NX");
 
         // This pinned framework has a placeholder footer. Supply real hints
@@ -113,13 +116,15 @@ public:
                 return create_page(section);
             });
         }
+        ttnx::record_boot_event("boot-09-tabs-added");
         refresh_footer();
         return frame;
     }
 
     void tick() {
         pump_network_result();
-        pump_search_result();
+        // Live Search is quarantined for the startup-only hardware gate.
+        // No Search worker completion is pumped until startup is accepted.
         update_frame_rate();
     }
 
@@ -190,6 +195,12 @@ private:
     std::uint64_t pending_search_generation_{0};
     SearchWorkerKind pending_search_kind_{SearchWorkerKind::FirstPage};
     ttnx::youtube::GuestSearchResult pending_search_;
+    std::atomic_bool pending_search_emergency_{false};
+    std::atomic<std::uint64_t> pending_search_emergency_generation_{0};
+    std::atomic<ttnx::core::SearchErrorCode> pending_search_emergency_code_{
+        ttnx::core::SearchErrorCode::None};
+    std::atomic<ttnx::youtube::SearchWorkerStage> search_worker_stage_{
+        ttnx::youtube::SearchWorkerStage::Idle};
 
     // Only the active TabFrame page exists. TrackedSectionPage clears these
     // pointers synchronously on tab destruction, so UI refresh never touches a
@@ -542,13 +553,21 @@ private:
     void publish_search_result(
         std::uint64_t generation,
         SearchWorkerKind kind,
-        ttnx::youtube::GuestSearchResult result) {
-        {
+        ttnx::youtube::GuestSearchResult result) noexcept {
+        try {
             std::lock_guard<std::mutex> lock(search_mutex_);
             pending_search_generation_ = generation;
             pending_search_kind_ = kind;
             pending_search_ = std::move(result);
             pending_search_result_ = true;
+        } catch (const std::bad_alloc&) {
+            pending_search_emergency_generation_.store(generation);
+            pending_search_emergency_code_.store(ttnx::core::SearchErrorCode::MemoryPressure);
+            pending_search_emergency_.store(true);
+        } catch (...) {
+            pending_search_emergency_generation_.store(generation);
+            pending_search_emergency_code_.store(ttnx::core::SearchErrorCode::InternalFailure);
+            pending_search_emergency_.store(true);
         }
         // Keep search_busy_ true until the UI thread joins and applies the
         // completion. This closes the tiny window where a second button press
@@ -575,6 +594,10 @@ private:
             }
         }
 
+        const bool have_emergency = pending_search_emergency_.exchange(false);
+        const auto emergency_generation = pending_search_emergency_generation_.load();
+        const auto emergency_code = pending_search_emergency_code_.load();
+
         search_worker_done_.store(false);
         search_busy_.store(false);
 
@@ -591,6 +614,8 @@ private:
                 }
                 applied = search_model_.fail(generation, code);
             }
+        } else if (have_emergency) {
+            applied = search_model_.fail(emergency_generation, emergency_code);
         }
 
         refresh_footer();
@@ -610,24 +635,49 @@ private:
         refresh_footer();
         refresh_search_page(false);
 
-        const auto session = *guest_session_;
         try {
+            const auto session = *guest_session_;
             search_worker_ = std::thread(
                 [this, generation, kind, query = std::move(query), session] {
-                    ttnx::youtube::GuestSearchResult result;
-                    if (kind == SearchWorkerKind::Continuation) {
-                        result = search_flow_.next(network_client_, session);
-                    } else {
-                        result = search_flow_.begin(network_client_, session, query);
+                    ttnx::youtube::SearchWorkerStage stage =
+                        ttnx::youtube::SearchWorkerStage::BuildingRequest;
+                    search_worker_stage_.store(stage);
+                    auto protected_result = ttnx::youtube::protect_search_worker_operation(
+                        stage,
+                        [&] {
+                            stage = ttnx::youtube::SearchWorkerStage::SendingRequest;
+                            search_worker_stage_.store(stage);
+                            auto result = kind == SearchWorkerKind::Continuation
+                                ? search_flow_.next(network_client_, session)
+                                : search_flow_.begin(network_client_, session, query);
+                            stage = ttnx::youtube::SearchWorkerStage::Normalizing;
+                            search_worker_stage_.store(stage);
+                            return result;
+                        },
+                        [&] {
+                            if (kind == SearchWorkerKind::FirstPage) search_flow_.reset();
+                        });
+                    search_worker_stage_.store(protected_result.failure_stage);
+                    publish_search_result(
+                        generation, kind, std::move(protected_result.result));
+                    if (!protected_result.caught_exception) {
+                        search_worker_stage_.store(ttnx::youtube::SearchWorkerStage::Complete);
                     }
-                    publish_search_result(generation, kind, std::move(result));
                 });
+        } catch (const std::bad_alloc&) {
+            search_busy_.store(false);
+            search_worker_done_.store(false);
+            const bool applied = search_model_.fail(
+                generation, ttnx::core::SearchErrorCode::MemoryPressure);
+            refresh_footer();
+            refresh_search_page(applied);
         } catch (...) {
             search_busy_.store(false);
             search_worker_done_.store(false);
-            search_model_.fail(generation, ttnx::core::SearchErrorCode::NetworkUnavailable);
+            const bool applied = search_model_.fail(
+                generation, ttnx::core::SearchErrorCode::InternalFailure);
             refresh_footer();
-            refresh_search_page(false);
+            refresh_search_page(applied);
         }
     }
 
@@ -703,8 +753,20 @@ private:
 
     brls::View* create_page(ttnx::ui::RootSection section) {
         using ttnx::ui::RootSection;
-        auto* scroll = new TrackedSectionPage(this, section);
-        active_page_ = scroll;
+        // Startup recovery build: use the same plain ScrollingFrame ownership
+        // model as the physically accepted checkpoint. Tab switches are synchronous
+        // on the UI thread, so stale UI-only pointers are cleared before creating
+        // the replacement page.
+        home_probe_button_ = nullptr;
+        home_status_label_ = nullptr;
+        home_detail_label_ = nullptr;
+        search_query_label_ = nullptr;
+        search_status_label_ = nullptr;
+        search_action_button_ = nullptr;
+        search_results_box_ = nullptr;
+        search_load_more_button_ = nullptr;
+        search_selection_label_ = nullptr;
+        auto* scroll = new brls::ScrollingFrame();
         auto* content = new brls::Box(brls::Axis::COLUMN);
         content->setPadding(32, 36, 32, 36);
         scroll->setContentView(content);
@@ -740,57 +802,21 @@ private:
                 brls::Application::giveFocus(getView("brls/tab_frame/sidebar"));
                 return true;
             });
-            refresh_home_page();
+            ttnx::record_boot_event("boot-10-home-created");
             break;
         }
         case RootSection::Search: {
             label(content, "Search", 34);
             label(content,
-                  "Live guest Search is enabled. Results are text-only while thumbnail hosts remain blocked.",
+                  "Startup recovery build: live Search is temporarily quarantined.",
                   20);
-
-            auto* enter = button(content, "Enter search");
-            enter->registerClickAction([this](brls::View*) {
-                open_search_keyboard();
-                return true;
-            });
-
-            search_query_label_ = label(content, "Query: none", 20);
-            search_action_button_ = button(content, "Search");
-            search_action_button_->registerClickAction([this](brls::View*) {
-                const bool retry_first_page =
-                    search_model_.state() == ttnx::core::SearchViewState::Error &&
-                    search_model_.retryable_failure() &&
-                    search_model_.error_code() != ttnx::core::SearchErrorCode::ContinuationFailure;
-                if (retry_first_page) retry_search_request();
-                else start_search();
-                return true;
-            });
-
-            search_status_label_ = label(content, "", 20);
-            search_results_box_ = new brls::Box(brls::Axis::COLUMN);
-            search_results_box_->setMarginBottom(8);
-            content->addView(search_results_box_);
-
-            search_load_more_button_ = button(content, "Load more");
-            search_load_more_button_->registerClickAction([this](brls::View*) {
-                const bool continuation_error =
-                    search_model_.state() == ttnx::core::SearchViewState::Error &&
-                    search_model_.error_code() == ttnx::core::SearchErrorCode::ContinuationFailure &&
-                    search_model_.retryable_failure();
-                if (continuation_error) retry_search_request();
-                else start_load_more();
-                return true;
-            });
-
-            search_selection_label_ = label(
-                content,
-                "Select a result to inspect its normalized identity. Playback is not enabled yet.",
-                18);
             label(content,
-                  "No Shorts, ads, promoted or shopping renderers are allowed to reach this list.",
+                  "This page performs no network request. Startup must be accepted on hardware before Search is re-enabled.",
+                  20);
+            label(content,
+                  "The Search parser, firewall and worker hardening remain in the codebase for the next gated slice.",
                   18);
-            refresh_search_page(true);
+            ttnx::record_boot_event("boot-11-search-created");
             break;
         }
         case RootSection::Subscriptions:
@@ -894,30 +920,47 @@ void handle_touch(ShellActivity* shell) {
 }  // namespace
 
 int main(int, char**) {
+    ttnx::record_boot_event("boot-00-main");
     const bool storage_ready = ttnx::initialize_storage();
+    ttnx::record_boot_event("boot-01-storage");
     const auto settings = ttnx::load_settings();
-    ttnx::record_boot_event("starting-interface");
 
     brls::Logger::setLogLevel(brls::LogLevel::ERROR);
+    ttnx::record_boot_event("boot-02-brls-init-begin");
     if (!brls::Application::init()) {
-        ttnx::record_boot_event("interface-initialization-failed");
+        ttnx::record_boot_event("boot-02-brls-init-failed");
         return EXIT_FAILURE;
     }
+    ttnx::record_boot_event("boot-02-brls-init-done");
 
+    ttnx::record_boot_event("boot-03-window-begin");
     brls::Application::createWindow("TizenTube NX");
+    ttnx::record_boot_event("boot-03-window-done");
     brls::Application::setGlobalQuit(true);
 
     // Borealis userAppInit() has already initialized the process socket runtime.
     // This app-lifetime client borrows sockets and acquires one ref-counted SSL
     // initialization. Its destructor runs when main() unwinds, before Borealis
     // userAppExit() releases the framework-owned socket environment.
+    ttnx::record_boot_event("boot-04-network-client-begin");
     ttnx::switch_app::LibnxHttpClient network_client;
+    ttnx::record_boot_event("boot-04-network-client-done");
     auto* shell = new ShellActivity(settings, storage_ready, network_client);
+    ttnx::record_boot_event("boot-05-shell-ctor");
+    ttnx::record_boot_event("boot-06-push-activity-begin");
     brls::Application::pushActivity(shell);
+    ttnx::record_boot_event("boot-12-push-activity-done");
     hidInitializeTouchScreen();
-    ttnx::record_boot_event("interface-ready");
+    ttnx::record_boot_event("boot-13-touch");
+    ttnx::record_boot_event("boot-14-interface-ready");
 
+    bool first_loop = true;
+    ttnx::record_boot_event("boot-15-first-loop");
     while (brls::Application::mainLoop()) {
+        if (first_loop) {
+            first_loop = false;
+            ttnx::record_boot_event("boot-16-first-frame-done");
+        }
         handle_touch(shell);
         shell->tick();
     }

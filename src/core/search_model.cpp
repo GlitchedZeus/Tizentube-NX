@@ -9,7 +9,8 @@ namespace {
 bool retryable_code(SearchErrorCode code) {
     return code == SearchErrorCode::NetworkUnavailable ||
            code == SearchErrorCode::HttpFailure ||
-           code == SearchErrorCode::ContinuationFailure;
+           code == SearchErrorCode::ContinuationFailure ||
+           code == SearchErrorCode::MemoryPressure;
 }
 
 }  // namespace
