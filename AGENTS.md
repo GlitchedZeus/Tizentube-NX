@@ -3,6 +3,10 @@
 ## Product invariants
 
 - Shorts never appear. Do not add a Shorts tab, player mode, shelf, recommendation, or enable setting.
+- **Playback and an ad-free experience are co-equal requirements.** A player that deliberately shows YouTube-served pre-roll, mid-roll, post-roll, feed ads, promoted content, shopping cards, or Premium upsells is not considered finished playback.
+- If a future upstream change prevents a safe ad-free playback path, fail clearly rather than knowingly falling back to ad playback and calling the player successful.
+- SponsorBlock is part of the core player experience, not a distant polish feature. Provide controller-friendly per-category settings such as auto-skip, ask/show Skip button, and do-not-skip. Use SponsorBlock as the primary reference for community-defined in-video segment skipping.
+- Keep platform-ad suppression and SponsorBlock conceptually separate: platform-ad suppression blocks YouTube-served advertising; SponsorBlock handles community-marked segments embedded inside the creator's video.
 - Never generate tracking-heavy YouTube share links. Construct canonical watch links from the validated video ID.
 - No deliberate ads, promoted content, shopping shelves, Premium upsells, or unnecessary telemetry.
 - V1 account UX is local-first TizenTube profiles. Users should be able to create a profile directly on the Switch with a name/avatar and build local follows, playlists, Watch Later, favorites/likes, history/resume and settings without Google authentication.
@@ -15,22 +19,28 @@
 - Local TizenTube actions do not write back to Google/YouTube unless a future write-capable feature receives a separate security review and explicit user consent.
 - A public/no-auth profile or playlist importer may remain as a post-v1 fallback for users who do not want OAuth linking.
 - Preserve normal useful YouTube features unless they conflict with the privacy/de-bloat goals.
-- See `docs/PROFILES_AND_IMPORT.md` and `docs/OAUTH_ACCOUNT_LINKING.md` before planning profile, account, migration, pairing, backup, token-storage or Google-related work.
+- See `docs/PRODUCT_PHILOSOPHY.md`, `docs/PROFILES_AND_IMPORT.md` and `docs/OAUTH_ACCOUNT_LINKING.md` before planning major player/profile/account work.
 
-## Feature-reference policy
+## Reference policy
 
-- Treat `MorpheApp/morphe-patches` as a first-class feature and behavior reference for TizenTube NX, especially for ad/promotion filtering, SponsorBlock, playback controls, quality/audio preferences, privacy, sharing, player cleanup, DeArrow/thumbnail behavior, Return YouTube Dislike, captions, queues, livestream behavior, codecs/HDR, and other useful YouTube quality-of-life features.
-- Prefer Morphe over ReVanced as a feature-inspiration source when they differ and Morphe better matches TizenTube NX goals. ReVanced remains a secondary reference.
-- Do not blindly port Android bytecode patches. Translate useful Morphe behavior into independent native TizenTube NX architecture.
-- Morphe Shorts behavior is reference-only: TizenTube NX must reject Shorts/reels entirely rather than merely hide them or open them in a normal player.
-- See `docs/MORPHE_REFERENCE.md` before planning player/ad-blocking/polish work.
+Reference projects have distinct roles. Do not treat every upstream project as a general design authority.
+
+- **YouTube** is the familiar information-architecture reference: Home, Search, Subscriptions, Library, channels, playlists, player controls, captions, quality and other concepts users already understand. Do not inherit its ads, Shorts, tracking-heavy sharing or engagement clutter.
+- **TizenTube** is the primary UI/settings and day-to-day viewing-behavior guide. The target feel is a polished TizenTube/YouTube experience intentionally adapted to Nintendo Switch, not a generic homebrew browser.
+- **SponsorBlock** is the primary behavioral reference for sponsor/self-promo/intro/outro and other community-defined segment skipping, including category semantics and user-configurable skip behavior.
+- **Morphe** is a first-class feature-discovery and development-research source for future quality-of-life ideas such as player cleanup, quality/audio controls, DeArrow-style metadata, Return YouTube Dislike, privacy and other useful behavior. It does not define TizenTube NX's visual identity.
+- **NewPipe** is a useful lightweight/privacy-conscious independent-client and technical/product reference where applicable.
+- **ReVanced is not a current TizenTube NX philosophy/design reference.** Do not use it as the default source for product direction in new planning/docs.
+- Do not blindly port Android bytecode patches or implementation details. Translate useful behavior into independent native TizenTube NX architecture.
+- No reference project may weaken the no-Shorts invariant.
+- See `docs/PRODUCT_PHILOSOPHY.md` and `docs/MORPHE_REFERENCE.md` before major player/ad-blocking/SponsorBlock/polish work.
 
 ## Engineering rules
 
 - Keep YouTube parsing/network code separate from UI.
 - Put pure logic in `src/core` and cover it with host tests.
 - Never log credentials, authorization headers, OAuth access/refresh tokens, cookies, device-code secrets after redemption, pairing secrets, or unredacted unlisted-playlist URLs.
-- Every future auth/API/media/image/updater destination must pass the same outbound-policy review before DNS. Do not silently widen allowlists.
+- Every future auth/API/media/image/SponsorBlock/updater destination must pass the same outbound-policy review before DNS. Do not silently widen allowlists.
 - Do not copy GPL code into a differently licensed file without preserving attribution/license obligations.
 - Prefer small, testable commits and update `docs/PROJECT_STATUS.md` when a milestone changes.
 
