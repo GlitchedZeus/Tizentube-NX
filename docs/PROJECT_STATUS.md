@@ -7,143 +7,101 @@ M2 — YouTube guest browsing / pre-alpha.
 Branch: `feature/m2-guest-browsing`  
 Draft PR: #6 — `M2: guest browsing networking foundation`
 
-## Accepted baseline entering this session
+Live Search remains disabled. The only live M2 action is the explicit Home `Test YouTube guest connection` probe.
 
-Latest fully green accepted checkpoint at session start:
+## Real-hardware guest-bootstrap checkpoint
 
-`9a69ed7c46b0e5281224d43dc89971c46124c6c9`
+The native NRO boots successfully on the physical Atmosphere Switch.
 
-At that checkpoint host configure/build/ctest and the devkitA64 NRO build were green. Scoped Search parsing, result normalization/dedupe, canonical URL hardening, pagination state, request/privacy hardening, the offline Search model, and the renderer firewall were already present. `switch-curl` was absent, the allowlist was exactly `www.youtube.com:443`, and live Search remained disabled.
+The first explicit guest-connection test reached native service initialization and stopped before any DNS/TCP/TLS/HTTP/YouTube traffic with:
 
-## Normalized Search metadata hardening
+`socketInitializeDefault failed: 0x00000f59`
 
-This session completed the previously partial optional-metadata slice without enabling networking in Search.
+The UI reported `Network init failed` and the footer reported `M2 guest | Network init failed`.
 
-### Video results
+`0x00000f59` is libnx `LibnxError_AlreadyInitialized`.
 
-Legacy `videoRenderer` and supported modern video `lockupViewModel` forms now normalize safely available:
+This result is specifically **not** evidence of DNS, TCP, TLS, HTTP, YouTube bootstrap, or outbound-policy failure; none of those stages had run yet.
 
-- channel/owner name;
-- channel ID from an unambiguous browse endpoint;
-- bounded thumbnail candidates with dimensions;
-- duration text and exact seconds when deterministic;
-- view-count text and an exact count only when parsing is unambiguous;
-- published/upload-age text;
-- bounded accessibility text;
-- live state;
-- upcoming state;
-- exact scheduled start time when a unique bounded integer is present.
+## Proven socket initializer
 
-Malformed or missing optional metadata does not invalidate an otherwise valid video result. Conflicting channel IDs or scheduled-start values are treated as unknown rather than guessed.
+The repository pins Borealis commit `20e2d33b6c4ffce139ce304c503c04f5b94da920`.
 
-### Channel results
+That pinned Borealis Switch wrapper provides `userAppInit()`, which runs before `main()` and calls `socketInitializeDefault()`. It later calls `socketExit()` from its matching `userAppExit()`. `nxlinkStdio()` is invoked after the socket initialization and uses that environment.
 
-Legacy channel renderers and supported modern channel lockups normalize:
+Therefore the pre-existing socket runtime is framework-owned. TizenTube NX must borrow it and must not tear it down.
 
-- channel ID;
-- title/name;
-- thumbnails;
-- subscriber-count text plus exact numeric count when deterministic;
-- video-count text plus exact numeric count when deterministic;
-- bounded accessibility text.
+See `docs/NATIVE_NETWORK_LIFETIME.md` for the ownership analysis and libnx source semantics.
 
-Missing subscriber/video counts remain unknown without hiding the channel.
+## Native network lifetime fix
 
-### Playlist results
+`LibnxHttpClient` now distinguishes cleanup ownership explicitly.
 
-Legacy playlist/radio renderers and supported modern playlist lockups normalize:
+### BSD sockets
 
-- playlist ID;
-- title;
-- owner/channel name;
-- owner/channel ID when an unambiguous browse endpoint is available;
-- video-count text plus exact numeric count when deterministic;
-- thumbnail candidates;
-- bounded accessibility text.
+- `socketInitializeDefault()` success: socket environment is usable and TizenTube NX owns the matching `socketExit()`.
+- exact `MAKERESULT(Module_Libnx, LibnxError_AlreadyInitialized)`: socket environment is usable but borrowed; TizenTube NX does **not** call `socketExit()`.
+- any other initialization error: fatal for this native client and preserved as an initialization failure.
 
-A missing count does not invalidate the playlist.
+The production code does not compare against hardcoded `0xF59`.
 
-### Exact numeric parsing policy
+### SSL service
 
-Exact numeric fields are intentionally conservative. Plain ASCII decimal values and correctly comma-grouped values with a small reviewed English unit suffix may be converted to integers. Localized, abbreviated, malformed, overflowing or conflicting values remain presentation text only.
+`sslInitialize(3)` uses libnx `ServiceGuard` reference-count semantics. A successful public `sslInitialize()` call acquires one matching `sslExit()` obligation even when another caller already holds an SSL reference.
 
-Tests cover malformed grouping, localized count strings, abbreviated counts, uint64 overflow, malformed scheduled time and conflicting scheduled times.
+TizenTube NX therefore tracks SSL separately from sockets:
 
-## Thumbnail normalization
+- successful SSL initialization: usable and one matching `sslExit()` is required;
+- any non-zero SSL initialization result: failure for this caller;
+- a hypothetical SSL `AlreadyInitialized` error is not reinterpreted as a borrowed success under the current ServiceGuard implementation.
 
-Thumbnail handling is still metadata-only: no image request is issued and no host is allowlisted.
+### Application / worker lifetime
 
-Normalized candidates are bounded and deterministic:
+The native HTTPS client is now owned by `main()` for application lifetime. `ShellActivity` and the guest-test worker borrow it.
 
-- parser-side collection is bounded;
-- normalized consideration is bounded;
-- output is capped at eight candidates;
-- candidate URL length is bounded;
-- malformed/non-HTTPS references are ignored;
-- width/height are retained when valid;
-- duplicate URLs are removed;
-- preference ordering uses pixel area, then width/height, then stable URL ordering.
+The shutdown order is:
 
-The compatibility `thumbnail_url` mirrors the preferred normalized candidate.
+1. join the request worker;
+2. leave `main()` and destroy TizenTube NX's HTTPS client;
+3. release the SSL reference acquired by TizenTube NX;
+4. call `socketExit()` only if TizenTube NX actually initialized sockets itself;
+5. for the normal Borealis path, leave the borrowed socket environment intact for Borealis `userAppExit()`.
 
-## Pure Search presentation helpers
+Repeated guest-test button presses no longer create service init/exit cycles.
 
-Host-tested renderer-independent helpers now provide:
+## Hardware diagnostic stages
 
-- duration formatting;
-- LIVE / UPCOMING labels;
-- optional view-count display;
-- upload-age display;
-- optional video-count display;
-- graceful empty output when values are unknown.
+The next diagnostic NRO distinguishes safe coarse stages without exposing session material:
 
-Renderer-specific YouTube parsing is not placed in Borealis/UI code.
+- `Socket init failed`
+- `SSL init failed`
+- `Network policy blocked`
+- `TCP failed`
+- `TLS failed`
+- `HTTP failed`
+- `Bootstrap rejected`
+- `Guest ready`
 
-## Offline SearchModel contract
+Diagnostic detail may show service state such as `Sockets: existing | SSL: ready`. Credentials, cookies, authorization data, visitor/session IDs, continuation tokens and response bodies are not displayed.
 
-`SearchModel` remains transport-free and now explicitly covers:
+## Search / normalized-model state
 
-- idle;
-- loading;
-- ready;
-- empty;
-- error;
-- loading-more;
-- end-of-results;
-- retryable failure;
-- continuation availability;
-- selected stable result identity;
-- stale-generation rejection.
+The offline M2 Search work remains intact:
 
-Continuation failures can be explicitly retried while preserving continuation ownership. Non-retryable malformed/unsupported responses do not enter a blind retry loop.
+- scoped Search response boundary;
+- hard Shorts/reel firewall;
+- ads/promoted/shopping firewall;
+- legacy and modern renderer normalization;
+- bounded video/channel/playlist metadata;
+- deterministic thumbnail candidates;
+- canonical clean sharing;
+- query-owned continuation flow;
+- request/privacy hardening;
+- renderer-independent presentation helpers;
+- offline `SearchModel` with stale-generation and retry/end-of-results state;
+- UI-safe Search error taxonomy.
 
-## UI-facing Search error taxonomy
-
-Search now has a coarse UI-safe error classification separate from technical diagnostics:
-
-- network unavailable;
-- network-policy rejection;
-- HTTP failure;
-- malformed response;
-- unsupported response;
-- empty results;
-- continuation failure.
-
-The executor classifies internal failures before sanitizing technical diagnostics, so coarse classification is retained without leaking tokens, visitor/session values, cookies, request/response bodies or authorization material to the future UI.
-
-## Search robustness / firewall state
-
-The scoped Search boundary remains unchanged: only the recognized first-page primary container and direct recognized continuation item arrays may reach the internal renderer walker.
-
-The hard renderer firewall still runs before normalization. Shorts/reels, ads/promoted objects, shopping/product subtrees and unsupported renderers remain blocked. Tests explicitly attach valid-looking metadata to blocked Shorts/ad/shopping objects and verify that none of it escapes into normalized results.
-
-Parser/resource limits remain explicit for response size, depth, nodes, renderer records, object members, array elements, decoded strings, extracted text, text runs, thumbnail candidates and thumbnail URL length.
-
-## Future feature compatibility
-
-The normalized data and presentation boundaries preserve clean seams for later optional features such as SponsorBlock, alternative/DeArrow-style metadata, playback-quality preferences, original-audio preference, Return YouTube Dislike integration, clean sharing and player cleanup. No such service is enabled or allowlisted in this M2 slice.
-
-Shorts remain a hard project rejection and are not made configurable by any future reference architecture.
+Morphe remains a first-class future feature reference through `AGENTS.md` and `docs/MORPHE_REFERENCE.md`; those reference commits are preserved. Morphe does not weaken the project-wide no-Shorts invariant.
 
 ## Hard network safety invariant
 
@@ -159,36 +117,18 @@ This remains release-blocking and independent of 90DNS:
 - every redirect is revalidated before another DNS lookup;
 - `switch-curl` remains excluded from the NRO.
 
-No new host was authorized in this session.
+No new host was authorized by the socket ownership fix.
 
-## Switch UI networking state
+## Current activation gate
 
-The app still makes no hidden YouTube request at startup. The Home action `Test YouTube guest connection` remains the only deliberately live M2 probe and still targets the existing allowlisted `https://www.youtube.com/sw.js_data` bootstrap endpoint.
+The socket `AlreadyInitialized` condition is now handled as a borrowed, usable environment and cannot cause TizenTube NX to call `socketExit()` on Borealis-owned state.
 
-**Live Search remains disabled pending the real-Switch `Test YouTube guest connection` result.**
+This is **not yet real-hardware networking acceptance**. A new physical-Switch test is required.
 
-The Search UI must not perform the POST until that hardware result is supplied and accepted.
-
-## Validation rule for the next accepted checkpoint
-
-Entering accepted checkpoint: `9a69ed7c46b0e5281224d43dc89971c46124c6c9`.
-
-The metadata-hardening session may replace it only after the exact final documentation/code HEAD passes:
-
-- host configure;
-- full host build;
-- full host `ctest` suite;
-- devkitA64 NRO build and artifact upload;
-- network/linkage/UI-gate review.
-
-Documentation commits themselves do not become accepted merely because an earlier code-only head was green.
-
-## Remaining external blocker
-
-The required external result remains the physical Atmosphere Switch result from:
+Next test:
 
 `Test YouTube guest connection`
 
-Expected successful non-sensitive status: `Guest ready`.
+Expected progress: the probe must no longer stop at `socketInitializeDefault` / `LibnxError_AlreadyInitialized`. Report the next exact connection status and detail. The next stage may be SSL, TCP, TLS, HTTP, bootstrap parsing, or `Guest ready`; CI must not guess which hardware stage comes next.
 
-Only after that result is accepted should M2 connect the already host-tested Search execution path to a live Switch Search POST.
+Live Search must remain disabled until the explicit guest bootstrap reaches an accepted `Guest ready` result on hardware.
