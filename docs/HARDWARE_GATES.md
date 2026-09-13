@@ -32,7 +32,7 @@ Observed on hardware for query `nintendo switch homebrew`:
 - controller navigation/focus works
 - a selected normal video exposes its normalized video ID
 - the generated canonical URL is clean `https://www.youtube.com/watch?v=VIDEO_ID`
-- the UI reports more results are available while `Load more` remains disabled
+- the UI reports more results are available
 - no Shorts, ads, promoted or shopping result was observed
 
 Only Video results were physically observed in this gate. Channel and Playlist normalization remain host-tested, not hardware-observed.
@@ -58,7 +58,7 @@ Observed on hardware after the rejected `36015cb...` regression was fixed:
 
 The accepted design keeps result buttons alive and only toggles pre-created inline detail visibility. B targets the active SidebarItem rather than the Sidebar container/default Home descendant.
 
-This acceptance closes the base Search UI/navigation lifecycle gate. `Load more` was still disabled in this build and remains a separate next hardware-gated slice.
+This acceptance closes the base Search UI/navigation lifecycle gate.
 
 ## Hardware rejected
 
@@ -85,21 +85,42 @@ Pinned Borealis explains the two unsafe interactions removed by the accepted rep
 
 The accepted replacement keeps result buttons alive and toggles pre-created detail labels non-destructively. B resolves the active section's actual SidebarItem, so returning to the sidebar no longer changes tabs or destroys the current Search page.
 
-## Current physical gate
+## Current physical gate — Search continuation / Load more
 
-The base first-page Search UI/navigation gate is now accepted at hardware-tested NRO head `d6910a232732b2bd9169abb11dfdf320cf35a34b`.
+Candidate code checkpoint: `534f576a77aeb8f7226b2f3a3549be23c621e06a`
 
-The next deliberate hardware gate may re-enable continuation / `Load more` without changing the already accepted first-page Search, inline-detail, sidebar-focus or page-lifetime behavior.
+Status: **IMPLEMENTED / HOST VALIDATED / PENDING PHYSICAL SWITCH TEST**.
 
-Any continuation candidate must preserve:
+The continuation candidate deliberately preserves the accepted first-page Search and UI lifecycle rather than rebuilding it:
 
-- existing first-page results while a continuation request is in flight;
-- controller focus and sidebar traversal;
-- stale-generation protection and repeated-token loop prevention;
-- renderer firewall and normalized dedupe behavior;
-- no destructive rebuild of the currently focused result View;
-- clean failure/retry behavior without blanking Search;
-- exact current network policy unless separately reviewed.
+- `Load more` is an explicit focusable action; there is no infinite-scroll/autoload trigger;
+- the existing `GuestSearchFlow::next()` continuation path is reused off the Borealis/UI thread;
+- continuation requests reuse the current in-memory guest session and app-lifetime native HTTP client;
+- existing first-page result Views remain alive while continuation is in flight;
+- normalized continuation results are appended only after `SearchModel` applies its stable-identity dedupe;
+- selecting a continuation-added result uses the same non-destructive inline detail path as first-page results;
+- retryable continuation failure preserves accumulated results and continuation ownership;
+- a new query/generation rejects stale continuation completion;
+- repeated continuation tokens and end-of-results are handled by the existing core state machines;
+- the same scoped parser and Shorts/ad/promoted/shopping firewall is used for continuation pages;
+- if the `Load more` control must disappear at end-of-results while focused, focus is moved to a stable existing result before hiding it.
+
+Host validation for the candidate patch passed all `22/22` test executables, including added assertions for preservation/retry, stale continuation rejection, terminal zero-result continuation, continuation-added selection, and continuation renderer filtering. Exact-head devkitA64 CI still determines whether the candidate is eligible for hardware testing; this section must not be read as physical acceptance.
+
+Required physical acceptance:
+
+- first-page Search and inline detail still work unchanged;
+- pressing `Load more` once leaves existing results visible while loading;
+- additional normalized results append without rebuilding/deleting existing result Views;
+- a newly-added result can be selected and shows its normalized ID/clean URL inline;
+- B keeps Search populated and returns focus to the Search sidebar item;
+- Home -> Search -> Subscriptions -> Library -> Settings traversal still works;
+- leaving and returning to Search reconstructs all accumulated results safely;
+- a second continuation, when available, does not duplicate or blank the page;
+- changing to a new query clears the old query's accumulated pages and invalidates the old continuation generation;
+- normal exit/relaunch still works.
+
+Continuation is **NOT hardware accepted** until that sequence passes on the real Switch.
 
 ## Invariants for every gate
 
