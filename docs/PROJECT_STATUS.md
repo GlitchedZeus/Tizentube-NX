@@ -7,7 +7,7 @@ M2 — YouTube guest browsing / pre-alpha.
 Branch: `feature/m2-guest-browsing`  
 Draft PR: #6 — `M2: guest browsing networking foundation`
 
-The real-Switch guest bootstrap, startup-recovery, first-page live Search, inline result-detail, and full sidebar traversal gates are now physically accepted. Hardware-tested NRO head `d6910a232732b2bd9169abb11dfdf320cf35a34b` closes the blank-Search/Home-Search-focus regression introduced by `36015cb...`. The next Search hardware gate is continuation / `Load more`, reintroduced without changing the accepted first-page networking/parser path or the accepted non-destructive Borealis result lifecycle.
+The real-Switch guest bootstrap, startup-recovery, first-page live Search, inline result-detail, and full sidebar traversal gates are physically accepted. Hardware-tested NRO head `d6910a232732b2bd9169abb11dfdf320cf35a34b` closes the blank-Search/Home-Search-focus regression introduced by `36015cb...`. Explicit continuation / `Load more` is now implemented at code checkpoint `534f576a77aeb8f7226b2f3a3549be23c621e06a` using append-only result Views; it is host validated and remains pending exact-head devkitA64 plus physical Switch acceptance.
 
 ## Real-hardware guest-bootstrap acceptance
 
@@ -150,9 +150,27 @@ B now focuses the active SidebarItem instead of the Sidebar container/default Ho
 
 ### Continuation / Load more
 
-The continuation core remains host-tested. The accepted Search UI intentionally kept **first-page Search only** while the result-detail/sidebar lifecycle gate was being proven on hardware.
+Code checkpoint `534f576a77aeb8f7226b2f3a3549be23c621e06a` re-enables the existing continuation core in the Switch UI without replacing the accepted first-page Search path.
 
-That gate is now accepted. `Load more` is therefore the next deliberate hardware slice. It must preserve existing first-page results, the accepted non-destructive result View lifecycle, sidebar traversal, stale-generation safety, repeated-token loop prevention, normalized dedupe, retryability, and the existing renderer firewall. It must not widen the network allowlist.
+The candidate exposes an explicit focusable `Load more` button only when the current `SearchModel` owns a valid continuation. It reuses the app-lifetime `LibnxHttpClient`, current in-memory guest session, existing Search worker boundary, and `GuestSearchFlow::next()`; there is no hidden guest bootstrap, new network client, or second continuation implementation.
+
+Continuation presentation is deliberately append-only. Existing first-page result buttons, metadata and inline-detail labels stay alive while the worker runs. After `SearchModel::apply_continuation()` performs stable-identity dedupe, only newly appended normalized results receive new Borealis rows. Those rows use the same result helper and non-destructive inline-detail behavior as first-page rows.
+
+The continuation UI also preserves the core state-machine behavior already covered by host tests:
+
+- continuation requests do not resend the original query;
+- a continuation belongs to the active Search generation;
+- new query/generation invalidates stale continuation completion;
+- repeated continuation tokens are rejected;
+- normalized duplicate identities are not appended twice;
+- continuation failure keeps existing results and selection intact;
+- continuation failure is explicitly retryable through `Retry Load more`;
+- zero-result terminal continuation becomes end-of-results and hides `Load more`;
+- the same scoped parser and Shorts/ad/promoted/shopping firewall applies to continuation pages.
+
+If `Load more` is the focused View when a terminal page removes it, the UI first moves focus to a stable existing result. B/sidebar handling is otherwise unchanged from the physically accepted lifecycle fix.
+
+Host validation passed all `22/22` test executables with added assertions for result preservation/retry, stale continuation rejection, terminal continuation, continuation-added selection, and continuation firewall behavior. The candidate is **not hardware accepted** until it passes the real-Switch continuation checklist.
 
 ### Error states
 
@@ -255,7 +273,7 @@ The result-detail/sidebar lifecycle is also **PHYSICALLY ACCEPTED** using NRO he
 
 The original pre-first-frame `std::abort (0xFFE)` root cause remains **UNKNOWN**. Do not retroactively attribute it to Search networking, `bad_alloc`, or the worker hardening without new evidence.
 
-The next activation gate is continuation / `Load more`. Startup boot markers, remote-thumbnail blocking, and the exact `www.youtube.com:443` allowlist remain unchanged.
+The next activation gate is the explicit continuation / `Load more` candidate at `534f576a77aeb8f7226b2f3a3549be23c621e06a`. It is implemented and host validated but is **NOT physically accepted** until the real Switch proves append-only pagination, continuation-added selection, sidebar stability, new-query invalidation and normal exit/relaunch. Startup boot markers, remote-thumbnail blocking, and the exact `www.youtube.com:443` allowlist remain unchanged.
 
 ## Physical startup crash investigation — 2026-09-13
 
@@ -280,4 +298,4 @@ The Sections/B path also targeted the Sidebar container. Borealis resolves conta
 
 The accepted fix removes selection-time list rebuilding entirely. Result buttons and metadata remain alive; each result owns a pre-created detail label whose `VISIBLE`/`GONE` state changes when selection changes. Full list rebuilding remains limited to genuinely new Search results or reconstructing a Search page after a real tab switch.
 
-Hardware-tested NRO head `d6910a232732b2bd9169abb11dfdf320cf35a34b` passed the full inline-detail/sidebar traversal sequence and is now accepted for this UI lifecycle gate. `Load more` remains the next separate hardware-gated slice. Guest bootstrap and first-page Search acceptance remain unchanged.
+Hardware-tested NRO head `d6910a232732b2bd9169abb11dfdf320cf35a34b` passed the full inline-detail/sidebar traversal sequence and is now accepted for this UI lifecycle gate. Explicit continuation / `Load more` is implemented separately at `534f576a77aeb8f7226b2f3a3549be23c621e06a` and remains pending physical Switch acceptance. Guest bootstrap and first-page Search acceptance remain unchanged.
