@@ -60,3 +60,5 @@ Home development must not reopen or redesign that accepted Search path unless a 
 ## Physical zero-result diagnostic follow-up
 
 The first physical Home candidate at `ba0066b34270bfa1809dc5d3567aead86a298033` reached `Guest ready` and completed `Load Home`, but normalized zero supported results. The diagnostic follow-up does **not** loosen the renderer firewall or introduce generic result recursion. It reports only bounded structural renderer/container-family information from the selected Home scope and stops at blocked or unknown families. This is intended to identify the real modern Home wrapper returned on hardware before any new family is admitted to normalization.
+
+Implementation checkpoint `8d4bbc7e58e80e711232cade97c7608b8b3e6e42` adds the privacy-safe structural diagnostic path. The next exact-head NRO produced after this documentation marker is a diagnostics-only physical candidate: Guest ready -> Load Home -> capture the bounded `Home diag:` summary. Home first-page content remains unaccepted until that hardware evidence identifies the actual response family.
