@@ -28,7 +28,7 @@
 - [x] Block HTTP, alternate ports, IP literals and userinfo authority tricks
 - [x] Disable autonomous curl redirects
 - [x] Host tests for Nintendo roots, deep subdomains and deceptive URL forms
-- [ ] Require every future redirect target to pass policy before a second DNS lookup
+- [x] Require every native HTTP redirect target to pass policy before a second DNS lookup
 - [ ] Require every future network subsystem (media/images/auth/updater/etc.) to use the same policy
 
 ### Networking foundation
@@ -40,9 +40,12 @@
 - [x] Identify current devkitPro switch-curl cert-info crash risk and block it from becoming default live transport
 - [x] Host + devkitA64 CI for the networking foundation
 - [x] Parse bootstrap response into a guest session
-- [ ] Direct libnx SSL-service HTTP/1.1 transport
-- [ ] GET + POST with bounded bodies
-- [ ] Verified peer-CA + hostname checks using Switch SSL service
+- [x] Strict bounded HTTP/1.1 request/response codec with host tests
+- [x] Direct libnx SSL-service HTTP/1.1 transport
+- [x] GET + POST serialization with bounded request/response bodies
+- [x] Configure peer-CA + hostname + certificate-date verification using the Switch SSL service
+- [x] Remove switch-curl and its TLS/zlib dependencies from the NRO link path
+- [x] DevkitA64 compile/link gate for the native libnx transport
 - [ ] First live verified HTTPS request on Switch
 - [ ] Move live networking off the Borealis UI thread
 
