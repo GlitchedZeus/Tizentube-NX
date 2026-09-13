@@ -85,42 +85,40 @@ Pinned Borealis explains the two unsafe interactions removed by the accepted rep
 
 The accepted replacement keeps result buttons alive and toggles pre-created detail labels non-destructively. B resolves the active section's actual SidebarItem, so returning to the sidebar no longer changes tabs or destroys the current Search page.
 
-## Current physical gate — Search continuation / Load more
+### Search continuation / Load more — functional, focus UX rejected
 
-Candidate code checkpoint: `534f576a77aeb8f7226b2f3a3549be23c621e06a`
+Hardware-tested NRO head: `959a46e7c1d5de1743cdf3b11a48b1b227ab0b4e`
 
-Status: **IMPLEMENTED / HOST VALIDATED / PENDING PHYSICAL SWITCH TEST**.
+Continuation implementation checkpoint: `534f576a77aeb8f7226b2f3a3549be23c621e06a`
 
-The continuation candidate deliberately preserves the accepted first-page Search and UI lifecycle rather than rebuilding it:
+Physical Switch result: **CONTINUATION DATA PATH WORKS, OVERALL UI GATE REJECTED**.
 
-- `Load more` is an explicit focusable action; there is no infinite-scroll/autoload trigger;
-- the existing `GuestSearchFlow::next()` continuation path is reused off the Borealis/UI thread;
-- continuation requests reuse the current in-memory guest session and app-lifetime native HTTP client;
-- existing first-page result Views remain alive while continuation is in flight;
-- normalized continuation results are appended only after `SearchModel` applies its stable-identity dedupe;
-- selecting a continuation-added result uses the same non-destructive inline detail path as first-page results;
-- retryable continuation failure preserves accumulated results and continuation ownership;
-- a new query/generation rejects stale continuation completion;
-- repeated continuation tokens and end-of-results are handled by the existing core state machines;
-- the same scoped parser and Shorts/ad/promoted/shopping firewall is used for continuation pages;
-- if the `Load more` control must disappear at end-of-results while focused, focus is moved to a stable existing result before hiding it.
+Observed on hardware:
 
-Host validation for the candidate patch passed all `22/22` test executables, including added assertions for preservation/retry, stale continuation rejection, terminal zero-result continuation, continuation-added selection, and continuation renderer filtering. Exact-head devkitA64 CI still determines whether the candidate is eligible for hardware testing; this section must not be read as physical acceptance.
+- pressing `Load more` successfully fetches and appends additional videos;
+- the app remains running and Search content is still recoverable;
+- after the continuation append, the visible controller selector/focus indication disappears from the current viewport;
+- the user must leave/re-enter Search or press Up to recover visible navigation;
+- pressing Up after the selector disappears jumps back to the top/first Search result instead of moving naturally to the immediately preceding result;
+- when navigating down to the `Load more` control and then back upward, focus jumps directly to the first video instead of the last result above `Load more`.
 
-Required physical acceptance:
+The current code places the persistent `Load more` button outside `search_results_box_` while result buttons live inside that nested box. Appending continuation rows grows the nested result box above an already-focused `Load more` button, and moving Up from that sibling crosses the nested-container boundary. This structure is a high-confidence focus/layout suspect and must be verified against pinned Borealis before the exact root cause is declared proven.
 
-- first-page Search and inline detail still work unchanged;
-- pressing `Load more` once leaves existing results visible while loading;
-- additional normalized results append without rebuilding/deleting existing result Views;
-- a newly-added result can be selected and shows its normalized ID/clean URL inline;
-- B keeps Search populated and returns focus to the Search sidebar item;
-- Home -> Search -> Subscriptions -> Library -> Settings traversal still works;
-- leaving and returning to Search reconstructs all accumulated results safely;
-- a second continuation, when available, does not duplicate or blank the page;
-- changing to a new query clears the old query's accumulated pages and invalidates the old continuation generation;
-- normal exit/relaunch still works.
+The continuation gate remains **NOT ACCEPTED** until focus remains visible and directional navigation is continuous across the last result / `Load more` boundary.
 
-Continuation is **NOT hardware accepted** until that sequence passes on the real Switch.
+Also approved for the same UI-fix slice: inline result detail should become a toggle. Pressing A on an unselected result opens its normalized detail; pressing A again on the same result closes it using `SearchModel::clear_selection()` and the existing non-destructive detail visibility path. This must not rebuild result Views.
+
+## Current physical gate — Search continuation focus polish
+
+The next candidate must preserve the already-proven continuation request/data path while fixing only the Borealis focus/scroll behavior:
+
+- `Load more` must fetch and append additional normalized results without losing the visible selector;
+- after append, focus must remain on a visible stable control or be moved deliberately to the first newly-added result;
+- Up from `Load more` must go to the last result immediately above it, not the first Search result;
+- Down from the last result must reach `Load more` naturally;
+- pressing A twice on the same Search result must toggle inline detail open then closed without deleting/recreating the row;
+- B/sidebar traversal, first-page Search, accumulated result state and all previously accepted lifecycle behavior must remain unchanged;
+- no network/parser/security policy changes are part of this gate.
 
 ## Invariants for every gate
 
