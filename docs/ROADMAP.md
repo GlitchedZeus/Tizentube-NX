@@ -16,18 +16,35 @@
 - [x] Controller + touch interaction contract
 - [x] SD-card settings/log paths
 - [x] App icon/resources
-
-- [ ] Device acceptance: boot, layout, controller, taps, keyboard, persistence and docking
+- [x] Device acceptance on real Atmosphere hardware
 
 ## M2 — YouTube guest browsing
 
-- [ ] HTTP client
-- [ ] Search
-- [ ] Home/browse requests
+### Networking foundation
+
+- [x] Transport-neutral HTTP request/response/client contract
+- [x] Search/Browse/Home InnerTube request builders
+- [x] Dynamic guest session bootstrap request (`sw.js_data`)
+- [x] Strict-TLS Switch libcurl transport
+- [x] Host + devkitA64 CI for the networking foundation
+- [ ] Pin trusted CA bundle in RomFS and document refresh procedure
+- [ ] Parse bootstrap response into a guest session
+- [ ] First live verified HTTPS request on Switch
+- [ ] Move live networking off the Borealis UI thread
+
+### Guest data and presentation
+
+- [x] Renderer-neutral Home/Search/Channel/Playlist data model
+- [x] Opaque continuation/pagination model
+- [x] Renderer firewall for Shorts/reels, promoted/ad, shopping and unsupported renderers
+- [x] Tests proving disguised Shorts/promoted renderers cannot become visible records
+- [ ] Parse live Search results
+- [ ] Parse live Home/browse results
 - [ ] Channel pages
 - [ ] Playlist pages
-- [ ] Pagination
-- [ ] Filter Shorts/promoted/shopping renderers before UI presentation
+- [ ] Live continuation paging
+- [ ] Render sanitized guest results as Borealis cards
+- [ ] Real-hardware guest browsing acceptance
 
 ## M3 — Playback
 
