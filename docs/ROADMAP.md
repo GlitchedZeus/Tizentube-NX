@@ -46,8 +46,9 @@
 - [x] Configure peer-CA + hostname + certificate-date verification using the Switch SSL service
 - [x] Remove switch-curl and its TLS/zlib dependencies from the NRO link path
 - [x] DevkitA64 compile/link gate for the native libnx transport
+- [x] User-triggered guest bootstrap action with no hidden startup request
+- [x] Move guest-bootstrap networking off the Borealis UI thread
 - [ ] First live verified HTTPS request on Switch
-- [ ] Move live networking off the Borealis UI thread
 
 ### Guest data and presentation
 
