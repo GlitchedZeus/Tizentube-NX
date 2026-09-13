@@ -40,3 +40,19 @@ M1: replace the temporary console shell with a Borealis controller-first applica
 ## Known high-risk area
 
 Account authentication remains the major future risk. The product requirement is easy console-style login without cookie-file import. Before building account-dependent UI, validate a sustainable TV/device authorization flow suitable for redistribution and avoid embedding third-party private credentials.
+
+## M1 implementation checkpoint (2026-09-13)
+
+- Replaced the text entry point with a native Borealis five-section shell.
+- Added keyboard search entry (session only; no network results), system-theme
+  styling, controller navigation and explicit tap hit-testing.
+- Added app icon, embedded resources, shader build and pinned Borealis dependency.
+- Added SD settings with temporary-file verification, backup recovery, and a
+  bounded fixed-label boot record. Frame-rate display is the first saved setting.
+- Local Release host build and both core/storage test suites pass.
+- Native build validation is in progress; M1 is NOT device accepted.
+- Hardware checklist: `docs/M1_DEVICE_TEST.md`.
+
+The foundation no-ads text describes the product goal. Neither that screen nor
+this interface preview proves ad-free playback; networking and playback remain
+unimplemented. Authentication is still an unvalidated technical milestone.

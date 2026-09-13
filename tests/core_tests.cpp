@@ -2,6 +2,8 @@
 #include "tizentube_nx/core/url.hpp"
 #include "tizentube_nx/ui/navigation.hpp"
 
+#include "tizentube_nx/core/settings.hpp"
+
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -54,6 +56,16 @@ int main() {
            "promoted content hidden by default");
     expect(!should_hide({ContentKind::Video, "id", "normal"}),
            "normal video remains visible");
+
+    expect(parse_settings(serialize_settings({true}))->show_fps, "settings round trip");
+    expect(!parse_settings("version=1\nshow_fps=0\n")->show_fps, "disabled preference loads");
+    expect(parse_settings("version=1\r\nshow_fps=1\r\n").has_value(), "CRLF settings accepted");
+    expect(!parse_settings("version=1\nshow_fps="), "truncated settings rejected");
+    expect(!parse_settings("version=2\nshow_fps=1\n"), "unknown version rejected");
+    expect(!parse_settings("version=1\nshow_fps=yes\n"), "invalid boolean rejected");
+    expect(!parse_settings("version=1\nshow_fps=1\nshow_fps=0\n"), "duplicate preference rejected");
+    expect(!parse_settings("version=1\nshow_fps=0\nhide_shorts=0\n"), "content override rejected");
+    expect(!parse_settings(std::string(513, 'x')), "oversized settings rejected");
 
     using namespace ttnx::ui;
     expect(kRootNavigation.size() == 5, "root navigation contains exactly five sections");

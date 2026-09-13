@@ -9,3 +9,6 @@
 .DS_Store
 .vscode/
 .idea/
+
+resources/shaders/
+*.map
