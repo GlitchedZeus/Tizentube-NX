@@ -12,6 +12,7 @@
 #include <string_view>
 #include <thread>
 #include <utility>
+#include <vector>
 
 #include "app_storage.hpp"
 #include "libnx_http_client.hpp"
@@ -99,13 +100,6 @@ public:
     void tick() {
         pump_network_result();
         pump_search_result();
-        if (search_selection_rebuild_pending_) {
-            // The A-button callback has returned before tick() runs.
-            // Rebuild here instead of deleting the focused result
-            // button while its own click callback is executing.
-            search_selection_rebuild_pending_ = false;
-            rebuild_search_results();
-        }
         update_frame_rate();
     }
 
@@ -174,7 +168,12 @@ private:
     brls::Label* search_status_label_{nullptr};
     brls::Button* search_action_button_{nullptr};
     brls::Box* search_results_box_{nullptr};
-    bool search_selection_rebuild_pending_{false};
+
+    struct SearchDetailRow {
+        std::string identity;
+        brls::Label* detail{nullptr};
+    };
+    std::vector<SearchDetailRow> search_detail_rows_;
 
     void refresh_footer() {
         if (!footer_) return;
@@ -265,14 +264,28 @@ private:
         return "Search state unavailable.";
     }
 
+    void refresh_search_inline_details() {
+        const auto& selected_identity = search_model_.selected_identity();
+        for (auto& row : search_detail_rows_) {
+            if (!row.detail) continue;
+            const bool selected = !selected_identity.empty() && row.identity == selected_identity;
+            row.detail->setVisibility(
+                selected ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
+        }
+    }
+
     void rebuild_search_results() {
         if (!search_results_box_) return;
+
+        // Full rebuilding is reserved for a genuinely new/reconstructed result
+        // page. Selecting a result never comes through this path, so the focused
+        // Borealis button remains alive for the entire A-button interaction.
+        search_detail_rows_.clear();
         while (!search_results_box_->getChildren().empty()) {
             search_results_box_->removeView(search_results_box_->getChildren().back());
         }
 
         const auto selected_identity = search_model_.selected_identity();
-        brls::Button* selected_button = nullptr;
 
         for (const auto& result : search_model_.results()) {
             const auto identity = ttnx::core::browse_result_identity(result);
@@ -284,23 +297,24 @@ private:
                 search_results_box_,
                 bounded_ui_text(title, kMaxUiTitleChars));
             select->setHeight(72);
-            const bool is_selected = identity == selected_identity;
-            if (is_selected) selected_button = select;
             select->registerClickAction([this, identity](brls::View*) {
                 if (!search_model_.select(identity)) return true;
-                // Defer the destructive list rebuild until the next
-                // ShellActivity::tick(), after this callback returns.
-                search_selection_rebuild_pending_ = true;
+                // Non-destructive selection update: keep this focused button and
+                // the surrounding result tree alive. Only detail visibility changes.
+                refresh_search_inline_details();
                 return true;
             });
 
-            if (is_selected) {
-                auto* detail_label = label(
-                    search_results_box_,
-                    ttnx::core::search_result_selection_display(result),
-                    18);
-                detail_label->setMarginBottom(14);
-            }
+            auto* detail_label = label(
+                search_results_box_,
+                ttnx::core::search_result_selection_display(result),
+                18);
+            detail_label->setMarginBottom(14);
+            detail_label->setVisibility(
+                identity == selected_identity
+                    ? brls::Visibility::VISIBLE
+                    : brls::Visibility::GONE);
+            search_detail_rows_.push_back({identity, detail_label});
 
             const auto metadata = ttnx::core::search_result_metadata_display(result);
             if (!metadata.empty()) {
@@ -311,11 +325,6 @@ private:
                 metadata_label->setMarginBottom(14);
             }
         }
-
-        // Restore controller focus to the same normalized result.
-        // Borealis will keep the focused card in the scroll viewport,
-        // with the selected detail block immediately beneath it.
-        if (selected_button) brls::Application::giveFocus(selected_button);
     }
 
     void refresh_search_page(bool rebuild_results) {
@@ -664,6 +673,38 @@ private:
         refresh_search_page(true);
     }
 
+    brls::View* sidebar_item_for_section(ttnx::ui::RootSection section) {
+        auto* sidebar = dynamic_cast<brls::Box*>(getView("brls/tab_frame/sidebar"));
+        if (!sidebar || sidebar->getChildren().empty()) return nullptr;
+
+        auto* item_box = dynamic_cast<brls::Box*>(sidebar->getChildren().front());
+        if (!item_box) return nullptr;
+
+        std::size_t wanted = ttnx::ui::kRootNavigation.size();
+        for (std::size_t i = 0; i < ttnx::ui::kRootNavigation.size(); ++i) {
+            if (ttnx::ui::kRootNavigation[i].section == section) {
+                wanted = i;
+                break;
+            }
+        }
+
+        auto& items = item_box->getChildren();
+        if (wanted >= items.size()) return nullptr;
+        return items[wanted];
+    }
+
+    void focus_sidebar_section(ttnx::ui::RootSection section) {
+        if (auto* item = sidebar_item_for_section(section)) {
+            brls::Application::giveFocus(item);
+            return;
+        }
+
+        // Conservative fallback for an unexpected pinned-framework layout mismatch.
+        if (auto* sidebar = getView("brls/tab_frame/sidebar")) {
+            brls::Application::giveFocus(sidebar);
+        }
+    }
+
     brls::View* create_page(ttnx::ui::RootSection section) {
         using ttnx::ui::RootSection;
         // Startup recovery build: use the same plain ScrollingFrame ownership
@@ -677,6 +718,7 @@ private:
         search_status_label_ = nullptr;
         search_action_button_ = nullptr;
         search_results_box_ = nullptr;
+        search_detail_rows_.clear();
         auto* scroll = new brls::ScrollingFrame();
         auto* content = new brls::Box(brls::Axis::COLUMN);
         content->setPadding(32, 36, 32, 36);
@@ -684,8 +726,8 @@ private:
 
         // Pages are destroyed on tab changes. Worker threads never capture page
         // views; all async data returns through ShellActivity state first.
-        content->registerAction("Sections", brls::BUTTON_B, [this](brls::View*) {
-            brls::Application::giveFocus(getView("brls/tab_frame/sidebar"));
+        content->registerAction("Sections", brls::BUTTON_B, [this, section](brls::View*) {
+            focus_sidebar_section(section);
             return true;
         });
 
@@ -710,7 +752,7 @@ private:
                   "Network policy: exact www.youtube.com:443 only for M2; Nintendo endpoints are blocked before DNS.",
                   18);
             button(content, "Explore the sections")->registerClickAction([this](brls::View*) {
-                brls::Application::giveFocus(getView("brls/tab_frame/sidebar"));
+                focus_sidebar_section(ttnx::ui::RootSection::Home);
                 return true;
             });
             ttnx::record_boot_event("boot-10-home-created");

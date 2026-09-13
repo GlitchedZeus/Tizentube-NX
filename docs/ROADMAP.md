@@ -112,8 +112,11 @@
 - [x] Real-hardware first-page live Search acceptance
 - [x] Attempt dedicated A-open/B-back result-detail activity
 - [x] Hardware-reject the dedicated result-detail activity after black-screen/pop-transition failure
-- [x] Replace it with a one-frame-deferred inline selected-result detail block on the stable Search page
-- [ ] Real-hardware inline result-detail acceptance
+- [x] Replace it with an inline selected-result detail block on the stable Search page
+- [x] Hardware-observe inline detail rendering at `36015cb...` but reject the overall UI checkpoint after blank-page/sidebar-focus regression
+- [x] Remove destructive selection-time result-tree rebuilding and forced result refocus
+- [x] Return B to the active SidebarItem instead of the Sidebar container/default Home item
+- [ ] Real-hardware inline-detail + full sidebar traversal acceptance
 - [ ] Re-enable continuation / `Load more` as a separate hardware-gated slice
 
 ### Future feature seams — not active in M2
@@ -226,4 +229,4 @@ See `docs/PROFILES_AND_IMPORT.md` and `docs/OAUTH_ACCOUNT_LINKING.md` for the fu
 
 ## Current gate
 
-**Real-Switch guest bootstrap is accepted (`Guest ready`) and the startup-recovery shell has now physically booted without crashing. The current gate is first-page live Search reactivation on the accepted plain `ScrollingFrame` shell. Text-only normalized results and result selection are enabled; `Load more` is intentionally disabled until a later hardware slice. Preserve the exact `www.youtube.com:443` allowlist and hard Shorts/ad firewall. Post-v1 OAuth work remains documentation only during M2.**
+**Guest bootstrap, startup recovery and first-page live Search are physically accepted. The current gate is the inline-detail/sidebar lifecycle fix after `36015cb...` was rejected for blank Search content and Home/Search-only sidebar traversal. `Load more` remains disabled. Preserve the exact `www.youtube.com:443` allowlist and hard Shorts/ad firewall; post-v1 OAuth remains documentation only during M2.**

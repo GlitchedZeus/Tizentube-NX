@@ -7,7 +7,7 @@ M2 — YouTube guest browsing / pre-alpha.
 Branch: `feature/m2-guest-browsing`  
 Draft PR: #6 — `M2: guest browsing networking foundation`
 
-The real-Switch guest bootstrap, startup-recovery, and first-page live Search gates are accepted. The accepted first-page Search checkpoint is `a5fb638abd6e41d82490a460f41ea096b11d1ea5`; the next UI-only checkpoint fixes result-detail visibility without changing Search networking.
+The real-Switch guest bootstrap, startup-recovery, and first-page live Search gates remain accepted. Checkpoint `36015cb2bf9ae98fc983674563e9df0935232123` proved inline result detail rendering but is rejected as an overall UI checkpoint because Search can blank and sidebar traversal becomes trapped at Home/Search. The current UI-only fix removes destructive selection-time result rebuilding and returns B to the active sidebar item without changing Search networking.
 
 ## Real-hardware guest-bootstrap acceptance
 
@@ -269,3 +269,15 @@ The original pre-first-frame `std::abort (0xFFE)` root cause remains **UNKNOWN**
 - Exact outbound policy remains `www.youtube.com:443`; Nintendo hard deny, TLS verification, redirect revalidation, IP-literal rejection and the absence of `switch-curl` remain unchanged.
 - The startup-recovery NRO was subsequently tested on the real Atmosphère Switch and booted without crashing. Startup recovery is therefore **PHYSICALLY ACCEPTED** at `dbe1de9e0aa278999479dd3eac7a04d37b005b58`.
 - First-page Search was subsequently exercised successfully on the physical Atmosphère Switch at `a5fb638abd6e41d82490a460f41ea096b11d1ea5`: the live query returned 15 results and a selected normal video showed its normalized ID and clean canonical URL. First-page live Search is therefore **PHYSICALLY ACCEPTED**. A presentation-only follow-up moves selection details into a dedicated activity because the original label was usually below the visible list. `Load more` remains disabled pending the next hardware-gated slice.
+
+## Inline-detail focus/page-lifecycle regression — 2026-09-13
+
+Physical hardware rejected `36015cb2bf9ae98fc983674563e9df0935232123` as an overall UI checkpoint even though its inline detail rendering worked. Upper/middle/lower result selection stayed on Search and displayed the normalized ID plus clean canonical URL, but returning toward the sidebar could blank Search and leave only Home/Search reachable.
+
+Source review of pinned Borealis `20e2d33b6c4ffce139ce304c503c04f5b94da920` identifies the unsafe interaction. `Box::removeView()` synchronously deletes result Views, while the inline implementation removed every result child and then called `Application::giveFocus()` on a replacement result. More importantly, TabFrame constructs a tab by calling its creator before attaching the returned page. When Search was re-entered from the sidebar with a selected identity, `create_page(Search)` rebuilt results and force-focused the selected result during the SidebarItem activation callback. That stole focus out of the sidebar before Down could continue to Subscriptions.
+
+The Sections/B path also targeted the Sidebar container. Borealis resolves container focus via `getDefaultFocus()`, which selects the first sidebar item (Home); activating Home causes TabFrame to synchronously remove the Search page. The replacement resolves the actual active SidebarItem instead, so B from Search does not change the active tab or destroy the Search page.
+
+The candidate fix also removes selection-time list rebuilding entirely. Result buttons and metadata remain alive; each result owns a pre-created detail label whose `VISIBLE`/`GONE` state changes when selection changes. Full list rebuilding remains limited to genuinely new Search results or reconstructing a Search page after a real tab switch.
+
+`Load more` remains disabled. Guest bootstrap and first-page Search acceptance remain unchanged.
