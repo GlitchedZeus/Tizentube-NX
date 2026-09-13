@@ -467,6 +467,146 @@ bool append_normalized_payload(
     return true;
 }
 
+bool append_home_entry(
+    core::HomePage& home,
+    std::unordered_set<std::string>& seen,
+    std::string inherited_title,
+    std::string_view entry,
+    const core::FilterPolicy& policy,
+    std::string& continuation,
+    bool& ambiguous_continuation,
+    std::string& error) {
+    // Home is deliberately fail-closed at renderer-family boundaries. Only
+    // recognized structural wrappers are opened. Unknown/promo/Premium/command
+    // renderers remain opaque even if they contain a video-shaped descendant.
+    if (const auto rich_item = field(entry, "richItemRenderer")) {
+        const auto content = field(*rich_item, "content");
+        return !content || append_home_entry(
+            home, seen, std::move(inherited_title), *content, policy,
+            continuation, ambiguous_continuation, error);
+    }
+
+    if (const auto rich_section = field(entry, "richSectionRenderer")) {
+        const auto content = field(*rich_section, "content");
+        if (!content) return true;
+        const auto title = section_title(entry);
+        if (const auto shelf = field(*content, "richShelfRenderer")) {
+            const auto contents = field(*shelf, "contents");
+            if (!contents) return true;
+            const auto items = array_elements(*contents);
+            if (!items) {
+                error = "Home shelf contents are malformed or exceed limits.";
+                return false;
+            }
+            for (const auto item : *items) {
+                if (!append_home_entry(
+                        home, seen, title, item, policy,
+                        continuation, ambiguous_continuation, error)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        if (const auto shelf = field(*content, "shelfRenderer")) {
+            return append_home_entry(
+                home, seen, title, *shelf, policy,
+                continuation, ambiguous_continuation, error);
+        }
+        // reelShelfRenderer and every other unreviewed section type are opaque.
+        return true;
+    }
+
+    if (const auto item_section = field(entry, "itemSectionRenderer")) {
+        const auto contents = field(*item_section, "contents");
+        if (!contents) return true;
+        const auto items = array_elements(*contents);
+        if (!items) {
+            error = "Home item-section contents are malformed or exceed limits.";
+            return false;
+        }
+        const auto title = section_title(entry);
+        for (const auto item : *items) {
+            if (!append_home_entry(
+                    home, seen, title, item, policy,
+                    continuation, ambiguous_continuation, error)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    if (const auto rich_shelf = field(entry, "richShelfRenderer")) {
+        const auto contents = field(*rich_shelf, "contents");
+        if (!contents) return true;
+        const auto items = array_elements(*contents);
+        if (!items) {
+            error = "Home rich-shelf contents are malformed or exceed limits.";
+            return false;
+        }
+        const auto title = section_title(entry).empty()
+            ? inherited_title
+            : section_title(entry);
+        for (const auto item : *items) {
+            if (!append_home_entry(
+                    home, seen, title, item, policy,
+                    continuation, ambiguous_continuation, error)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    if (const auto shelf = field(entry, "shelfRenderer")) {
+        std::optional<std::string_view> items;
+        if (const auto content = field(*shelf, "content")) {
+            if (const auto horizontal = field(*content, "horizontalListRenderer")) {
+                items = field(*horizontal, "items");
+            } else if (const auto expanded = field(*content, "expandedShelfContentsRenderer")) {
+                items = field(*expanded, "items");
+            }
+        }
+        if (!items) items = field(*shelf, "contents");
+        if (!items) return true;
+        const auto children = array_elements(*items);
+        if (!children) {
+            error = "Home shelf item list is malformed or exceeds limits.";
+            return false;
+        }
+        const auto title = section_title(entry).empty()
+            ? inherited_title
+            : section_title(entry);
+        for (const auto child : *children) {
+            if (!append_home_entry(
+                    home, seen, title, child, policy,
+                    continuation, ambiguous_continuation, error)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // These are the only leaf renderer families reviewed for the first Home
+    // slice. The shared parser still applies the hard Shorts/ad/shopping filter
+    // and metadata bounds inside each recognized leaf.
+    for (const auto key : {
+             std::string_view{"videoRenderer"},
+             std::string_view{"channelRenderer"},
+             std::string_view{"playlistRenderer"},
+             std::string_view{"radioRenderer"},
+             std::string_view{"lockupViewModel"},
+             std::string_view{"continuationItemRenderer"},
+             std::string_view{"continuationItemViewModel"},
+             std::string_view{"continuationItemView"}}) {
+        if (field(entry, key)) {
+            return append_normalized_payload(
+                home, seen, std::move(inherited_title), entry, policy,
+                continuation, ambiguous_continuation, error);
+        }
+    }
+
+    return true;
+}
+
 std::optional<std::string_view> browse_tabs(std::string_view response_body) {
     if (const auto two = path(response_body, {"contents", "twoColumnBrowseResultsRenderer", "tabs"})) {
         return two;
@@ -527,7 +667,7 @@ bool collect_primary_home(
     }
     saw_payload = true;
     for (const auto entry : *entries) {
-        if (!append_normalized_payload(
+        if (!append_home_entry(
                 home,
                 seen,
                 section_title(entry),
@@ -570,17 +710,24 @@ bool collect_continuation_home(
                 if (!action) continue;
                 const auto items = field(*action, "continuationItems");
                 if (!items) continue;
-                saw_payload = true;
-                if (!append_normalized_payload(
-                        home,
-                        seen,
-                        {},
-                        *items,
-                        policy,
-                        continuation,
-                        ambiguous_continuation,
-                        error)) {
+                const auto children = array_elements(*items);
+                if (!children) {
+                    error = "Home continuation items are malformed or exceed limits.";
                     return false;
+                }
+                saw_payload = true;
+                for (const auto child : *children) {
+                    if (!append_home_entry(
+                            home,
+                            seen,
+                            {},
+                            child,
+                            policy,
+                            continuation,
+                            ambiguous_continuation,
+                            error)) {
+                        return false;
+                    }
                 }
             }
         }

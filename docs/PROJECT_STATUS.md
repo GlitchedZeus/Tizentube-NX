@@ -7,7 +7,7 @@ M2 — YouTube guest browsing / pre-alpha.
 Branch: `feature/m2-guest-browsing`  
 Draft PR: #6 — `M2: guest browsing networking foundation`
 
-The real-Switch guest bootstrap, startup-recovery, first-page live Search, inline result-detail, and full sidebar traversal gates are physically accepted. Hardware-tested NRO head `d6910a232732b2bd9169abb11dfdf320cf35a34b` closes the blank-Search/Home-Search-focus regression introduced by `36015cb...`. Physical testing of continuation build `959a46e7c1d5de1743cdf3b11a48b1b227ab0b4e` proved that `Load more` fetches and appends additional videos, but rejected that overall UI checkpoint because the selector could move out of view and Up from `Load more` could jump to result 1. Focus-lifecycle fix `d432ef8c6eee8e1b77ecd8a96b78832c43bb8a5b` now explicitly routes Load-more-Up to the last result, defers focus to the first newly appended result after layout, and adds A-again inline-detail collapse; physical retest remains required.
+The real-Switch guest bootstrap, startup recovery, and complete M2 Search slice are physically accepted. Hardware-tested Search head `428497c90be6e768c607e45c68171827d74f0faf` closes the continuation focus gate: explicit Load more appends successfully, focus lands on the first newly-loaded result, the viewport follows, A-again collapses inline detail, sidebar navigation remains intact, and the underlying pixel-scroll foundation was previously stress-tested through 156 loaded results. Development has now moved to the first live guest Home page. Home is implemented as an explicit post-Guest-ready action with a scoped Home parser/model and text-only UI; it remains pending physical Switch acceptance.
 
 ## Real-hardware guest-bootstrap acceptance
 
@@ -178,6 +178,16 @@ The Switch UI consumes the existing UI-safe Search error taxonomy rather than ra
 
 The UI does not expose request JSON, response JSON, continuation tokens, cookies, authorization material, visitor IDs or session identifiers.
 
+## Live guest Home first-page implementation
+
+The first Home slice reuses the accepted app-lifetime `LibnxHttpClient`, memory-only guest session and exact `www.youtube.com:443` network policy. Startup still performs no hidden Home request. After the user explicitly reaches `Guest ready`, Home exposes `Load Home` / `Refresh Home`, which sends the existing minimal `FEwhat_to_watch` browse request off the Borealis/UI thread.
+
+The network-facing parser is scoped to the selected Home browse tab and recognized continuation action arrays. It does not recursively scan topbar/menu/command siblings. Within the selected Home container, only reviewed structural wrappers and leaf renderer families are opened; unreviewed, Premium/promo and command-only wrappers remain opaque even if they contain a video-shaped descendant. Recognized leaf renderers reuse the bounded Video / Channel / Playlist normalization and hard Shorts/reel, ads/promoted and shopping firewall already exercised by Search.
+
+`HomeModel` owns normalized data, generation and selected identity independently from Borealis Views. TabFrame can therefore destroy and reconstruct the Home page without giving a worker stale UI pointers. The first Switch presentation is intentionally text-only: normalized thumbnail candidates may exist in memory but no remote image host is contacted. A toggles the same clean canonical ID/URL detail style proven by Search. Home continuation tokens are parsed as an architectural seam but the UI intentionally defers Home pagination until the first page passes hardware.
+
+Home is **IMPLEMENTED / HOST-VALIDATED / PENDING PHYSICAL SWITCH TEST**. It is not yet called hardware accepted.
+
 ## Search hardening state
 
 The previously host-tested M2 Search protections remain intact:
@@ -273,7 +283,7 @@ The result-detail/sidebar lifecycle is also **PHYSICALLY ACCEPTED** using NRO he
 
 The original pre-first-frame `std::abort (0xFFE)` root cause remains **UNKNOWN**. Do not retroactively attribute it to Search networking, `bad_alloc`, or the worker hardening without new evidence.
 
-The next activation gate is the explicit continuation / `Load more` candidate at `534f576a77aeb8f7226b2f3a3549be23c621e06a`. It is implemented and host validated but is **NOT physically accepted** until the real Switch proves append-only pagination, continuation-added selection, sidebar stability, new-query invalidation and normal exit/relaunch. Startup boot markers, remote-thumbnail blocking, and the exact `www.youtube.com:443` allowlist remain unchanged.
+Search continuation / `Load more` is now **PHYSICALLY ACCEPTED** at `428497c90be6e768c607e45c68171827d74f0faf`, completing the Search hardware slice. The next activation gate is the explicit first-page guest Home candidate. It is implemented and host validated but is **NOT physically accepted** until the real Switch proves normal Home results, inline A/A-again detail, Home tab lifetime/sidebar stability, Search non-regression and normal exit/relaunch. Home continuation and remote thumbnails remain disabled for this gate; the exact `www.youtube.com:443` allowlist remains unchanged.
 
 ## Physical startup crash investigation — 2026-09-13
 

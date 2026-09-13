@@ -60,6 +60,16 @@ The accepted design keeps result buttons alive and only toggles pre-created inli
 
 This acceptance closes the base Search UI/navigation lifecycle gate.
 
+### Search continuation / Load more — fully accepted
+
+Hardware-tested NRO head: `428497c90be6e768c607e45c68171827d74f0faf`
+
+Physical Switch result: **ACCEPTED**.
+
+This closes the full M2 Search hardware slice. Hardware proved that explicit continuation fetch/append works, the selector transfers to the first newly-loaded result after layout, the viewport follows correctly, Up/Down traversal across the continuation boundary is continuous, inline A/A-again detail toggling still works, and sidebar navigation remains intact. The preceding absolute-pixel `ScrollingFrame` backport was also stress-tested through **156 loaded results** without the earlier disappearing-selector or repeated-pagination exit.
+
+The accepted Search implementation is now a protected baseline for later M2 surfaces.
+
 ## Hardware rejected
 
 ### Dedicated pushed Search-result activity
@@ -154,18 +164,23 @@ This hardware result strongly validates the local absolute-pixel `ScrollingFrame
 
 One polish issue remains: after `Load more` succeeds, focus intentionally remains on the `Load more` button while the newly appended results appear immediately above it. The user therefore has to press/scroll Up to discover the new page. The next candidate should preserve the now-stable pixel scroll state but defer focus by stable result identity to the **first newly-added visible result** after layout.
 
-## Current physical gate — Search continuation post-load focus handoff
+## Current physical gate — guest Home first page
 
-The dynamic-scroll and repeated-pagination stability problem is now hardware accepted at `57eac3c19fd19faa24a41d92dd60aa948b832d6b`. The remaining continuation gate is narrower:
+Search continuation is fully hardware accepted at `428497c90be6e768c607e45c68171827d74f0faf`. The next gate is deliberately narrower and must not reopen accepted Search behavior.
 
-- pressing `Load more` must still fetch and append normally;
-- once the new page is laid out, the visible selector should move automatically to the **first newly-added visible result**, rather than remaining on `Load more`;
-- the viewport must follow that focus transfer without disappearing, jumping to result 1, or losing the selector;
-- Up from that first new result should move naturally to the previous/older result when one is rendered;
-- Down should continue through the newly-added page, and the last result must still reach `Load more`;
-- repeated pagination should remain stable past the previously verified 156-result stress point;
-- A-twice inline-detail toggle, B/sidebar traversal, first-page Search, accumulated model state and all accepted lifecycle behavior must remain unchanged;
-- no network/parser/security policy changes are part of this gate.
+The Home candidate must prove on real hardware that:
+
+- startup still performs no hidden YouTube Home request;
+- after the explicit guest bootstrap reaches `Guest ready`, `Load Home` performs the first `FEwhat_to_watch` browse request;
+- normal Video / Channel / Playlist results render as text-only controller-focusable rows where YouTube provides them;
+- no Shorts/reels, ads/promoted content, shopping/product content, Premium/promo wrappers or unsupported renderer descendants reach the Home model;
+- A toggles normalized stable ID + clean canonical URL inline without deleting the focused row;
+- B returns to the Home SidebarItem and all five sidebar sections remain reachable;
+- leaving and returning to Home safely reconstructs from `HomeModel` without stale Borealis View pointers;
+- the accepted Search first page + Load more focus handoff still work afterward;
+- remote thumbnails remain disabled and Home continuation remains deferred until this first-page gate passes.
+
+Home hardware acceptance remains **NO** until this sequence passes on the physical Switch.
 
 ## Invariants for every gate
 

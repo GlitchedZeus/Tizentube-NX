@@ -98,6 +98,14 @@ std::string home_fixture() {
                       "videoId": "home-product",
                       "title": {"simpleText": "Shopping escape attempt"}
                     }}}},
+                    {"mealbarPromoRenderer": {"content": {"videoRenderer": {
+                      "videoId": "home-premium-promo",
+                      "title": {"simpleText": "Premium escape attempt"}
+                    }}}},
+                    {"totallyUnknownRenderer": {"content": {"videoRenderer": {
+                      "videoId": "home-unknown-wrapper",
+                      "title": {"simpleText": "Unsupported escape attempt"}
+                    }}}},
                     {"richSectionRenderer": {"content": {"reelShelfRenderer": {
                       "title": {"simpleText": "Shorts"},
                       "items": [{"videoRenderer": {
@@ -201,6 +209,10 @@ int main() {
                "ad subtree is opaque and contributes zero videos");
         expect(find_id(page, "home-product") == nullptr,
                "shopping subtree is opaque and contributes zero videos");
+        expect(find_id(page, "home-premium-promo") == nullptr,
+               "Premium/promo wrapper is opaque and contributes zero videos");
+        expect(find_id(page, "home-unknown-wrapper") == nullptr,
+               "unsupported Home renderer family is opaque and contributes zero videos");
         expect(find_id(page, "hostile-topbar-video") == nullptr,
                "renderer-shaped topbar metadata remains outside Home scope");
         expect(find_id(page, "unselected-tab-video") == nullptr,

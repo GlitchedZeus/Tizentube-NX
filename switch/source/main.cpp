@@ -1359,7 +1359,7 @@ private:
             label(content, "No Shorts. Clean share links. No promoted content.", 20);
             label(content, "Nintendo network destinations are blocked by the app before DNS.", 20);
             label(content, "SponsorBlock and DeArrow are planned for a later build.", 20);
-            label(content, "TizenTube NX 0.1.0  /  M2 live guest Search", 20);
+            label(content, "TizenTube NX 0.1.0  /  M2 guest Home + Search", 20);
             break;
         }
         }

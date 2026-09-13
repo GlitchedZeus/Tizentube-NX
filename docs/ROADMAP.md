@@ -122,7 +122,7 @@
 - [x] Hardware-reject `959a46e...` focus UX after selector loss and Up-from-Load-more jump to result 1
 - [x] Prove pinned Borealis nested-Box/default-focus + ScrollingFrame recenter behavior behind that regression
 - [x] Implement focus fix + A-again detail toggle at `d432ef8c6eee8e1b77ecd8a96b78832c43bb8a5b`
-- [ ] Real-hardware continuation / `Load more` focus/UI acceptance
+- [x] Real-hardware continuation / `Load more` focus/UI acceptance at `428497c90be6e768c607e45c68171827d74f0faf`
 
 ### Future feature seams — not active in M2
 
@@ -138,7 +138,9 @@
 
 ### Remaining guest surfaces
 
-- [ ] Parse/present live Home browse results
+- [x] Implement scoped live guest Home first-page request/parser/model/text UI
+- [ ] Real-hardware Home first-page acceptance
+- [ ] Home continuation after first-page acceptance
 - [ ] Channel pages
 - [ ] Playlist pages
 - [ ] Real-hardware guest browsing acceptance
@@ -263,4 +265,4 @@ See `docs/PROFILES_AND_IMPORT.md` and `docs/OAUTH_ACCOUNT_LINKING.md` for the fu
 
 ## Current gate
 
-**Guest bootstrap, startup recovery, first-page live Search, inline result detail, and full sidebar traversal are physically accepted. Search continuation data fetch/append has also been proven on hardware; the current gate is continuation focus/scroll acceptance after the `d432ef8...` focus fix. Preserve the accepted non-destructive result View lifecycle, exact `www.youtube.com:443` allowlist, hard Shorts/ad firewall, remote-thumbnail block, and post-v1 OAuth documentation-only boundary during M2.**
+**Guest bootstrap, startup recovery, the complete Search slice, inline detail, sidebar traversal, and explicit Search continuation are physically accepted through `428497c90be6e768c607e45c68171827d74f0faf`. The current M2 gate is the first explicit live guest Home page. Preserve the accepted Search implementation, exact `www.youtube.com:443` allowlist, hard Shorts/ad/promoted/shopping firewall, remote-thumbnail block, and post-v1 OAuth documentation-only boundary.**
