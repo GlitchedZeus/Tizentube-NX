@@ -2,7 +2,19 @@
 
 ## Current phase
 
-M0 — Foundation / pre-alpha.
+M1 — Switch application shell / pre-alpha.
+
+## Accepted baseline
+
+M0.1 is **device accepted** on a real Atmosphere Switch.
+
+Verified on hardware:
+
+- CI-built `tizentube_nx.nro` launches successfully from homebrew.
+- Foundation screen renders as intended.
+- The no-ads / no-Shorts product contract is visible in the device build.
+- Canonical clean-link behavior remains covered by host tests.
+- Reproducible devkitA64 Switch CI build is green.
 
 ## Implemented
 
@@ -14,15 +26,17 @@ M0 — Foundation / pre-alpha.
 - Default filters for promoted and shopping content.
 - Minimal libnx console app source and devkitPro makefile.
 - Host CI workflow.
+- Reproducible devkitA64 NRO build workflow with uploaded artifact.
+- Real Atmosphere hardware boot validation.
 
 ## Validation
 
-Host CMake build and tests are expected to pass before every commit. The Switch target still needs validation in a devkitPro environment and on Atmosphere hardware.
+Host CMake tests and the Switch devkitA64 build are green. The first generated NRO has been accepted on-device.
 
 ## Immediate next technical checkpoint
 
-Produce a real `tizentube_nx.nro` foundation build and confirm it boots/returns cleanly on the user's Switch. Then replace the console shell with Borealis.
+M1: replace the temporary console shell with a Borealis controller-first application shell providing Home, Search, Subscriptions, Library, and Settings navigation; establish touch/controller behavior, SD-card settings/log paths, and app resources.
 
 ## Known high-risk area
 
-Account authentication. The product requirement is easy console-style login without cookie-file import. Before building account-dependent UI, validate a sustainable TV/device authorization flow suitable for redistribution and avoid embedding third-party private credentials.
+Account authentication remains the major future risk. The product requirement is easy console-style login without cookie-file import. Before building account-dependent UI, validate a sustainable TV/device authorization flow suitable for redistribution and avoid embedding third-party private credentials.
