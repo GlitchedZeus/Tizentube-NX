@@ -16,6 +16,8 @@ enum class SearchErrorCode {
     UnsupportedResponse,
     EmptyResults,
     ContinuationFailure,
+    MemoryPressure,
+    InternalFailure,
 };
 
 [[nodiscard]] std::string search_error_message(SearchErrorCode code);
