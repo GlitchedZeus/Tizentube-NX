@@ -1,0 +1,418 @@
+name: apply-search-pagination-focus-fix
+
+on:
+  push:
+    branches:
+      - feature/m2-guest-browsing
+    paths:
+      - .github/workflows/apply-search-pagination-focus-fix.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/m2-guest-browsing
+          fetch-depth: 0
+
+      - name: Apply Search pagination focus fix
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected 1 match, found {count}")
+              return text.replace(old, new, 1)
+
+          main_path = Path('switch/source/main.cpp')
+          text = main_path.read_text()
+
+          text = replace_once(text,
+          '''    void tick() {
+                  pump_network_result();
+                  pump_search_result();
+                  update_frame_rate();
+              }
+          ''',
+          '''    void tick() {
+                  // Deferred Search focus is applied one frame after continuation
+                  // rows are attached, so Borealis has current Yoga coordinates and
+                  // ScrollingFrame can recenter the newly focused row correctly.
+                  apply_pending_search_focus();
+                  pump_network_result();
+                  pump_search_result();
+                  update_frame_rate();
+              }
+          ''', 'tick')
+
+          text = replace_once(text,
+          '''    std::vector<SearchDetailRow> search_detail_rows_;
+
+              void refresh_footer() {
+          ''',
+          '''    std::vector<SearchDetailRow> search_detail_rows_;
+              std::string pending_search_focus_identity_;
+
+              void refresh_footer() {
+          ''', 'member')
+
+          old_block = '''    void refresh_search_inline_details() {
+                  const auto& selected_identity = search_model_.selected_identity();
+                  for (auto& row : search_detail_rows_) {
+                      if (!row.detail) continue;
+                      const bool selected = !selected_identity.empty() && row.identity == selected_identity;
+                      row.detail->setVisibility(
+                          selected ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
+                  }
+              }
+
+              void append_search_result_row(const ttnx::core::BrowseResult& result) {
+                  if (!search_results_box_) return;
+                  const auto identity = ttnx::core::browse_result_identity(result);
+                  if (identity.empty()) return;
+
+                  std::string title = "[" + ttnx::core::search_result_kind_label(result.kind) + "] ";
+                  title += result.title.empty() ? "Untitled result" : result.title;
+                  auto* select = button(
+                      search_results_box_,
+                      bounded_ui_text(title, kMaxUiTitleChars));
+                  select->setHeight(72);
+                  select->registerClickAction([this, identity](brls::View*) {
+                      if (!search_model_.select(identity)) return true;
+                      // Selection never deletes or replaces the focused row.
+                      refresh_search_inline_details();
+                      return true;
+                  });
+
+                  auto* detail_label = label(
+                      search_results_box_,
+                      ttnx::core::search_result_selection_display(result),
+                      18);
+                  detail_label->setMarginBottom(14);
+                  detail_label->setVisibility(
+                      identity == search_model_.selected_identity()
+                          ? brls::Visibility::VISIBLE
+                          : brls::Visibility::GONE);
+                  search_detail_rows_.push_back({identity, select, detail_label});
+
+                  const auto metadata = ttnx::core::search_result_metadata_display(result);
+                  if (!metadata.empty()) {
+                      auto* metadata_label = label(
+                          search_results_box_,
+                          bounded_ui_text(metadata, kMaxUiMetadataChars),
+                          18);
+                      metadata_label->setMarginBottom(14);
+                  }
+              }
+
+              void append_search_results_from(std::size_t start_index) {
+                  if (!search_results_box_) return;
+                  const auto& results = search_model_.results();
+                  if (start_index > results.size()) return;
+                  for (std::size_t i = start_index; i < results.size(); ++i) {
+                      append_search_result_row(results[i]);
+                  }
+              }
+
+              void rebuild_search_results() {
+                  if (!search_results_box_) return;
+
+                  // Full rebuilding is reserved for a genuinely new/reconstructed result
+                  // page. Selection and continuation appends never delete existing rows.
+                  search_detail_rows_.clear();
+                  while (!search_results_box_->getChildren().empty()) {
+                      search_results_box_->removeView(search_results_box_->getChildren().back());
+                  }
+                  append_search_results_from(0);
+              }
+          '''
+
+          new_block = '''    void refresh_search_inline_details() {
+                  const auto& selected_identity = search_model_.selected_identity();
+                  for (auto& row : search_detail_rows_) {
+                      if (!row.detail) continue;
+                      const bool selected = !selected_identity.empty() && row.identity == selected_identity;
+                      row.detail->setVisibility(
+                          selected ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
+                  }
+              }
+
+              void refresh_search_load_more_navigation() {
+                  if (!search_load_more_button_) return;
+
+                  // Pinned Borealis asks a sibling Box for getDefaultFocus() when
+                  // navigating into it. With Load more outside search_results_box_,
+                  // Up therefore enters the nested results Box at its first result.
+                  // Override only that edge with the actual last result. If the
+                  // result list is empty, Search itself is the safe predecessor.
+                  brls::View* up_target = search_action_button_;
+                  if (!search_detail_rows_.empty() && search_detail_rows_.back().button) {
+                      up_target = search_detail_rows_.back().button;
+                  }
+                  if (up_target) {
+                      search_load_more_button_->setCustomNavigationRoute(
+                          brls::FocusDirection::UP, up_target);
+                  }
+              }
+
+              void apply_pending_search_focus() {
+                  if (pending_search_focus_identity_.empty()) return;
+
+                  // If Search was left before this frame, discard the deferred
+                  // request rather than stealing focus back from another tab.
+                  if (!search_results_box_) {
+                      pending_search_focus_identity_.clear();
+                      return;
+                  }
+
+                  const auto wanted = pending_search_focus_identity_;
+                  pending_search_focus_identity_.clear();
+                  for (const auto& row : search_detail_rows_) {
+                      if (row.identity == wanted && row.button) {
+                          brls::Application::giveFocus(row.button);
+                          return;
+                      }
+                  }
+              }
+
+              brls::Button* append_search_result_row(const ttnx::core::BrowseResult& result) {
+                  if (!search_results_box_) return nullptr;
+                  const auto identity = ttnx::core::browse_result_identity(result);
+                  if (identity.empty()) return nullptr;
+
+                  std::string title = "[" + ttnx::core::search_result_kind_label(result.kind) + "] ";
+                  title += result.title.empty() ? "Untitled result" : result.title;
+                  auto* select = button(
+                      search_results_box_,
+                      bounded_ui_text(title, kMaxUiTitleChars));
+                  select->setHeight(72);
+                  select->registerClickAction([this, identity](brls::View*) {
+                      if (search_model_.selected_identity() == identity) {
+                          search_model_.clear_selection();
+                      } else if (!search_model_.select(identity)) {
+                          return true;
+                      }
+                      // A toggles only the pre-created inline detail. The focused
+                      // result View remains alive and is never replaced.
+                      refresh_search_inline_details();
+                      return true;
+                  });
+
+                  auto* detail_label = label(
+                      search_results_box_,
+                      ttnx::core::search_result_selection_display(result),
+                      18);
+                  detail_label->setMarginBottom(14);
+                  detail_label->setVisibility(
+                      identity == search_model_.selected_identity()
+                          ? brls::Visibility::VISIBLE
+                          : brls::Visibility::GONE);
+                  search_detail_rows_.push_back({identity, select, detail_label});
+
+                  const auto metadata = ttnx::core::search_result_metadata_display(result);
+                  if (!metadata.empty()) {
+                      auto* metadata_label = label(
+                          search_results_box_,
+                          bounded_ui_text(metadata, kMaxUiMetadataChars),
+                          18);
+                      metadata_label->setMarginBottom(14);
+                  }
+                  return select;
+              }
+
+              std::string append_search_results_from(std::size_t start_index) {
+                  if (!search_results_box_) return {};
+                  const auto& results = search_model_.results();
+                  if (start_index > results.size()) return {};
+
+                  std::string first_added_identity;
+                  for (std::size_t i = start_index; i < results.size(); ++i) {
+                      const auto identity = ttnx::core::browse_result_identity(results[i]);
+                      auto* row = append_search_result_row(results[i]);
+                      if (row && first_added_identity.empty()) first_added_identity = identity;
+                  }
+                  refresh_search_load_more_navigation();
+                  return first_added_identity;
+              }
+
+              void rebuild_search_results() {
+                  if (!search_results_box_) return;
+
+                  // Never leave Load more pointing at a result View that is about
+                  // to be deleted by a genuine full-page rebuild.
+                  if (search_load_more_button_ && search_action_button_) {
+                      search_load_more_button_->setCustomNavigationRoute(
+                          brls::FocusDirection::UP, search_action_button_);
+                  }
+                  pending_search_focus_identity_.clear();
+
+                  // Full rebuilding is reserved for a genuinely new/reconstructed result
+                  // page. Selection and continuation appends never delete existing rows.
+                  search_detail_rows_.clear();
+                  while (!search_results_box_->getChildren().empty()) {
+                      search_results_box_->removeView(search_results_box_->getChildren().back());
+                  }
+                  (void)append_search_results_from(0);
+              }
+          '''
+          text = replace_once(text, old_block, new_block, 'search rows block')
+
+          text = replace_once(text,
+          '''    void refresh_search_load_more_control(bool focus_fallback_if_hiding = false) {
+                  if (!search_load_more_button_) return;
+
+                  const auto state = search_model_.state();
+          ''',
+          '''    void refresh_search_load_more_control(bool focus_fallback_if_hiding = false) {
+                  if (!search_load_more_button_) return;
+
+                  refresh_search_load_more_navigation();
+                  const auto state = search_model_.state();
+          ''', 'load more nav refresh')
+
+          text = replace_once(text,
+          '''        if (applied_continuation) {
+                  // SearchModel already deduped by stable identity. Append only rows
+                  // that were not present before this continuation; never delete or
+                  // replace the currently focused first-page result tree.
+                  append_search_results_from(previous_result_count);
+                  refresh_search_inline_details();
+                  refresh_search_page(false, search_model_.end_of_results());
+              } else {
+          ''',
+          '''        if (applied_continuation) {
+                  // SearchModel already deduped by stable identity. Append only rows
+                  // that were not present before this continuation; never delete or
+                  // replace the currently focused first-page result tree.
+                  const auto first_new_identity =
+                      append_search_results_from(previous_result_count);
+                  refresh_search_inline_details();
+                  refresh_search_page(false, search_model_.end_of_results());
+
+                  // Growing search_results_box_ above the still-focused Load more
+                  // button does not emit a new focus-gained event in pinned Borealis,
+                  // so ScrollingFrame does not recenter it. Defer focus by identity
+                  // until after the next layout/frame and move to the first appended
+                  // result instead. This keeps the selector visible and begins the
+                  // next page where the user expects.
+                  if (!first_new_identity.empty()) {
+                      pending_search_focus_identity_ = first_new_identity;
+                  }
+              } else {
+          ''', 'continuation focus')
+
+          text = replace_once(text,
+          '''        search_load_more_button_ = nullptr;
+                  search_results_box_ = nullptr;
+                  search_detail_rows_.clear();
+          ''',
+          '''        search_load_more_button_ = nullptr;
+                  search_results_box_ = nullptr;
+                  search_detail_rows_.clear();
+                  pending_search_focus_identity_.clear();
+          ''', 'page pointer clear')
+
+          main_path.write_text(text)
+
+          test_path = Path('tests/search_model_tests.cpp')
+          tests = test_path.read_text()
+          tests = replace_once(tests,
+          '''    expect(model.select("video:VIDEO000002"), "selection uses stable normalized identity");
+              expect(model.selected_identity() == "video:VIDEO000002", "selected identity is retained");
+              expect(!model.select("video:DOESNOTEXIST"), "selection rejects unknown identity");
+
+              expect(model.begin_load_more(gen_a), "ready page can enter loading-more state");
+          ''',
+          '''    expect(model.select("video:VIDEO000002"), "selection uses stable normalized identity");
+              expect(model.selected_identity() == "video:VIDEO000002", "selected identity is retained");
+              expect(!model.select("video:DOESNOTEXIST"), "selection rejects unknown identity");
+              const auto result_count_before_selection_clear = model.results().size();
+              model.clear_selection();
+              expect(model.selected_identity().empty(), "inline selection can be cleared for A-toggle collapse");
+              expect(model.results().size() == result_count_before_selection_clear,
+                     "clearing inline selection does not mutate Search results");
+              expect(model.select("video:VIDEO000002"),
+                     "cleared inline selection can be reopened on the same stable result");
+
+              expect(model.begin_load_more(gen_a), "ready page can enter loading-more state");
+          ''', 'selection tests')
+          test_path.write_text(tests)
+
+          roadmap_path = Path('docs/ROADMAP.md')
+          roadmap = roadmap_path.read_text()
+          roadmap = replace_once(roadmap,
+          '''- [x] Re-enable explicit continuation / `Load more` with append-only result Views at `534f576a77aeb8f7226b2f3a3549be23c621e06a`
+          - [ ] Real-hardware continuation / `Load more` acceptance
+          ''',
+          '''- [x] Re-enable explicit continuation / `Load more` with append-only result Views at `534f576a77aeb8f7226b2f3a3549be23c621e06a`
+          - [x] Physically verify continuation data fetch/append at `959a46e7c1d5de1743cdf3b11a48b1b227ab0b4e`
+          - [x] Hardware-reject `959a46e...` continuation focus UX after selector loss and Up-from-Load-more jump to result 1
+          - [x] Prove pinned Borealis nested-Box/default-focus + ScrollingFrame recenter behavior behind the regression
+          - [x] Add explicit Load-more-Up -> last-result routing and deferred first-new-result focus after layout
+          - [x] Add A-again inline-detail collapse without rebuilding result Views
+          - [ ] Real-hardware continuation / `Load more` focus/UI acceptance
+          ''', 'roadmap')
+          roadmap_path.write_text(roadmap)
+
+          gates_path = Path('docs/HARDWARE_GATES.md')
+          gates = gates_path.read_text()
+          needle = '''Continuation is **NOT hardware accepted** until that sequence passes on the real Switch.
+          '''
+          addition = '''Continuation is **NOT hardware accepted** until that sequence passes on the real Switch.
+
+          ### Continuation focus follow-up after physical test of `959a46e...`
+
+          Hardware proved that the continuation request/data path works: pressing `Load more` fetched and appended additional normalized videos without crashing. The overall continuation UI gate remained rejected because the focused selector moved out of view after append, and pressing Up from `Load more` could jump directly to the first result instead of the immediately preceding result.
+
+          Pinned Borealis source proves the mechanism. `Box::getNextFocus()` traverses a sibling by calling that sibling's `getDefaultFocus()`; the nested `search_results_box_` therefore resolves to its first focusable result when Up enters it from the sibling `Load more` button. Separately, `ScrollingFrame::updateScrolling()` runs on child-focus gain; appending rows above an already-focused `Load more` button changes its layout position without generating a new focus-gained event, so the frame does not automatically recenter that moved button.
+
+          The fix candidate keeps the accepted append-only result tree, gives `Load more` an explicit Borealis Up route to the current last result, and after a successful append defers focus by stable identity until the next frame/layout before focusing the first newly-added result. Inline detail A behavior is also now a true toggle: A opens a result's detail, A again on the same result clears/collapses it, and A on a different result moves the detail without rebuilding the result tree.
+
+          This follow-up is **IMPLEMENTED / CI + HARDWARE RETEST PENDING** until the corrected focus sequence passes on the physical Switch.
+          '''
+          if needle not in gates:
+              raise SystemExit('hardware gates anchor not found')
+          gates = gates.replace(needle, addition, 1)
+          gates_path.write_text(gates)
+
+          status_path = Path('docs/PROJECT_STATUS.md')
+          status = status_path.read_text()
+          status = replace_once(status,
+          '''The real-Switch guest bootstrap, startup-recovery, first-page live Search, inline result-detail, and full sidebar traversal gates are now physically accepted. Hardware-tested NRO head `d6910a232732b2bd9169abb11dfdf320cf35a34b` closes the blank-Search/Home-Search-focus regression introduced by `36015cb...`. The next Search hardware gate is continuation / `Load more`, reintroduced without changing the accepted first-page networking/parser path or the accepted non-destructive Borealis result lifecycle.
+          ''',
+          '''The real-Switch guest bootstrap, startup-recovery, first-page live Search, inline result-detail, and full sidebar traversal gates are physically accepted. Hardware-tested NRO head `d6910a232732b2bd9169abb11dfdf320cf35a34b` closes the blank-Search/Home-Search-focus regression introduced by `36015cb...`. Continuation networking/data was then physically observed working at `959a46e7c1d5de1743cdf3b11a48b1b227ab0b4e`, but that overall continuation UI checkpoint is rejected pending a focus fix: appending rows can move the still-focused `Load more` control out of view, and Up from that sibling control can enter the nested results Box at result 1. The current candidate fixes only that focus lifecycle plus A-again detail collapse; the accepted Search networking/parser path remains unchanged.
+          ''', 'status current phase')
+
+          status_anchor = '''That gate is now accepted. `Load more` is therefore the next deliberate hardware slice. It must preserve existing first-page results, the accepted non-destructive result View lifecycle, sidebar traversal, stale-generation safety, repeated-token loop prevention, normalized dedupe, retryability, and the existing renderer firewall. It must not widen the network allowlist.
+          '''
+          status_repl = '''That base UI gate is accepted. Physical testing of continuation build `959a46e7c1d5de1743cdf3b11a48b1b227ab0b4e` proved the continuation request/data path: `Load more` fetched and appended additional videos without crashing. The overall continuation UI gate is still rejected because focus did not track the moved/inserted content correctly.
+
+          Pinned Borealis explains both symptoms. Up from the sibling `Load more` control enters the previous nested results Box through `Box::getDefaultFocus()`, which resolves to its first focusable result. Also, `ScrollingFrame` recenters when child focus changes; appending children above an already-focused `Load more` button moves that button without producing a new focus-gained event. The current fix candidate therefore keeps every existing result View alive, explicitly routes Load-more-Up to the actual last result, and queues focus to the first newly appended result by stable identity for the next post-layout frame. A on an already-selected result now clears the model selection and collapses its inline detail without replacing the focused result View.
+
+          The continuation focus/UI gate remains pending physical acceptance. It must preserve first-page results, sidebar traversal, stale-generation safety, repeated-token loop prevention, normalized dedupe, retryability, and the existing renderer firewall without widening the network allowlist.
+          '''
+          status = replace_once(status, status_anchor, status_repl, 'status continuation')
+          status_path.write_text(status)
+          PY
+
+      - name: Validate host build and tests
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+          ctest --test-dir build --output-on-failure
+
+      - name: Commit and push
+        run: |
+          git config user.name "GlitchedZeus"
+          git config user.email "user91746@protonmail.com"
+          git add switch/source/main.cpp tests/search_model_tests.cpp docs/ROADMAP.md docs/HARDWARE_GATES.md docs/PROJECT_STATUS.md
+          git commit -m "ui: stabilize Search continuation focus"
+          git push origin HEAD:feature/m2-guest-browsing
