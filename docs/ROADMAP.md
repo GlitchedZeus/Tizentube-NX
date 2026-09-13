@@ -106,7 +106,10 @@
 - [x] Explicit Load more continuation flow on Switch
 - [x] Continuation retry retains existing first-page results
 - [x] Keep remote thumbnail fetching disabled pending separate host review
-- [ ] Real-hardware live Search acceptance
+- [x] Real-Switch startup-recovery shell accepted after pre-first-frame crash
+- [x] Re-enable first-page Search on the accepted plain `ScrollingFrame` ownership model
+- [x] Keep `Load more` UI disabled for the first Search-reactivation hardware gate
+- [ ] Real-hardware first-page live Search acceptance
 
 ### Future feature seams — not active in M2
 
@@ -218,4 +221,4 @@ See `docs/PROFILES_AND_IMPORT.md` and `docs/OAUTH_ACCOUNT_LINKING.md` for the fu
 
 ## Current gate
 
-**Real-Switch guest bootstrap is accepted (`Guest ready`). Live Search, text-only normalized results, result selection and explicit continuation are now implemented and CI-built. The remaining gate is physical-Switch live Search acceptance while preserving the exact `www.youtube.com:443` allowlist and hard Shorts/ad firewall. Post-v1 OAuth work is documented only and must not be implemented during M2.**
+**Real-Switch guest bootstrap is accepted (`Guest ready`) and the startup-recovery shell has now physically booted without crashing. The current gate is first-page live Search reactivation on the accepted plain `ScrollingFrame` shell. Text-only normalized results and result selection are enabled; `Load more` is intentionally disabled until a later hardware slice. Preserve the exact `www.youtube.com:443` allowlist and hard Shorts/ad firewall. Post-v1 OAuth work remains documentation only during M2.**

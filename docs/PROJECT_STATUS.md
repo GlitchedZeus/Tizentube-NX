@@ -7,7 +7,7 @@ M2 — YouTube guest browsing / pre-alpha.
 Branch: `feature/m2-guest-browsing`  
 Draft PR: #6 — `M2: guest browsing networking foundation`
 
-The real-Switch guest bootstrap gate is accepted. Live Search is now implemented and CI-built; physical live-Search acceptance is the current hardware gate.
+The real-Switch guest bootstrap and startup-recovery gates are accepted. First-page live Search is being re-enabled incrementally on the accepted plain-page shell; physical live-Search acceptance remains pending.
 
 ## Real-hardware guest-bootstrap acceptance
 
@@ -112,7 +112,7 @@ Only one live Search worker is allowed at a time. Search and the manual guest-bo
 
 Editing the query or beginning a newer Search invalidates older generations, so a stale completion cannot replace newer results. Application shutdown joins both the guest diagnostic worker and Search worker before the app-lifetime native HTTP client is destroyed.
 
-Borealis `TabFrame` destroys inactive tab pages. The Search page therefore uses a tracked page wrapper that unregisters its UI pointers synchronously during tab destruction. Workers never capture Borealis page/result view pointers, so leaving Search while a request is in flight does not leave a worker with stale UI references.
+Borealis `TabFrame` destroys inactive tab pages. After the startup recovery, the Switch shell deliberately keeps the physically accepted plain `brls::ScrollingFrame` ownership model. `create_page()` clears UI-only pointers before constructing the replacement page, workers publish only model data, and Search UI refresh happens only on the main thread. Leaving Search while a request is in flight therefore does not give the worker any Borealis view pointer; reopening Search reconstructs the page from current `SearchModel` state.
 
 ### First page and result presentation
 
@@ -144,11 +144,9 @@ No source tracking parameters are preserved.
 
 ### Continuation / Load more
 
-Search uses an explicit `Load more` action rather than infinite scrolling.
+The continuation core remains host-tested, but the first Search-reactivation hardware gate intentionally exposes **first-page Search only**. No `Load more` action is shown in this build.
 
-Continuation continues through the same `GuestSearchFlow`, scoped parser and renderer firewall. The existing flow prevents cross-query token reuse and repeated-token loops; continuation requests do not resend the original query. `SearchModel` deduplicates appended results by stable type-qualified identity.
-
-A continuation failure retains existing first-page results and exposes the safe retry state. Terminal pages expose end-of-results.
+The existing continuation flow, token ownership, repeated-token loop prevention, dedupe and retry behavior remain in core code/tests for a later hardware-gated slice. Disabling the UI action reduces page-lifetime and worker-state complexity while first-page Search is validated on the physical Switch.
 
 ### Error states
 
@@ -241,27 +239,15 @@ No host is authorized merely because YouTube returns a URL for it. Future OAuth/
 
 ## Current activation gate
 
-The real-Switch guest bootstrap is accepted as `Guest ready`.
+The real-Switch guest bootstrap remains accepted as `Guest ready`.
 
-Live Search is implemented, host-tested and devkitA64-built at code checkpoint:
+The startup-recovery NRO at checkpoint `dbe1de9e0aa278999479dd3eac7a04d37b005b58` has now also been physically tested on the Atmosphère Switch and **booted without crashing**. Treat startup recovery as hardware accepted.
 
-`5b46829ead0a94089696e1521cb101637e2bfb3e`
+The original pre-first-frame `std::abort (0xFFE)` root cause remains **UNKNOWN**. Do not attribute it to Search networking, `bad_alloc`, or the worker hardening without new evidence.
 
-It is **not** yet hardware accepted.
+The current gate is incremental first-page live Search reactivation on the accepted plain `ScrollingFrame` shell. The build must keep startup boot markers, no remote thumbnails, no `Load more`, and the exact `www.youtube.com:443` allowlist.
 
-The next physical-Switch gate is:
-
-1. launch the new NRO;
-2. confirm Home still reaches `Guest ready` when manually tested;
-3. open Search;
-4. search `Nintendo Switch homebrew`;
-5. verify normal Video/Channel/Playlist results can be navigated;
-6. select one normal video result and verify its clean identity/URL detail;
-7. use `Load more` if offered;
-8. report any exact safe Search error/status text.
-
-Only after that physical result should live Search be called hardware-accepted.
-
+Live Search remains **not hardware accepted** until the new NRO passes the next physical Search test.
 
 ## Physical startup crash investigation — 2026-09-13
 
@@ -273,4 +259,5 @@ Only after that physical result should live Search be called hardware-accepted.
 - Startup recovery build quarantines live Search UI/network execution, restores plain `ScrollingFrame` page ownership used by the accepted shell, and writes bounded last-stage boot markers through first-frame completion.
 - Preventative Search hardening is retained separately: `std::bad_alloc`, `std::exception` and unknown exceptions are contained by a no-throw worker boundary; exception text is discarded; publication has a no-throw emergency error path; first-page flow state is reset on fatal-like worker failures. This is **not** claimed as the cause of the physical startup crash.
 - Exact outbound policy remains `www.youtube.com:443`; Nintendo hard deny, TLS verification, redirect revalidation, IP-literal rejection and the absence of `switch-curl` remain unchanged.
-- Next hardware gate is startup only: launch, idle 30 seconds, navigate all tabs without Guest/Search networking, exit, and relaunch once.
+- The startup-recovery NRO was subsequently tested on the real Atmosphère Switch and booted without crashing. Startup recovery is therefore **PHYSICALLY ACCEPTED** at `dbe1de9e0aa278999479dd3eac7a04d37b005b58`.
+- Next hardware gate is first-page Search only: preserve the accepted startup shell, manually establish the memory-only guest session, enter a query, verify keyboard close does not search, explicitly press Search, navigate/select normalized results, leave/re-enter Search, exit, and relaunch. `Load more` remains disabled for this gate.

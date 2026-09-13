@@ -55,30 +55,6 @@ brls::Button* button(brls::Box* box, const std::string& text) {
     return view;
 }
 
-class ShellActivity;
-
-// TabFrame keeps only one tab alive and deletes it when changing sections. This
-// wrapper lets ShellActivity clear UI-only pointers before the child views are
-// freed. Network workers never receive this pointer or any child view pointer.
-class TrackedSectionPage final : public brls::ScrollingFrame {
-public:
-    TrackedSectionPage(ShellActivity* owner, ttnx::ui::RootSection section)
-        : owner_(owner), section_(section) {}
-    ~TrackedSectionPage() override;
-
-    void detach_owner() noexcept { owner_ = nullptr; }
-    [[nodiscard]] ttnx::ui::RootSection section() const noexcept { return section_; }
-
-private:
-    ShellActivity* owner_{nullptr};
-    ttnx::ui::RootSection section_;
-};
-
-enum class SearchWorkerKind {
-    FirstPage,
-    Continuation,
-};
-
 class ShellActivity : public brls::Activity {
 public:
     ShellActivity(
@@ -91,7 +67,6 @@ public:
 
     ~ShellActivity() override {
         shutdown_network();
-        if (active_page_) active_page_->detach_owner();
     }
 
     brls::View* createContentView() override {
@@ -123,8 +98,7 @@ public:
 
     void tick() {
         pump_network_result();
-        // Live Search is quarantined for the startup-only hardware gate.
-        // No Search worker completion is pumped until startup is accepted.
+        pump_search_result();
         update_frame_rate();
     }
 
@@ -136,24 +110,6 @@ public:
         search_worker_done_.store(false);
     }
 
-    void on_section_page_destroyed(
-        TrackedSectionPage* page,
-        ttnx::ui::RootSection section) noexcept {
-        if (active_page_ == page) active_page_ = nullptr;
-        if (section == ttnx::ui::RootSection::Home) {
-            home_probe_button_ = nullptr;
-            home_status_label_ = nullptr;
-            home_detail_label_ = nullptr;
-        }
-        if (section == ttnx::ui::RootSection::Search) {
-            search_query_label_ = nullptr;
-            search_status_label_ = nullptr;
-            search_action_button_ = nullptr;
-            search_results_box_ = nullptr;
-            search_load_more_button_ = nullptr;
-            search_selection_label_ = nullptr;
-        }
-    }
 
 private:
     brls::Label* footer_ = nullptr;
@@ -193,7 +149,6 @@ private:
     std::mutex search_mutex_;
     bool pending_search_result_{false};
     std::uint64_t pending_search_generation_{0};
-    SearchWorkerKind pending_search_kind_{SearchWorkerKind::FirstPage};
     ttnx::youtube::GuestSearchResult pending_search_;
     std::atomic_bool pending_search_emergency_{false};
     std::atomic<std::uint64_t> pending_search_emergency_generation_{0};
@@ -202,10 +157,9 @@ private:
     std::atomic<ttnx::youtube::SearchWorkerStage> search_worker_stage_{
         ttnx::youtube::SearchWorkerStage::Idle};
 
-    // Only the active TabFrame page exists. TrackedSectionPage clears these
-    // pointers synchronously on tab destruction, so UI refresh never touches a
-    // view that Borealis has already freed.
-    TrackedSectionPage* active_page_{nullptr};
+    // These pointers are UI-thread-only conveniences for the currently visible
+    // plain ScrollingFrame. create_page() clears every page pointer before the
+    // replacement page is built. Workers never capture or dereference them.
     brls::Button* home_probe_button_{nullptr};
     brls::Label* home_status_label_{nullptr};
     brls::Label* home_detail_label_{nullptr};
@@ -213,7 +167,6 @@ private:
     brls::Label* search_status_label_{nullptr};
     brls::Button* search_action_button_{nullptr};
     brls::Box* search_results_box_{nullptr};
-    brls::Button* search_load_more_button_{nullptr};
     brls::Label* search_selection_label_{nullptr};
 
     void refresh_footer() {
@@ -285,7 +238,7 @@ private:
                 if (search_model_.end_of_results()) {
                     text += ". End of results.";
                 } else if (search_model_.can_load_more()) {
-                    text += ". More results are available.";
+                    text += ". More results are available; Load more is disabled for this hardware gate.";
                 } else {
                     text += '.';
                 }
@@ -293,7 +246,7 @@ private:
             }
             case ttnx::core::SearchViewState::Empty:
                 return search_model_.can_load_more()
-                    ? "No results on this page. More results are available."
+                    ? "No results on this page. Load more is disabled for this hardware gate."
                     : "No results found.";
             case ttnx::core::SearchViewState::Error:
                 return search_model_.error().empty()
@@ -376,26 +329,6 @@ private:
                 : retry_first_page ? "Retry Search" : "Search");
         }
 
-        if (search_load_more_button_) {
-            const bool continuation_error =
-                search_model_.state() == ttnx::core::SearchViewState::Error &&
-                search_model_.error_code() == ttnx::core::SearchErrorCode::ContinuationFailure &&
-                search_model_.retryable_failure();
-            const bool show = continuation_error ||
-                              search_model_.state() == ttnx::core::SearchViewState::LoadingMore ||
-                              !search_model_.results().empty() || search_model_.can_load_more();
-            search_load_more_button_->setVisibility(
-                show ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
-            if (continuation_error) {
-                search_load_more_button_->setText("Retry load more");
-            } else if (search_model_.state() == ttnx::core::SearchViewState::LoadingMore) {
-                search_load_more_button_->setText("Loading more...");
-            } else if (search_model_.can_load_more()) {
-                search_load_more_button_->setText("Load more");
-            } else {
-                search_load_more_button_->setText("End of results");
-            }
-        }
 
         if (rebuild_results) rebuild_search_results();
         refresh_search_selection();
@@ -552,12 +485,10 @@ private:
 
     void publish_search_result(
         std::uint64_t generation,
-        SearchWorkerKind kind,
         ttnx::youtube::GuestSearchResult result) noexcept {
         try {
             std::lock_guard<std::mutex> lock(search_mutex_);
             pending_search_generation_ = generation;
-            pending_search_kind_ = kind;
             pending_search_ = std::move(result);
             pending_search_result_ = true;
         } catch (const std::bad_alloc&) {
@@ -581,13 +512,11 @@ private:
 
         ttnx::youtube::GuestSearchResult result;
         std::uint64_t generation = 0;
-        SearchWorkerKind kind = SearchWorkerKind::FirstPage;
         bool have_result = false;
         {
             std::lock_guard<std::mutex> lock(search_mutex_);
             if (pending_search_result_) {
                 generation = pending_search_generation_;
-                kind = pending_search_kind_;
                 result = std::move(pending_search_);
                 pending_search_result_ = false;
                 have_result = true;
@@ -604,9 +533,7 @@ private:
         bool applied = false;
         if (have_result) {
             if (result.page) {
-                applied = kind == SearchWorkerKind::Continuation
-                    ? search_model_.apply_continuation(generation, *result.page)
-                    : search_model_.apply_first_page(generation, *result.page);
+                applied = search_model_.apply_first_page(generation, *result.page);
             } else {
                 auto code = result.error_code;
                 if (code == ttnx::core::SearchErrorCode::None) {
@@ -625,7 +552,6 @@ private:
 
     void launch_search_worker(
         std::uint64_t generation,
-        SearchWorkerKind kind,
         std::string query) {
         if (!guest_session_ || !guest_session_->usable()) return;
         if (search_worker_.joinable()) search_worker_.join();
@@ -638,7 +564,7 @@ private:
         try {
             const auto session = *guest_session_;
             search_worker_ = std::thread(
-                [this, generation, kind, query = std::move(query), session] {
+                [this, generation, query = std::move(query), session] {
                     ttnx::youtube::SearchWorkerStage stage =
                         ttnx::youtube::SearchWorkerStage::BuildingRequest;
                     search_worker_stage_.store(stage);
@@ -647,19 +573,17 @@ private:
                         [&] {
                             stage = ttnx::youtube::SearchWorkerStage::SendingRequest;
                             search_worker_stage_.store(stage);
-                            auto result = kind == SearchWorkerKind::Continuation
-                                ? search_flow_.next(network_client_, session)
-                                : search_flow_.begin(network_client_, session, query);
+                            auto result = search_flow_.begin(network_client_, session, query);
                             stage = ttnx::youtube::SearchWorkerStage::Normalizing;
                             search_worker_stage_.store(stage);
                             return result;
                         },
                         [&] {
-                            if (kind == SearchWorkerKind::FirstPage) search_flow_.reset();
+                            search_flow_.reset();
                         });
                     search_worker_stage_.store(protected_result.failure_stage);
                     publish_search_result(
-                        generation, kind, std::move(protected_result.result));
+                        generation, std::move(protected_result.result));
                     if (!protected_result.caught_exception) {
                         search_worker_stage_.store(ttnx::youtube::SearchWorkerStage::Complete);
                     }
@@ -694,21 +618,9 @@ private:
 
         const auto generation = search_model_.begin_query(query_);
         refresh_search_page(true);
-        launch_search_worker(generation, SearchWorkerKind::FirstPage, query_);
+        launch_search_worker(generation, query_);
     }
 
-    void start_load_more() {
-        if (search_busy_.load() || network_busy_.load()) return;
-        if (!guest_session_ || !guest_session_->usable()) {
-            refresh_search_page(false);
-            return;
-        }
-
-        const auto generation = search_model_.generation();
-        if (!search_model_.begin_load_more(generation)) return;
-        refresh_search_page(false);
-        launch_search_worker(generation, SearchWorkerKind::Continuation, {});
-    }
 
     void retry_search_request() {
         if (search_busy_.load() || network_busy_.load()) return;
@@ -719,13 +631,8 @@ private:
 
         const auto generation = search_model_.generation();
         if (!search_model_.begin_retry(generation)) return;
-        const bool continuation =
-            search_model_.state() == ttnx::core::SearchViewState::LoadingMore;
         refresh_search_page(false);
-        launch_search_worker(
-            generation,
-            continuation ? SearchWorkerKind::Continuation : SearchWorkerKind::FirstPage,
-            continuation ? std::string{} : search_model_.query());
+        launch_search_worker(generation, search_model_.query());
     }
 
     void open_search_keyboard() {
@@ -764,7 +671,6 @@ private:
         search_status_label_ = nullptr;
         search_action_button_ = nullptr;
         search_results_box_ = nullptr;
-        search_load_more_button_ = nullptr;
         search_selection_label_ = nullptr;
         auto* scroll = new brls::ScrollingFrame();
         auto* content = new brls::Box(brls::Axis::COLUMN);
@@ -808,14 +714,40 @@ private:
         case RootSection::Search: {
             label(content, "Search", 34);
             label(content,
-                  "Startup recovery build: live Search is temporarily quarantined.",
+                  "First-page live guest Search is enabled. Results stay text-only while thumbnail hosts remain blocked.",
                   20);
+
+            auto* enter = button(content, "Enter search");
+            enter->registerClickAction([this](brls::View*) {
+                open_search_keyboard();
+                return true;
+            });
+
+            search_query_label_ = label(content, "Query: none", 20);
+            search_action_button_ = button(content, "Search");
+            search_action_button_->registerClickAction([this](brls::View*) {
+                const bool retry_first_page =
+                    search_model_.state() == ttnx::core::SearchViewState::Error &&
+                    search_model_.retryable_failure() &&
+                    search_model_.error_code() != ttnx::core::SearchErrorCode::ContinuationFailure;
+                if (retry_first_page) retry_search_request();
+                else start_search();
+                return true;
+            });
+
+            search_status_label_ = label(content, "", 20);
+            search_results_box_ = new brls::Box(brls::Axis::COLUMN);
+            search_results_box_->setMarginBottom(8);
+            content->addView(search_results_box_);
+
+            search_selection_label_ = label(
+                content,
+                "Select a result to inspect its normalized identity. Playback is not enabled yet.",
+                18);
             label(content,
-                  "This page performs no network request. Startup must be accepted on hardware before Search is re-enabled.",
-                  20);
-            label(content,
-                  "The Search parser, firewall and worker hardening remain in the codebase for the next gated slice.",
+                  "Load more is disabled for this hardware gate. No Shorts, ads, promoted or shopping renderers may reach this list.",
                   18);
+            refresh_search_page(true);
             ttnx::record_boot_event("boot-11-search-created");
             break;
         }
@@ -862,9 +794,6 @@ private:
     }
 };
 
-TrackedSectionPage::~TrackedSectionPage() {
-    if (owner_) owner_->on_section_page_destroyed(this, section_);
-}
 
 // Hit-test only visible portions of this shell, with parent clipping. Resolve
 // afresh on release so a tab change cannot leave a stale pointer behind.

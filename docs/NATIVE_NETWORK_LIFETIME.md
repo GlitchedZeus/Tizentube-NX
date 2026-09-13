@@ -76,4 +76,4 @@ The detail line may include service state such as `Sockets: existing | SSL: read
 
 ## Unchanged safety gate
 
-The exact M2 outbound allowlist remains `www.youtube.com:443`. Nintendo endpoints remain denied before DNS. `switch-curl` remains excluded. Live Search remains disabled until the explicit guest bootstrap reaches `Guest ready` on physical hardware.
+The exact M2 outbound allowlist remains `www.youtube.com:443`. Nintendo endpoints remain denied before DNS. `switch-curl` remains excluded. Guest bootstrap is physically accepted, and first-page live Search may reuse only the resulting memory-only guest session after an explicit user action; no hidden Search or bootstrap request runs at startup.
