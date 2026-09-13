@@ -1,6 +1,6 @@
 #include "tizentube_nx/youtube/guest_search.hpp"
 
-#include "tizentube_nx/youtube/browse_response.hpp"
+#include "tizentube_nx/youtube/search_response.hpp"
 
 #include <utility>
 
@@ -41,7 +41,7 @@ GuestSearchResult execute_guest_search(
         return fail("Guest Search returned a non-success HTTP status.");
     }
 
-    auto parsed = parse_search_response(http_result.response.body, policy);
+    auto parsed = parse_scoped_search_response(http_result.response.body, policy);
     if (!parsed || !parsed.page) {
         return fail(parsed.error.empty()
             ? "Guest Search response was rejected."

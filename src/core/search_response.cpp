@@ -1,6 +1,7 @@
 #include "tizentube_nx/youtube/search_response.hpp"
 
 #include <cctype>
+#include <initializer_list>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -10,7 +11,9 @@
 namespace ttnx::youtube {
 namespace {
 
+constexpr std::size_t kMaxSearchResponseBytes = 8 * 1024 * 1024;
 constexpr unsigned kMaxScopeDepth = 128;
+constexpr std::size_t kMaxScopeNodes = 200000;
 constexpr std::size_t kMaxScopedPayloads = 64;
 
 bool is_ws(char c) {
@@ -45,10 +48,15 @@ bool skip_string(std::string_view input, std::size_t& pos) {
     return false;
 }
 
-bool skip_value(std::string_view input, std::size_t& pos, unsigned depth = 0) {
+bool skip_value(
+    std::string_view input,
+    std::size_t& pos,
+    unsigned depth = 0,
+    std::size_t* node_count = nullptr) {
     if (depth > kMaxScopeDepth) return false;
     skip_ws(input, pos);
     if (pos >= input.size()) return false;
+    if (node_count && ++(*node_count) > kMaxScopeNodes) return false;
 
     if (input[pos] == '"') return skip_string(input, pos);
 
@@ -63,7 +71,7 @@ bool skip_value(std::string_view input, std::size_t& pos, unsigned depth = 0) {
             if (!skip_string(input, pos)) return false;
             skip_ws(input, pos);
             if (pos >= input.size() || input[pos++] != ':') return false;
-            if (!skip_value(input, pos, depth + 1)) return false;
+            if (!skip_value(input, pos, depth + 1, node_count)) return false;
             skip_ws(input, pos);
             if (pos >= input.size()) return false;
             if (input[pos] == '}') {
@@ -84,7 +92,7 @@ bool skip_value(std::string_view input, std::size_t& pos, unsigned depth = 0) {
             return true;
         }
         while (pos < input.size()) {
-            if (!skip_value(input, pos, depth + 1)) return false;
+            if (!skip_value(input, pos, depth + 1, node_count)) return false;
             skip_ws(input, pos);
             if (pos >= input.size()) return false;
             if (input[pos] == ']') {
@@ -132,6 +140,14 @@ bool skip_value(std::string_view input, std::size_t& pos, unsigned depth = 0) {
     return pos > start;
 }
 
+bool validate_document(std::string_view input) {
+    std::size_t pos = 0;
+    std::size_t nodes = 0;
+    if (!skip_value(input, pos, 0, &nodes)) return false;
+    skip_ws(input, pos);
+    return pos == input.size();
+}
+
 struct Member {
     std::string_view key;
     std::string_view value;
@@ -152,9 +168,8 @@ std::optional<std::vector<Member>> members(std::string_view object_json) {
         if (!skip_string(object_json, pos)) return std::nullopt;
         const auto key_end_quote = pos - 1;
         const auto key = object_json.substr(key_quote + 1, key_end_quote - key_quote - 1);
-        // Structural YouTube field names are ASCII and are not escaped. An
-        // escaped key is still valid JSON but deliberately cannot match one of
-        // our trusted structural names.
+        // Trusted structural keys are ASCII and unescaped. Valid JSON with an
+        // escaped key is accepted syntactically but cannot match a scope key.
         const bool key_has_escape = key.find('\\') != std::string_view::npos;
 
         skip_ws(object_json, pos);
@@ -170,8 +185,9 @@ std::optional<std::vector<Member>> members(std::string_view object_json) {
         if (object_json[pos] == '}') {
             ++pos;
             skip_ws(object_json, pos);
-            return pos == object_json.size() ? std::optional<std::vector<Member>>(std::move(output))
-                                             : std::nullopt;
+            return pos == object_json.size()
+                ? std::optional<std::vector<Member>>(std::move(output))
+                : std::nullopt;
         }
         if (object_json[pos++] != ',') return std::nullopt;
         skip_ws(object_json, pos);
@@ -230,37 +246,36 @@ std::optional<std::string_view> path(
     return current;
 }
 
-bool collect_continuation_payloads(
-    std::string_view value,
+bool append_payload(
     std::vector<std::string_view>& payloads,
-    unsigned depth = 0) {
-    if (depth > kMaxScopeDepth || payloads.size() > kMaxScopedPayloads) return false;
-    std::size_t pos = 0;
-    skip_ws(value, pos);
-    if (pos >= value.size()) return false;
+    std::string_view payload) {
+    if (payloads.size() >= kMaxScopedPayloads) return false;
+    payloads.push_back(payload);
+    return true;
+}
 
-    if (value[pos] == '[') {
-        const auto array = elements(value);
-        if (!array) return false;
-        for (const auto item : *array) {
-            if (!collect_continuation_payloads(item, payloads, depth + 1)) return false;
-        }
-        return payloads.size() <= kMaxScopedPayloads;
-    }
+bool collect_continuation_payloads(
+    std::string_view updates_json,
+    std::vector<std::string_view>& payloads) {
+    // Continuation scope is deliberately narrow: the recognized response fields
+    // must be arrays, and only direct append/reload action objects may contribute
+    // continuationItems. We never recursively hunt arbitrary command metadata.
+    const auto updates = elements(updates_json);
+    if (!updates) return false;
 
-    if (value[pos] != '{') return true;
-    const auto object_members = members(value);
-    if (!object_members) return false;
-    for (const auto& member : *object_members) {
-        if (member.key == "appendContinuationItemsAction" ||
-            member.key == "reloadContinuationItemsCommand") {
-            if (const auto continuation_items = field(member.value, "continuationItems")) {
-                payloads.push_back(*continuation_items);
-                if (payloads.size() > kMaxScopedPayloads) return false;
-            }
-            continue;
+    for (const auto update : *updates) {
+        std::size_t pos = 0;
+        skip_ws(update, pos);
+        if (pos >= update.size() || update[pos] != '{') continue;
+
+        for (const auto action_key : {
+                 std::string_view{"appendContinuationItemsAction"},
+                 std::string_view{"reloadContinuationItemsCommand"}}) {
+            const auto action = field(update, action_key);
+            if (!action) continue;
+            const auto continuation_items = field(*action, "continuationItems");
+            if (continuation_items && !append_payload(payloads, *continuation_items)) return false;
         }
-        if (!collect_continuation_payloads(member.value, payloads, depth + 1)) return false;
     }
     return true;
 }
@@ -276,17 +291,22 @@ BrowseResponseParseResult fail(std::string error) {
 BrowseResponseParseResult parse_scoped_search_response(
     std::string_view response_body,
     const core::FilterPolicy& policy) {
-    // Reuse the bounded low-level parser as a strict whole-document syntax and
-    // size/depth/node validation pass. Its page is intentionally discarded.
-    const auto validation = parse_search_response(response_body, policy);
-    if (!validation) return validation;
+    if (response_body.empty()) return fail("Search response is empty.");
+    if (response_body.size() > kMaxSearchResponseBytes) {
+        return fail("Search response is too large.");
+    }
+    if (!validate_document(response_body)) {
+        return fail("Search response is malformed or exceeds scope parser limits.");
+    }
 
     std::vector<std::string_view> payloads;
     payloads.reserve(4);
 
     if (const auto primary = path(response_body, {
             "contents", "twoColumnSearchResultsRenderer", "primaryContents"})) {
-        payloads.push_back(*primary);
+        if (!append_payload(payloads, *primary)) {
+            return fail("Search response contains too many scoped payloads.");
+        }
     }
 
     for (const auto response_key : {
@@ -295,7 +315,7 @@ BrowseResponseParseResult parse_scoped_search_response(
              std::string_view{"onResponseReceivedEndpoints"}}) {
         if (const auto updates = field(response_body, response_key)) {
             if (!collect_continuation_payloads(*updates, payloads)) {
-                return fail("Search continuation payload traversal failed or exceeded limits.");
+                return fail("Search continuation scope is malformed or exceeds limits.");
             }
         }
     }
@@ -313,6 +333,9 @@ BrowseResponseParseResult parse_scoped_search_response(
     }
     scoped += "]}";
 
+    // Only explicitly scoped Search payloads reach the reusable renderer walker.
+    // Its existing Shorts/promoted/shopping/unknown firewall remains the final
+    // content boundary inside those accepted containers.
     return parse_search_response(scoped, policy);
 }
 

@@ -12,6 +12,7 @@ add_library(tizentube_nx_core
     src/core/guest_api.cpp
     src/core/session_bootstrap.cpp
     src/core/browse_response.cpp
+    src/core/search_response.cpp
     src/core/guest_search.cpp
     src/core/outbound_policy.cpp
     src/core/http1.cpp
