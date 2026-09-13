@@ -1,0 +1,106 @@
+name: apply-search-crash-hardening
+
+on:
+  push:
+    branches:
+      - automation/search-crash-hardening
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply-validate-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout automation payload
+        uses: actions/checkout@v4
+        with:
+          path: automation
+
+      - name: Checkout production branch
+        uses: actions/checkout@v4
+        with:
+          ref: feature/m2-guest-browsing
+          submodules: recursive
+          path: repo
+          fetch-depth: 0
+
+      - name: Assert expected production starting head
+        working-directory: repo
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "ded5e756a1e838b2a1d920c4d422ca5f36af8f5f"
+
+      - name: Decode and apply crash-hardening patch
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import base64, zlib
+          from pathlib import Path
+          encoded = Path('automation/tools/search-crash-hardening.b64').read_text().strip()
+          Path('/tmp/apply_search_crash_hardening.py').write_bytes(zlib.decompress(base64.b64decode(encoded)))
+          PY
+          python /tmp/apply_search_crash_hardening.py repo
+
+      - name: Static patch audit
+        working-directory: repo
+        run: |
+          set -euo pipefail
+          git diff --check
+          git status --short
+          grep -n 'return normalized == "www.youtube.com"' src/core/outbound_policy.cpp
+          grep -n 'LIBS.*-lnx' Makefile.switch
+          grep -n 'filter-out curl_http_client.cpp' Makefile.switch
+          test -f docs/PROFILES_AND_IMPORT.md
+          test -f docs/OAUTH_ACCOUNT_LINKING.md
+          test -f docs/MORPHE_REFERENCE.md
+          test -f AGENTS.md
+
+      - name: Configure host build
+        working-directory: repo
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build host targets
+        working-directory: repo
+        run: cmake --build build --parallel
+
+      - name: Run full host tests
+        working-directory: repo
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Build Switch NRO with pinned devkitA64
+        working-directory: repo
+        run: >-
+          docker run --rm
+          -v "$PWD:/work"
+          -w /work
+          devkitpro/devkita64@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282
+          make -f Makefile.switch clean all
+
+      - name: Commit validated crash-hardening code
+        working-directory: repo
+        run: |
+          set -euo pipefail
+          git config user.name "GlitchedZeus"
+          git config user.email "user91746@protonmail.com"
+          git add CMakeLists.txt .github/workflows/switch-build.yml include src switch tests
+          git commit -m "search: contain live response failures"
+
+      - name: Commit crash gate documentation
+        working-directory: repo
+        run: |
+          set -euo pipefail
+          git add docs/PROJECT_STATUS.md docs/ROADMAP.md
+          git commit -m "docs: block M2 on live Search fatal"
+          git status --short
+
+      - name: Push production branch
+        working-directory: repo
+        run: git push origin HEAD:feature/m2-guest-browsing
+
+      - name: Record resulting commits
+        working-directory: repo
+        run: |
+          echo "FINAL_HEAD=$(git rev-parse HEAD)"
+          git log -2 --format='%H %s'
