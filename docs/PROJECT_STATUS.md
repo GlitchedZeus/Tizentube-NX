@@ -7,7 +7,7 @@ M2 — YouTube guest browsing / pre-alpha.
 Branch: `feature/m2-guest-browsing`  
 Draft PR: #6 — `M2: guest browsing networking foundation`
 
-The real-Switch guest bootstrap gate is accepted. Live Search is now implemented and CI-built; physical live-Search acceptance is the current hardware gate.
+The real-Switch guest bootstrap gate remains accepted. The first live-Search build later failed at process startup before any TizenTube NX UI appeared, so the current hardware gate is startup recovery only; live Search remains blocked pending that gate.
 
 ## Real-hardware guest-bootstrap acceptance
 
@@ -241,26 +241,35 @@ No host is authorized merely because YouTube returns a URL for it. Future OAuth/
 
 ## Current activation gate
 
-The real-Switch guest bootstrap is accepted as `Guest ready`.
+The real-Switch guest bootstrap remains accepted as `Guest ready` at:
 
-Live Search is implemented, host-tested and devkitA64-built at code checkpoint:
+`96dbf0be46d7fddb38a5510d9269d267e74fcce2`
+
+The first physical launch of the live-Search checkpoint:
 
 `5b46829ead0a94089696e1521cb101637e2bfb3e`
 
-It is **not** yet hardware accepted.
+failed before the first visible TizenTube NX UI with Atmosphère `std::abort (0xFFE)`. No Search request occurred. Live Search is therefore **FAILED / BLOCKED**, not hardware accepted.
 
-The next physical-Switch gate is:
+The startup-recovery code checkpoint built for the next physical gate is:
 
-1. launch the new NRO;
-2. confirm Home still reaches `Guest ready` when manually tested;
-3. open Search;
-4. search `Nintendo Switch homebrew`;
-5. verify normal Video/Channel/Playlist results can be navigated;
-6. select one normal video result and verify its clean identity/URL detail;
-7. use `Load more` if offered;
-8. report any exact safe Search error/status text.
+`dbe1de9e0aa278999479dd3eac7a04d37b005b58`
 
-Only after that physical result should live Search be called hardware-accepted.
+That recovery build deliberately quarantines live Search UI/network execution while retaining the core Search implementation and preventative worker exception hardening in source.
+
+The next physical-Switch gate is **startup only**:
+
+1. launch TizenTube NX from Spaira;
+2. confirm Home appears;
+3. leave the app idle for 30 seconds;
+4. navigate Home / Search / Subscriptions / Library / Settings;
+5. do **not** run the guest connection diagnostic;
+6. do **not** perform Search;
+7. exit normally;
+8. relaunch once;
+9. report whether both launches succeed.
+
+Only after this becomes `STARTUP ACCEPTED` should the guest bootstrap be retested, and only after that should first-page Search be tested.
 
 
 ## Physical startup crash investigation — 2026-09-13
