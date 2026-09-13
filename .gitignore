@@ -1,0 +1,11 @@
+/build/
+/build-switch/
+*.elf
+*.nro
+*.nacp
+*.map
+*.o
+*.d
+.DS_Store
+.vscode/
+.idea/
