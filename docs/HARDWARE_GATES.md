@@ -110,6 +110,20 @@ Pinned Borealis source confirms the focus mechanism: Up from the sibling `Load m
 
 Also implemented in the same UI-fix slice: inline result detail is now a toggle. Pressing A on an unselected result opens its normalized detail; pressing A again on the same result closes it using `SearchModel::clear_selection()` and the existing non-destructive detail visibility path. This does not rebuild result Views.
 
+### First continuation-focus fix — hardware rejected
+
+Hardware-tested NRO head: `d9f33ffef915220f4deb31edb2108b39448bf200`
+
+The continuation request/data path still works, and the explicit Up route remains useful, but the deliberate post-append focus transfer to the first newly-added result is **REJECTED on hardware**. Three physical-Switch screenshots show the sequence clearly:
+
+- before `Load more`, the selector is visibly on the `Load more` button;
+- after the append completes, the viewport shows the newly-appended tail and the `Load more` button, but no selector is visible;
+- one Down press immediately scrolls back and selects the second newly-added result, with the first newly-added result directly above it.
+
+This proves the new rows were appended correctly and focus had moved to the intended first newly-added row, but pinned Borealis did not recenter the `ScrollingFrame` viewport to that programmatic focus after the nested result box changed height. The selector was therefore alive but off-screen.
+
+The next candidate removes that programmatic focus steal. After a successful non-terminal continuation, `Load more` remains the visible focused control; its refreshed custom Up route targets the actual current last result. Terminal continuation behavior keeps the existing last-result fallback before hiding `Load more`. No parser, request, network-policy or security behavior changes in this fix.
+
 ## Current physical gate — Search continuation focus polish
 
 The next candidate must preserve the already-proven continuation request/data path while fixing only the Borealis focus/scroll behavior:

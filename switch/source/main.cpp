@@ -98,10 +98,6 @@ public:
     }
 
     void tick() {
-        // Apply a continuation-focus request one frame after rows are
-        // attached so Yoga has current coordinates before ScrollingFrame
-        // recenters the selected result.
-        apply_pending_search_focus();
         pump_network_result();
         pump_search_result();
         update_frame_rate();
@@ -182,7 +178,6 @@ private:
         brls::Label* detail{nullptr};
     };
     std::vector<SearchDetailRow> search_detail_rows_;
-    std::string pending_search_focus_identity_;
 
     void refresh_footer() {
         if (!footer_) return;
@@ -300,26 +295,6 @@ private:
         }
     }
 
-    void apply_pending_search_focus() {
-        if (pending_search_focus_identity_.empty()) return;
-
-        // A continuation may finish after the user leaves Search. Never
-        // steal focus back from another tab or retain page-owned pointers.
-        if (!search_results_box_) {
-            pending_search_focus_identity_.clear();
-            return;
-        }
-
-        const std::string wanted = pending_search_focus_identity_;
-        pending_search_focus_identity_.clear();
-        for (const auto& row : search_detail_rows_) {
-            if (row.identity == wanted && row.button) {
-                brls::Application::giveFocus(row.button);
-                return;
-            }
-        }
-    }
-
     brls::Button* append_search_result_row(const ttnx::core::BrowseResult& result) {
         if (!search_results_box_) return nullptr;
         const auto identity = ttnx::core::browse_result_identity(result);
@@ -390,8 +365,6 @@ private:
             search_load_more_button_->setCustomNavigationRoute(
                 brls::FocusDirection::UP, search_action_button_);
         }
-        pending_search_focus_identity_.clear();
-
         // Full rebuilding is reserved for a genuinely new/reconstructed result
         // page. Selection and continuation appends never delete existing rows.
         search_detail_rows_.clear();
@@ -701,18 +674,17 @@ private:
             // SearchModel already deduped by stable identity. Append only rows
             // that were not present before this continuation; never delete or
             // replace the currently focused first-page result tree.
-            const auto first_new_identity =
-                append_search_results_from(previous_result_count);
+            (void)append_search_results_from(previous_result_count);
             refresh_search_inline_details();
             refresh_search_page(false, search_model_.end_of_results());
 
-            // Appending rows above an already-focused Load more button moves
-            // its layout position without another focus-gained event. Defer
-            // focus to the first newly-added row until the next frame so the
-            // selector remains visible and the next page begins naturally.
-            if (!first_new_identity.empty()) {
-                pending_search_focus_identity_ = first_new_identity;
-            }
+            // Real-hardware testing proved that force-focusing the first newly
+            // appended row can leave Borealis focus off-screen after the nested
+            // result box changes height. Keep the user's already-visible Load
+            // more focus instead. The explicit Up route is refreshed above and
+            // therefore enters the actual last appended result naturally. A
+            // terminal continuation still uses refresh_search_page()'s existing
+            // fallback before Load more is hidden.
         } else {
             refresh_search_page(true);
         }
@@ -907,7 +879,6 @@ private:
         search_load_more_button_ = nullptr;
         search_results_box_ = nullptr;
         search_detail_rows_.clear();
-        pending_search_focus_identity_.clear();
         auto* scroll = new brls::ScrollingFrame();
         auto* content = new brls::Box(brls::Axis::COLUMN);
         content->setPadding(32, 36, 32, 36);
