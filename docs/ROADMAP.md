@@ -128,7 +128,7 @@
 
 - [x] Keep normalized data/presentation boundaries independent of future player/metadata services
 - [x] Preserve hard no-Shorts invariant regardless of reference implementation behavior
-- [ ] SponsorBlock adapter
+- [x] Reserve SponsorBlock as a core M3 player subsystem rather than a post-playback extra
 - [ ] Alternative/DeArrow-style title/thumbnail adapter
 - [ ] Return YouTube Dislike adapter
 - [ ] Playback-quality preferences
@@ -143,7 +143,11 @@
 - [ ] Playlist pages
 - [ ] Real-hardware guest browsing acceptance
 
-## M3 — Playback
+## M3 — Playback + ad-free viewing
+
+Playback and the ad-free experience are one milestone. **A player that deliberately shows YouTube ads is not considered finished.** See `docs/PRODUCT_PHILOSOPHY.md`.
+
+### Media playback
 
 - [ ] Video metadata/stream resolver
 - [ ] mpv + FFmpeg Switch pipeline
@@ -151,6 +155,28 @@
 - [ ] 720p handheld / 1080p docked defaults
 - [ ] Quality selector
 - [ ] Captions / alternate audio / speed / seek / resume
+
+### YouTube ad suppression — release-blocking for playback
+
+- [ ] No pre-roll YouTube ads
+- [ ] No mid-roll YouTube ads
+- [ ] No post-roll YouTube ads
+- [ ] No ad/promoted/shopping/Premium surfaces in player/browse paths
+- [ ] No known fallback that re-enables ads merely to make playback succeed
+- [ ] Host fixtures/tests for ad-bearing player/metadata structures where practical
+- [ ] Real-hardware playback acceptance explicitly verifies no YouTube-served ads
+
+### SponsorBlock — core player subsystem
+
+- [ ] SponsorBlock service adapter behind the normal reviewed outbound policy
+- [ ] Controller-friendly SponsorBlock settings page
+- [ ] Global SponsorBlock enable/disable
+- [ ] Per-category behavior: Auto-skip / Ask or show Skip button / Do not skip
+- [ ] Use SponsorBlock's current category semantics at implementation time instead of freezing an outdated category list
+- [ ] In-player unobtrusive skip feedback suitable for handheld and docked modes
+- [ ] Manual seeking remains sane around skipped segments
+- [ ] Cache/retry behavior that does not block basic player controls
+- [ ] Real-hardware SponsorBlock acceptance alongside playback acceptance
 
 ## M4 — Local TizenTube profiles (v1)
 
@@ -171,12 +197,14 @@
 
 See `docs/PROFILES_AND_IMPORT.md` for the profile/security contract.
 
-## M5 — TizenTube/ReVanced/Morphe feature integrations
+## M5 — Morphe-inspired enhancements and metadata
 
-- [ ] SponsorBlock
+Morphe is a feature-discovery/research source for this milestone; TizenTube and YouTube remain the main UI/settings references.
+
 - [ ] DeArrow/alternative titles/thumbnails
 - [ ] Return YouTube Dislike
 - [ ] Clean share actions from normalized identifiers
+- [ ] Additional player cleanup / quality-of-life ideas selected from Morphe review
 - [ ] Third-party API destinations reviewed through outbound policy
 - [ ] Additional non-Shorts feed filters
 
@@ -185,6 +213,7 @@ See `docs/PROFILES_AND_IMPORT.md` for the profile/security contract.
 - [ ] Crash recovery / caching / retry-backoff
 - [ ] Dock/undock handling
 - [ ] Applet vs title-takeover testing
+- [ ] Release audit: playback does not knowingly fall back to YouTube-served ads
 - [ ] Release audit: no network path bypasses outbound policy
 - [ ] Release audit: v1 contains no Google OAuth/account linking implementation
 - [ ] Release audit: no Google passwords/browser cookies/exported cookie files accepted anywhere
@@ -234,4 +263,4 @@ See `docs/PROFILES_AND_IMPORT.md` and `docs/OAUTH_ACCOUNT_LINKING.md` for the fu
 
 ## Current gate
 
-**Guest bootstrap, startup recovery, first-page live Search, inline result detail, and full sidebar traversal are physically accepted. Explicit continuation / `Load more` is implemented as an append-only candidate and is pending exact-head devkitA64 plus physical Switch acceptance. Preserve the accepted non-destructive result View lifecycle, exact `www.youtube.com:443` allowlist, hard Shorts/ad firewall, remote-thumbnail block, and post-v1 OAuth documentation-only boundary during M2.**
+**Guest bootstrap, startup recovery, first-page live Search, inline result detail, and full sidebar traversal are physically accepted. Search continuation data fetch/append has also been proven on hardware; the current gate is continuation focus/scroll acceptance after the `d432ef8...` focus fix. Preserve the accepted non-destructive result View lifecycle, exact `www.youtube.com:443` allowlist, hard Shorts/ad firewall, remote-thumbnail block, and post-v1 OAuth documentation-only boundary during M2.**
