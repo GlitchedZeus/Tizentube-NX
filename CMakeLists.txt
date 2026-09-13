@@ -15,6 +15,7 @@ add_library(tizentube_nx_core
     src/core/browse_response.cpp
     src/core/search_response.cpp
     src/core/guest_search.cpp
+    src/core/search_flow.cpp
     src/core/outbound_policy.cpp
     src/core/http1.cpp
     src/core/settings.cpp
@@ -67,6 +68,10 @@ if(TTNX_BUILD_TESTS)
     add_executable(tizentube_nx_guest_search_tests tests/guest_search_tests.cpp)
     target_link_libraries(tizentube_nx_guest_search_tests PRIVATE tizentube_nx_core)
     add_test(NAME guest_search COMMAND tizentube_nx_guest_search_tests)
+
+    add_executable(tizentube_nx_search_flow_tests tests/search_flow_tests.cpp)
+    target_link_libraries(tizentube_nx_search_flow_tests PRIVATE tizentube_nx_core)
+    add_test(NAME search_flow COMMAND tizentube_nx_search_flow_tests)
 
     if(UNIX)
         add_executable(tizentube_nx_storage_tests tests/storage_tests.cpp switch/source/app_storage.cpp)
