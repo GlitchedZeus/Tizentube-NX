@@ -17,6 +17,7 @@ constexpr std::size_t kMaxChannelTextBytes = 256;
 constexpr std::size_t kMaxMetadataTextBytes = 256;
 constexpr std::size_t kMaxAccessibilityBytes = 1024;
 constexpr std::size_t kMaxThumbnailUrlBytes = 2048;
+constexpr std::size_t kMaxThumbnailInputCandidates = 32;
 constexpr std::size_t kMaxThumbnailCandidates = 8;
 
 std::string lowercase(std::string_view value) {
@@ -71,13 +72,13 @@ std::vector<ThumbnailCandidate> normalize_thumbnails(const RendererRecord& recor
     std::vector<ThumbnailCandidate> candidates;
     candidates.reserve(std::min<std::size_t>(
         record.thumbnails.size() + (record.thumbnail_url.empty() ? 0U : 1U),
-        kMaxThumbnailCandidates));
+        kMaxThumbnailInputCandidates));
 
     std::unordered_set<std::string> seen;
-    seen.reserve(kMaxThumbnailCandidates);
+    seen.reserve(kMaxThumbnailInputCandidates);
 
     auto add = [&](const ThumbnailCandidate& candidate) {
-        if (candidates.size() >= kMaxThumbnailCandidates) return;
+        if (candidates.size() >= kMaxThumbnailInputCandidates) return;
         if (!safe_https_reference(candidate.url)) return;
         if (!seen.insert(candidate.url).second) return;
         candidates.push_back(candidate);
@@ -98,6 +99,9 @@ std::vector<ThumbnailCandidate> normalize_thumbnails(const RendererRecord& recor
         if (left.height != right.height) return left.height > right.height;
         return left.url < right.url;
     });
+    if (candidates.size() > kMaxThumbnailCandidates) {
+        candidates.resize(kMaxThumbnailCandidates);
+    }
     return candidates;
 }
 
