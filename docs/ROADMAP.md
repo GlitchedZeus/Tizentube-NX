@@ -29,7 +29,7 @@
 - [x] Revalidate every redirect before a second DNS lookup
 - [x] Keep exact live allowlist at `www.youtube.com:443`
 - [x] Exclude `switch-curl` from the NRO
-- [ ] Require every future media/image/auth/updater subsystem to use the same policy
+- [ ] Require every future media/image/updater subsystem to use the same policy
 
 ### Networking foundation
 
@@ -40,7 +40,9 @@
 - [x] Direct libnx BSD socket + Horizon SSL transport
 - [x] Peer-CA + hostname + date verification
 - [x] User-triggered off-UI-thread guest bootstrap probe
-- [ ] First verified real-Switch guest bootstrap result
+- [x] Real-Switch guest bootstrap accepted: `Guest ready`
+- [x] Borrow Borealis-owned socket environment without tearing it down
+- [x] Keep SSL lifetime/ref-count ownership separate from BSD socket ownership
 
 ### Search parsing and normalized data
 
@@ -77,7 +79,7 @@
 - [x] Reject duplicate/conflicting `v` values and malformed/oversized inputs
 - [x] Reject Shorts/reel URLs rather than converting them into normal videos
 
-### Search execution / privacy / offline UI preparation
+### Search execution / privacy / UI activation
 
 - [x] Stateless transport-neutral Search executor
 - [x] First-page and continuation fake-HTTP tests
@@ -95,9 +97,10 @@
 - [x] Retryable continuation/network failure state
 - [x] Stable selection identity + stale-generation rejection
 - [x] Pure duration/live/upcoming/view/upload-age/count display helpers
-- [ ] Enable live Search POST in Switch UI — **blocked pending real-Switch bootstrap result**
+- [ ] Enable live Search POST in Switch UI
 - [ ] Render normalized Search results as Borealis cards
 - [ ] Live continuation paging on Switch
+- [ ] Real-hardware live Search acceptance
 
 ### Future feature seams — not active in M2
 
@@ -127,15 +130,26 @@
 - [ ] Quality selector
 - [ ] Captions / alternate audio / speed / seek / resume
 
-## M4 — Account login
+## M4 — Local TizenTube profiles (v1)
 
-- [ ] Validate compliant TV/device-code authorization strategy
-- [ ] Apply outbound host policy to every auth destination before DNS
-- [ ] QR/code sign-in
-- [ ] Token/session persistence + refresh/recovery/sign-out
-- [ ] Subscriptions/likes/playlists/history as supported by chosen backend
+- [ ] Create a local profile directly on Switch
+- [ ] Display name + avatar
+- [ ] Local channel follows/subscriptions
+- [ ] Local playlists
+- [ ] Local Watch Later
+- [ ] Local likes/favorites
+- [ ] Watch history + resume positions
+- [ ] Per-profile settings/preferences
+- [ ] Optional local search history
+- [ ] Multiple local TizenTube profiles
+- [ ] Optional Switch-user-to-TizenTube-profile mapping
+- [ ] Profile backup/export/import appropriate for local data
+- [ ] No Google/YouTube account authentication required
+- [ ] Never accept/store Google passwords, OAuth tokens, authenticated cookies or equivalent account credentials
 
-## M5 — TizenTube/ReVanced feature integrations
+See `docs/PROFILES_AND_IMPORT.md` for the profile/security contract.
+
+## M5 — TizenTube/ReVanced/Morphe feature integrations
 
 - [ ] SponsorBlock
 - [ ] DeArrow/alternative titles/thumbnails
@@ -144,15 +158,36 @@
 - [ ] Third-party API destinations reviewed through outbound policy
 - [ ] Additional non-Shorts feed filters
 
-## M6 — Daily-driver polish
+## M6 — Daily-driver polish / v1 release
 
 - [ ] Crash recovery / caching / retry-backoff
 - [ ] Dock/undock handling
 - [ ] Applet vs title-takeover testing
-- [ ] Multiple Switch profiles/account mapping
 - [ ] Release audit: no network path bypasses outbound policy
+- [ ] Release audit: no Google account credentials accepted anywhere
 - [ ] Release packaging
+
+## M7 — Post-v1 YouTube → TizenTube migration
+
+This is optional data import into an existing local TizenTube profile, not Google sign-in.
+
+- [ ] Switch-displayed QR code to open a phone pairing/import page
+- [ ] Human-readable short-code fallback
+- [ ] Ephemeral, one-use, expiring pairing sessions
+- [ ] Public YouTube profile/channel metadata import
+- [ ] Public subscriptions import when the source profile exposes them
+- [ ] Public playlist import
+- [ ] User-supplied unlisted playlist import
+- [ ] Duplicate-safe merge/re-import into an existing local profile
+- [ ] Explicit Switch-side preview + confirmation before commit
+- [ ] Treat unlisted playlist URLs as secrets and redact them from diagnostics
+- [ ] Prefer end-to-end encrypted phone→relay→Switch import payloads
+- [ ] Temporary relay data deleted on completion/expiry
+- [ ] Pairing endpoint cannot control arbitrary Switch functions
+- [ ] No Google passwords/OAuth/authenticated cookies in the import path
+
+See `docs/PROFILES_AND_IMPORT.md` for the full post-v1 migration design.
 
 ## Current gate
 
-**Live Search remains disabled pending the real-Switch `Test YouTube guest connection` result.**
+**Real-Switch guest bootstrap is accepted (`Guest ready`). The next gate is live Search activation and physical-Switch Search acceptance while preserving the exact `www.youtube.com:443` allowlist and the hard Shorts/ad firewall.**
