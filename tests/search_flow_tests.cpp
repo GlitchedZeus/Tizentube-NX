@@ -92,6 +92,22 @@ std::string continuation_page(std::string id, std::string token = {}) {
         "\",\"title\":{\"simpleText\":\"Next\"}}}" + tail + "]}}]}";
 }
 
+std::string filtered_continuation_page() {
+    return R"JSON({
+      "onResponseReceivedCommands":[{"appendContinuationItemsAction":{
+        "continuationItems":[
+          {"reelShelfRenderer":{"items":[{"videoRenderer":{
+            "videoId":"SHORT000001","title":{"simpleText":"Blocked short"}}}]}},
+          {"promotedVideoRenderer":{"videoRenderer":{
+            "videoId":"ADVIDEO0001","title":{"simpleText":"Blocked ad"}}}},
+          {"productListRenderer":{"contents":[{"videoRenderer":{
+            "videoId":"SHOPVIDEO001","title":{"simpleText":"Blocked shopping"}}}]}},
+          {"videoRenderer":{"videoId":"SAFEVIDEO01","title":{"simpleText":"Safe continuation"}}}
+        ]
+      }}]
+    })JSON";
+}
+
 }  // namespace
 
 int main() {
@@ -215,6 +231,27 @@ int main() {
     const auto begin_failure = failed_begin_flow.begin(failed_begin, guest, "will fail");
     expect(!begin_failure.page.has_value(), "failed initial query propagates failure");
     expect(!failed_begin_flow.active(), "failed initial query leaves no stale active state");
+
+    ScriptedHttpClient continuation_firewall;
+    continuation_firewall.scripted = {
+        ok(first_page("FIREWALL001", "FILTER-TOKEN")),
+        ok(filtered_continuation_page()),
+    };
+    GuestSearchFlow firewall_flow;
+    expect(firewall_flow.begin(continuation_firewall, guest, "filtered continuation").page.has_value(),
+           "continuation firewall fixture first page succeeds");
+    const auto filtered = firewall_flow.next(continuation_firewall, guest);
+    expect(filtered.page.has_value(), "continuation firewall page remains usable");
+    if (filtered.page) {
+        expect(filtered.page->results.size() == 1,
+               "continuation firewall drops Shorts, promoted and shopping subtrees");
+        if (filtered.page->results.size() == 1) {
+            expect(filtered.page->results[0].id == "SAFEVIDEO01",
+                   "continuation firewall preserves only the safe normalized video");
+        }
+    }
+    expect(!firewall_flow.can_continue(),
+           "filtered terminal continuation ends pagination normally");
 
     if (failures == 0) {
         std::cout << "All guest Search flow state tests passed.\n";

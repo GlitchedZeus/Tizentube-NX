@@ -150,9 +150,11 @@ private:
     std::mutex search_mutex_;
     bool pending_search_result_{false};
     std::uint64_t pending_search_generation_{0};
+    bool pending_search_continuation_{false};
     ttnx::youtube::GuestSearchResult pending_search_;
     std::atomic_bool pending_search_emergency_{false};
     std::atomic<std::uint64_t> pending_search_emergency_generation_{0};
+    std::atomic_bool pending_search_emergency_continuation_{false};
     std::atomic<ttnx::core::SearchErrorCode> pending_search_emergency_code_{
         ttnx::core::SearchErrorCode::None};
     std::atomic<ttnx::youtube::SearchWorkerStage> search_worker_stage_{
@@ -167,10 +169,12 @@ private:
     brls::Label* search_query_label_{nullptr};
     brls::Label* search_status_label_{nullptr};
     brls::Button* search_action_button_{nullptr};
+    brls::Button* search_load_more_button_{nullptr};
     brls::Box* search_results_box_{nullptr};
 
     struct SearchDetailRow {
         std::string identity;
+        brls::Button* button{nullptr};
         brls::Label* detail{nullptr};
     };
     std::vector<SearchDetailRow> search_detail_rows_;
@@ -244,7 +248,7 @@ private:
                 if (search_model_.end_of_results()) {
                     text += ". End of results.";
                 } else if (search_model_.can_load_more()) {
-                    text += ". More results are available; Load more is disabled for this hardware gate.";
+                    text += ". More results are available.";
                 } else {
                     text += '.';
                 }
@@ -252,7 +256,7 @@ private:
             }
             case ttnx::core::SearchViewState::Empty:
                 return search_model_.can_load_more()
-                    ? "No results on this page. Load more is disabled for this hardware gate."
+                    ? "No results on this page yet. More results are available."
                     : "No results found.";
             case ttnx::core::SearchViewState::Error:
                 return search_model_.error().empty()
@@ -274,60 +278,109 @@ private:
         }
     }
 
+    void append_search_result_row(const ttnx::core::BrowseResult& result) {
+        if (!search_results_box_) return;
+        const auto identity = ttnx::core::browse_result_identity(result);
+        if (identity.empty()) return;
+
+        std::string title = "[" + ttnx::core::search_result_kind_label(result.kind) + "] ";
+        title += result.title.empty() ? "Untitled result" : result.title;
+        auto* select = button(
+            search_results_box_,
+            bounded_ui_text(title, kMaxUiTitleChars));
+        select->setHeight(72);
+        select->registerClickAction([this, identity](brls::View*) {
+            if (!search_model_.select(identity)) return true;
+            // Selection never deletes or replaces the focused row.
+            refresh_search_inline_details();
+            return true;
+        });
+
+        auto* detail_label = label(
+            search_results_box_,
+            ttnx::core::search_result_selection_display(result),
+            18);
+        detail_label->setMarginBottom(14);
+        detail_label->setVisibility(
+            identity == search_model_.selected_identity()
+                ? brls::Visibility::VISIBLE
+                : brls::Visibility::GONE);
+        search_detail_rows_.push_back({identity, select, detail_label});
+
+        const auto metadata = ttnx::core::search_result_metadata_display(result);
+        if (!metadata.empty()) {
+            auto* metadata_label = label(
+                search_results_box_,
+                bounded_ui_text(metadata, kMaxUiMetadataChars),
+                18);
+            metadata_label->setMarginBottom(14);
+        }
+    }
+
+    void append_search_results_from(std::size_t start_index) {
+        if (!search_results_box_) return;
+        const auto& results = search_model_.results();
+        if (start_index > results.size()) return;
+        for (std::size_t i = start_index; i < results.size(); ++i) {
+            append_search_result_row(results[i]);
+        }
+    }
+
     void rebuild_search_results() {
         if (!search_results_box_) return;
 
         // Full rebuilding is reserved for a genuinely new/reconstructed result
-        // page. Selecting a result never comes through this path, so the focused
-        // Borealis button remains alive for the entire A-button interaction.
+        // page. Selection and continuation appends never delete existing rows.
         search_detail_rows_.clear();
         while (!search_results_box_->getChildren().empty()) {
             search_results_box_->removeView(search_results_box_->getChildren().back());
         }
+        append_search_results_from(0);
+    }
 
-        const auto selected_identity = search_model_.selected_identity();
+    void refresh_search_load_more_control(bool focus_fallback_if_hiding = false) {
+        if (!search_load_more_button_) return;
 
-        for (const auto& result : search_model_.results()) {
-            const auto identity = ttnx::core::browse_result_identity(result);
-            if (identity.empty()) continue;
+        const auto state = search_model_.state();
+        const bool retry_continuation =
+            state == ttnx::core::SearchViewState::Error &&
+            search_model_.retryable_failure() &&
+            search_model_.error_code() == ttnx::core::SearchErrorCode::ContinuationFailure;
+        const bool loadable =
+            (state == ttnx::core::SearchViewState::Ready ||
+             state == ttnx::core::SearchViewState::Empty) &&
+            search_model_.can_load_more();
+        const bool loading_more = state == ttnx::core::SearchViewState::LoadingMore;
+        const bool guest_ready = guest_session_ && guest_session_->usable();
+        const bool show = guest_ready && !network_busy_.load() &&
+                          (loadable || loading_more || retry_continuation);
 
-            std::string title = "[" + ttnx::core::search_result_kind_label(result.kind) + "] ";
-            title += result.title.empty() ? "Untitled result" : result.title;
-            auto* select = button(
-                search_results_box_,
-                bounded_ui_text(title, kMaxUiTitleChars));
-            select->setHeight(72);
-            select->registerClickAction([this, identity](brls::View*) {
-                if (!search_model_.select(identity)) return true;
-                // Non-destructive selection update: keep this focused button and
-                // the surrounding result tree alive. Only detail visibility changes.
-                refresh_search_inline_details();
-                return true;
-            });
-
-            auto* detail_label = label(
-                search_results_box_,
-                ttnx::core::search_result_selection_display(result),
-                18);
-            detail_label->setMarginBottom(14);
-            detail_label->setVisibility(
-                identity == selected_identity
-                    ? brls::Visibility::VISIBLE
-                    : brls::Visibility::GONE);
-            search_detail_rows_.push_back({identity, detail_label});
-
-            const auto metadata = ttnx::core::search_result_metadata_display(result);
-            if (!metadata.empty()) {
-                auto* metadata_label = label(
-                    search_results_box_,
-                    bounded_ui_text(metadata, kMaxUiMetadataChars),
-                    18);
-                metadata_label->setMarginBottom(14);
+        if (!show) {
+            if (focus_fallback_if_hiding &&
+                brls::Application::getCurrentFocus() == search_load_more_button_) {
+                if (!search_detail_rows_.empty() && search_detail_rows_.back().button) {
+                    brls::Application::giveFocus(search_detail_rows_.back().button);
+                } else if (search_action_button_) {
+                    brls::Application::giveFocus(search_action_button_);
+                }
             }
+            search_load_more_button_->setVisibility(brls::Visibility::GONE);
+            return;
+        }
+
+        search_load_more_button_->setVisibility(brls::Visibility::VISIBLE);
+        if (loading_more) {
+            search_load_more_button_->setText("Loading more...");
+        } else if (retry_continuation) {
+            search_load_more_button_->setText("Retry Load more");
+        } else {
+            search_load_more_button_->setText("Load more");
         }
     }
 
-    void refresh_search_page(bool rebuild_results) {
+    void refresh_search_page(
+        bool rebuild_results,
+        bool focus_fallback_if_hiding = false) {
         if (search_query_label_) {
             search_query_label_->setText(query_.empty()
                 ? "Query: none"
@@ -345,8 +398,8 @@ private:
                 : retry_first_page ? "Retry Search" : "Search");
         }
 
-
         if (rebuild_results) rebuild_search_results();
+        refresh_search_load_more_control(focus_fallback_if_hiding);
     }
 
     void publish_network_result(
@@ -500,18 +553,22 @@ private:
 
     void publish_search_result(
         std::uint64_t generation,
+        bool continuation,
         ttnx::youtube::GuestSearchResult result) noexcept {
         try {
             std::lock_guard<std::mutex> lock(search_mutex_);
             pending_search_generation_ = generation;
+            pending_search_continuation_ = continuation;
             pending_search_ = std::move(result);
             pending_search_result_ = true;
         } catch (const std::bad_alloc&) {
             pending_search_emergency_generation_.store(generation);
+            pending_search_emergency_continuation_.store(continuation);
             pending_search_emergency_code_.store(ttnx::core::SearchErrorCode::MemoryPressure);
             pending_search_emergency_.store(true);
         } catch (...) {
             pending_search_emergency_generation_.store(generation);
+            pending_search_emergency_continuation_.store(continuation);
             pending_search_emergency_code_.store(ttnx::core::SearchErrorCode::InternalFailure);
             pending_search_emergency_.store(true);
         }
@@ -527,11 +584,13 @@ private:
 
         ttnx::youtube::GuestSearchResult result;
         std::uint64_t generation = 0;
+        bool continuation = false;
         bool have_result = false;
         {
             std::lock_guard<std::mutex> lock(search_mutex_);
             if (pending_search_result_) {
                 generation = pending_search_generation_;
+                continuation = pending_search_continuation_;
                 result = std::move(pending_search_);
                 pending_search_result_ = false;
                 have_result = true;
@@ -540,15 +599,22 @@ private:
 
         const bool have_emergency = pending_search_emergency_.exchange(false);
         const auto emergency_generation = pending_search_emergency_generation_.load();
+        const bool emergency_continuation =
+            pending_search_emergency_continuation_.load();
         const auto emergency_code = pending_search_emergency_code_.load();
 
         search_worker_done_.store(false);
         search_busy_.store(false);
 
+        const std::size_t previous_result_count = search_model_.results().size();
         bool applied = false;
+        bool applied_continuation = false;
         if (have_result) {
+            applied_continuation = continuation;
             if (result.page) {
-                applied = search_model_.apply_first_page(generation, *result.page);
+                applied = continuation
+                    ? search_model_.apply_continuation(generation, *result.page)
+                    : search_model_.apply_first_page(generation, *result.page);
             } else {
                 auto code = result.error_code;
                 if (code == ttnx::core::SearchErrorCode::None) {
@@ -557,17 +623,32 @@ private:
                 applied = search_model_.fail(generation, code);
             }
         } else if (have_emergency) {
+            applied_continuation = emergency_continuation;
             applied = search_model_.fail(emergency_generation, emergency_code);
         }
 
         refresh_footer();
-        if (applied) refresh_search_page(true);
-        else refresh_search_page(false);
+        if (!applied) {
+            refresh_search_page(false);
+            return;
+        }
+
+        if (applied_continuation) {
+            // SearchModel already deduped by stable identity. Append only rows
+            // that were not present before this continuation; never delete or
+            // replace the currently focused first-page result tree.
+            append_search_results_from(previous_result_count);
+            refresh_search_inline_details();
+            refresh_search_page(false, search_model_.end_of_results());
+        } else {
+            refresh_search_page(true);
+        }
     }
 
     void launch_search_worker(
         std::uint64_t generation,
-        std::string query) {
+        std::string query,
+        bool continuation = false) {
         if (!guest_session_ || !guest_session_->usable()) return;
         if (search_worker_.joinable()) search_worker_.join();
 
@@ -579,7 +660,7 @@ private:
         try {
             const auto session = *guest_session_;
             search_worker_ = std::thread(
-                [this, generation, query = std::move(query), session] {
+                [this, generation, query = std::move(query), session, continuation] {
                     ttnx::youtube::SearchWorkerStage stage =
                         ttnx::youtube::SearchWorkerStage::BuildingRequest;
                     search_worker_stage_.store(stage);
@@ -588,17 +669,24 @@ private:
                         [&] {
                             stage = ttnx::youtube::SearchWorkerStage::SendingRequest;
                             search_worker_stage_.store(stage);
-                            auto result = search_flow_.begin(network_client_, session, query);
+                            auto result = continuation
+                                ? search_flow_.next(network_client_, session)
+                                : search_flow_.begin(network_client_, session, query);
                             stage = ttnx::youtube::SearchWorkerStage::Normalizing;
                             search_worker_stage_.store(stage);
                             return result;
                         },
-                        [&] {
-                            search_flow_.reset();
+                        [this, continuation] {
+                            // A first-page exception must not leave a half-active
+                            // flow. A continuation exception keeps the current token
+                            // so the explicit Retry Load more action remains valid.
+                            if (!continuation) search_flow_.reset();
                         });
                     search_worker_stage_.store(protected_result.failure_stage);
                     publish_search_result(
-                        generation, std::move(protected_result.result));
+                        generation,
+                        continuation,
+                        std::move(protected_result.result));
                     if (!protected_result.caught_exception) {
                         search_worker_stage_.store(ttnx::youtube::SearchWorkerStage::Complete);
                     }
@@ -609,14 +697,16 @@ private:
             const bool applied = search_model_.fail(
                 generation, ttnx::core::SearchErrorCode::MemoryPressure);
             refresh_footer();
-            refresh_search_page(applied);
+            refresh_search_page(false);
+            (void)applied;
         } catch (...) {
             search_busy_.store(false);
             search_worker_done_.store(false);
             const bool applied = search_model_.fail(
                 generation, ttnx::core::SearchErrorCode::InternalFailure);
             refresh_footer();
-            refresh_search_page(applied);
+            refresh_search_page(false);
+            (void)applied;
         }
     }
 
@@ -648,6 +738,30 @@ private:
         if (!search_model_.begin_retry(generation)) return;
         refresh_search_page(false);
         launch_search_worker(generation, search_model_.query());
+    }
+
+    void start_load_more() {
+        if (search_busy_.load() || network_busy_.load()) return;
+        if (!guest_session_ || !guest_session_->usable()) {
+            refresh_search_page(false);
+            return;
+        }
+
+        const auto generation = search_model_.generation();
+        const bool retry_continuation =
+            search_model_.state() == ttnx::core::SearchViewState::Error &&
+            search_model_.retryable_failure() &&
+            search_model_.error_code() == ttnx::core::SearchErrorCode::ContinuationFailure;
+
+        if (retry_continuation) {
+            if (!search_model_.begin_retry(generation)) return;
+        } else if (!search_model_.begin_load_more(generation)) {
+            return;
+        }
+
+        // Keep all existing result Views alive while the continuation runs.
+        refresh_search_page(false);
+        launch_search_worker(generation, {}, true);
     }
 
     void open_search_keyboard() {
@@ -717,6 +831,7 @@ private:
         search_query_label_ = nullptr;
         search_status_label_ = nullptr;
         search_action_button_ = nullptr;
+        search_load_more_button_ = nullptr;
         search_results_box_ = nullptr;
         search_detail_rows_.clear();
         auto* scroll = new brls::ScrollingFrame();
@@ -761,7 +876,7 @@ private:
         case RootSection::Search: {
             label(content, "Search", 34);
             label(content,
-                  "First-page live guest Search is enabled. Results stay text-only while thumbnail hosts remain blocked.",
+                  "Live guest Search is enabled with explicit Load more. Results stay text-only while thumbnail hosts remain blocked.",
                   20);
 
             auto* enter = button(content, "Enter search");
@@ -790,8 +905,13 @@ private:
             search_results_box_->setMarginBottom(8);
             content->addView(search_results_box_);
 
+            search_load_more_button_ = button(content, "Load more");
+            search_load_more_button_->registerClickAction([this](brls::View*) {
+                start_load_more();
+                return true;
+            });
             label(content,
-                  "Load more is disabled for this hardware gate. No Shorts, ads, promoted or shopping renderers may reach this list.",
+                  "Load more is explicit for this hardware gate. No Shorts, ads, promoted or shopping renderers may reach any page.",
                   18);
             refresh_search_page(true);
             ttnx::record_boot_event("boot-11-search-created");

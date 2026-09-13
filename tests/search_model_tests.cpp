@@ -167,6 +167,68 @@ int main() {
     expect(model.error_code() == SearchErrorCode::None && !model.retryable_failure() &&
            !model.end_of_results(), "reset clears error/retry/terminal flags");
 
+    SearchModel continuation_preserve;
+    const auto preserve_generation = continuation_preserve.begin_query("preserve page one");
+    BrowsePage preserve_first;
+    preserve_first.results = {
+        video("KEEPVIDEO01", "Keep one"),
+        video("KEEPVIDEO02", "Keep two")};
+    preserve_first.continuation = "KEEP-NEXT";
+    expect(continuation_preserve.apply_first_page(preserve_generation, preserve_first),
+           "continuation preservation fixture accepts first page");
+    expect(continuation_preserve.select("video:KEEPVIDEO02"),
+           "continuation preservation fixture selects first-page result");
+    expect(continuation_preserve.begin_load_more(preserve_generation),
+           "continuation preservation fixture starts load more");
+    expect(continuation_preserve.fail(preserve_generation, SearchErrorCode::HttpFailure),
+           "continuation failure is accepted");
+    expect(continuation_preserve.results().size() == 2,
+           "continuation failure preserves existing first-page results");
+    expect(continuation_preserve.selected_identity() == "video:KEEPVIDEO02",
+           "continuation failure preserves valid inline selection");
+    expect(continuation_preserve.error_code() == SearchErrorCode::ContinuationFailure,
+           "continuation failure uses the dedicated safe error code");
+    expect(continuation_preserve.begin_retry(preserve_generation),
+           "continuation failure remains explicitly retryable");
+    BrowsePage preserve_next;
+    preserve_next.results = {video("NEWVIDEO001", "New continuation result")};
+    preserve_next.continuation = "KEEP-NEXT-2";
+    expect(continuation_preserve.apply_continuation(preserve_generation, preserve_next),
+           "retried continuation appends successfully");
+    expect(continuation_preserve.results().size() == 3,
+           "retried continuation appends without replacing first page");
+    expect(continuation_preserve.select("video:NEWVIDEO001"),
+           "continuation-added result can become the stable selection");
+
+    SearchModel stale_continuation;
+    const auto stale_cont_generation = stale_continuation.begin_query("old continuation");
+    expect(stale_continuation.apply_first_page(stale_cont_generation, preserve_first),
+           "stale continuation fixture accepts old first page");
+    expect(stale_continuation.begin_load_more(stale_cont_generation),
+           "stale continuation fixture starts old continuation");
+    const auto replacement_generation = stale_continuation.begin_query("replacement query");
+    BrowsePage stale_page;
+    stale_page.results = {video("STALEPAGE01", "Must not append")};
+    expect(!stale_continuation.apply_continuation(stale_cont_generation, stale_page),
+           "stale continuation completion cannot append into a new query");
+    expect(stale_continuation.generation() == replacement_generation &&
+               stale_continuation.results().empty(),
+           "replacement query remains authoritative after stale continuation completion");
+
+    SearchModel terminal_continuation;
+    const auto terminal_generation = terminal_continuation.begin_query("terminal continuation");
+    expect(terminal_continuation.apply_first_page(terminal_generation, preserve_first),
+           "terminal continuation fixture accepts first page");
+    expect(terminal_continuation.begin_load_more(terminal_generation),
+           "terminal continuation fixture starts load more");
+    BrowsePage terminal_page;
+    expect(terminal_continuation.apply_continuation(terminal_generation, terminal_page),
+           "zero-result terminal continuation is accepted");
+    expect(terminal_continuation.results().size() == preserve_first.results.size(),
+           "zero-result terminal continuation preserves existing results");
+    expect(terminal_continuation.end_of_results() && !terminal_continuation.can_load_more(),
+           "zero-result terminal continuation cleanly ends pagination");
+
     if (failures == 0) {
         std::cout << "All offline Search model tests passed.\n";
         return EXIT_SUCCESS;
