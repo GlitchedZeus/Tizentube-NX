@@ -55,12 +55,40 @@ bool valid_header_name(std::string_view name) {
     return true;
 }
 
+bool valid_header_value(std::string_view value) {
+    for (const unsigned char c : value) {
+        if (c == '\t') continue;
+        if (c < 0x20 || c == 0x7f) return false;
+    }
+    return true;
+}
+
+bool valid_request_target(std::string_view target) {
+    if (target.empty() || target.front() != '/') return false;
+    for (const unsigned char c : target) {
+        if (c <= 0x20 || c == 0x7f) return false;
+    }
+    return true;
+}
+
 bool valid_host_ascii(std::string_view host) {
     if (host.empty() || host.size() > 253 || host.front() == '.' || host.back() == '.') {
         return false;
     }
-    for (const unsigned char c : host) {
-        if (!(std::isalnum(c) || c == '-' || c == '.')) return false;
+
+    std::size_t label_start = 0;
+    while (label_start < host.size()) {
+        const auto label_end = host.find('.', label_start);
+        const auto end = label_end == std::string_view::npos ? host.size() : label_end;
+        const auto label = host.substr(label_start, end - label_start);
+        if (label.empty() || label.size() > 63 || label.front() == '-' || label.back() == '-') {
+            return false;
+        }
+        for (const unsigned char c : label) {
+            if (!(std::isalnum(c) || c == '-')) return false;
+        }
+        if (label_end == std::string_view::npos) break;
+        label_start = label_end + 1;
     }
     return true;
 }
@@ -94,6 +122,32 @@ std::optional<std::size_t> parse_hex_size(std::string_view value) {
     return parsed;
 }
 
+std::size_t count_headers(const HttpResponse& response, std::string_view name) {
+    std::size_t count = 0;
+    for (const auto& header : response.headers) {
+        if (iequals(header.name, name)) ++count;
+    }
+    return count;
+}
+
+bool valid_trailer_block(std::string_view trailers) {
+    std::size_t pos = 0;
+    while (pos < trailers.size()) {
+        const auto line_end = trailers.find("\r\n", pos);
+        if (line_end == std::string_view::npos) return false;
+        const auto line = trailers.substr(pos, line_end - pos);
+        if (line.empty()) return line_end + 2 == trailers.size();
+        if (line.front() == ' ' || line.front() == '\t') return false;
+        const auto colon = line.find(':');
+        if (colon == std::string_view::npos) return false;
+        const auto name = line.substr(0, colon);
+        const auto value = trim(line.substr(colon + 1));
+        if (!valid_header_name(name) || !valid_header_value(value)) return false;
+        pos = line_end + 2;
+    }
+    return false;
+}
+
 std::optional<std::string> decode_chunked(
     std::string_view encoded,
     std::size_t max_body_bytes) {
@@ -108,15 +162,18 @@ std::optional<std::string> decode_chunked(
         pos = line_end + 2;
 
         if (*chunk_size == 0) {
-            if (pos + 2 <= encoded.size() && encoded.substr(pos, 2) == "\r\n") {
+            if (pos + 2 == encoded.size() && encoded.substr(pos, 2) == "\r\n") {
                 return decoded;
             }
-            const auto trailer_end = encoded.find("\r\n\r\n", pos);
-            if (trailer_end == std::string_view::npos) return std::nullopt;
+            if (pos >= encoded.size()) return std::nullopt;
+            const auto trailers = encoded.substr(pos);
+            if (!valid_trailer_block(trailers)) return std::nullopt;
             return decoded;
         }
 
-        if (*chunk_size > max_body_bytes - decoded.size()) return std::nullopt;
+        if (decoded.size() > max_body_bytes || *chunk_size > max_body_bytes - decoded.size()) {
+            return std::nullopt;
+        }
         if (pos > encoded.size() || *chunk_size > encoded.size() - pos) return std::nullopt;
 
         decoded.append(encoded.substr(pos, *chunk_size));
@@ -181,7 +238,7 @@ std::optional<HttpsUrl> parse_https_url(std::string_view url) {
             target.append(url.substr(authority_end, end - authority_end));
         }
     }
-    if (target.empty() || target.front() != '/' || contains_crlf(target)) return std::nullopt;
+    if (!valid_request_target(target)) return std::nullopt;
 
     return HttpsUrl{std::move(normalized_host), std::move(target), port};
 }
@@ -189,8 +246,7 @@ std::optional<HttpsUrl> parse_https_url(std::string_view url) {
 std::optional<std::string> build_http1_request(
     const HttpRequest& request,
     const HttpsUrl& url) {
-    if (!valid_host_ascii(url.host) || url.target.empty() || url.target.front() != '/' ||
-        contains_crlf(url.target)) {
+    if (!valid_host_ascii(url.host) || !valid_request_target(url.target)) {
         return std::nullopt;
     }
 
@@ -207,7 +263,9 @@ std::optional<std::string> build_http1_request(
     output += "\r\nConnection: close\r\nAccept-Encoding: identity\r\n";
 
     for (const auto& header : request.headers) {
-        if (!valid_header_name(header.name) || contains_crlf(header.value)) return std::nullopt;
+        if (!valid_header_name(header.name) || !valid_header_value(header.value)) {
+            return std::nullopt;
+        }
         if (iequals(header.name, "Host") ||
             iequals(header.name, "Connection") ||
             iequals(header.name, "Content-Length") ||
@@ -235,7 +293,8 @@ std::optional<std::string> build_http1_request(
 Http1ParseResult parse_http1_response(
     std::string_view raw_response,
     std::size_t max_body_bytes) {
-    if (raw_response.size() > max_body_bytes + kMaxRawOverheadBytes) {
+    if (raw_response.size() > kMaxRawOverheadBytes &&
+        raw_response.size() - kMaxRawOverheadBytes > max_body_bytes) {
         return fail("HTTP response exceeds the raw response limit.");
     }
 
@@ -254,6 +313,9 @@ Http1ParseResult parse_http1_response(
         return fail("Unsupported HTTP status line.");
     }
     if (status_line.size() < 12) return fail("HTTP status code is missing.");
+    if (status_line.size() > 12 && status_line[12] != ' ') {
+        return fail("HTTP status line is malformed.");
+    }
 
     int status_code = 0;
     const auto code_text = status_line.substr(9, 3);
@@ -282,11 +344,20 @@ Http1ParseResult parse_http1_response(
         if (colon == std::string_view::npos) return fail("HTTP header is missing a colon.");
         const auto name = line.substr(0, colon);
         const auto value = trim(line.substr(colon + 1));
-        if (!valid_header_name(name) || contains_crlf(value)) {
+        if (!valid_header_name(name) || !valid_header_value(value)) {
             return fail("HTTP header contains invalid characters.");
         }
         response.headers.push_back({std::string(name), std::string(value)});
         line_start = line_end + 2;
+    }
+
+    const auto transfer_encoding_count = count_headers(response, "Transfer-Encoding");
+    const auto content_length_count = count_headers(response, "Content-Length");
+    if (transfer_encoding_count > 1) {
+        return fail("Duplicate HTTP Transfer-Encoding headers are not allowed.");
+    }
+    if (content_length_count > 1) {
+        return fail("Duplicate HTTP Content-Length headers are not allowed.");
     }
 
     const std::string_view encoded_body = raw_response.substr(header_end + 4);
@@ -308,13 +379,19 @@ Http1ParseResult parse_http1_response(
         if (!length || *length > max_body_bytes) {
             return fail("HTTP Content-Length is invalid or too large.");
         }
-        if (encoded_body.size() < *length) {
-            return fail("HTTP body is shorter than Content-Length.");
+        if (encoded_body.size() != *length) {
+            return fail("HTTP body length does not match Content-Length.");
         }
-        response.body.assign(encoded_body.substr(0, *length));
+        response.body.assign(encoded_body);
     } else {
         if (encoded_body.size() > max_body_bytes) return fail("HTTP body is too large.");
         response.body.assign(encoded_body);
+    }
+
+    if ((status_code >= 100 && status_code < 200) || status_code == 204 || status_code == 304) {
+        if (!response.body.empty()) {
+            return fail("HTTP status code forbids a response body.");
+        }
     }
 
     Http1ParseResult result;
