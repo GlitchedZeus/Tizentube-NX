@@ -580,7 +580,7 @@ std::optional<std::uint64_t> parse_duration_seconds(std::string_view text) {
 
     for (const char c : text) {
         if (c == ':') {
-            if (!have_digit || components >= 3 || part >= 60 && components > 1) return std::nullopt;
+            if (!have_digit || components >= 3 || (part >= 60 && components > 1)) return std::nullopt;
             if (total > (std::numeric_limits<std::uint64_t>::max() - part) / 60) {
                 return std::nullopt;
             }
