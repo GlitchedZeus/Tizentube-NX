@@ -1,0 +1,45 @@
+name: apply-search-detail-generated
+
+on:
+  push:
+    branches:
+      - feature/m2-guest-browsing
+    paths:
+      - .github/workflows/apply-search-detail-generated.yml
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/m2-guest-browsing
+      - name: Download reviewed generated patch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rm -rf /tmp/search-detail
+          mkdir -p /tmp/search-detail
+          gh run download 34749269559 \
+            --repo GlitchedZeus/Tizentube-NX \
+            --name search-detail-patched-files \
+            --dir /tmp/search-detail
+          test -f /tmp/search-detail/switch/source/main.cpp
+          test -f /tmp/search-detail/docs/PROJECT_STATUS.md
+          test -f /tmp/search-detail/docs/ROADMAP.md
+          cp /tmp/search-detail/switch/source/main.cpp switch/source/main.cpp
+          cp /tmp/search-detail/docs/PROJECT_STATUS.md docs/PROJECT_STATUS.md
+          cp /tmp/search-detail/docs/ROADMAP.md docs/ROADMAP.md
+          git diff --check
+      - name: Commit reviewed Search detail UI
+        run: |
+          git config user.name "GlitchedZeus"
+          git config user.email "user91746@protonmail.com"
+          git add switch/source/main.cpp docs/PROJECT_STATUS.md docs/ROADMAP.md
+          git commit -m "search: open visible result detail screen"
+          git push origin HEAD:feature/m2-guest-browsing
