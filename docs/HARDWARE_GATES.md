@@ -64,7 +64,9 @@ The replacement keeps result buttons alive and toggles pre-created detail labels
 
 ## Current physical gate
 
-The next candidate fixes the rejected `36015cb...` focus/page-lifecycle behavior while preserving all accepted networking and first-page Search code.
+Candidate code checkpoint: `2642ba7ff559879222a6cddc2b236afbd07c0012`
+
+This candidate fixes the rejected `36015cb...` focus/page-lifecycle behavior while preserving all accepted networking and first-page Search code.
 
 Required physical acceptance:
 
