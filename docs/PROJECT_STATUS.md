@@ -149,33 +149,53 @@ A first real-network path is now wired into the Borealis shell for hardware vali
 Hardware-probe compile checkpoint: `bdeb76fe5a896127ca0c4a304a0bb3794a064b0a`.
 Host tests and devkitA64 Switch build both pass at this checkpoint.
 
+### Scoped Search parsing and executor
+
+The offline/host-tested Search path is now hardened before any live Search UI activation:
+
+- The reusable low-level renderer parser still supports legacy `videoRenderer`, modern `lockupViewModel`, channels, playlists, legacy continuation renderers and modern continuation-item views.
+- A separate `parse_scoped_search_response()` boundary now validates the full JSON document without running renderer extraction over unrelated root data.
+- Only `contents.twoColumnSearchResultsRenderer.primaryContents` and direct `appendContinuationItemsAction` / `reloadContinuationItemsCommand` continuation payloads under the recognized `onResponseReceived*` arrays can reach renderer traversal.
+- Continuation discovery is deliberately non-recursive outside those direct action shapes, so renderer-looking command/menu/metadata siblings cannot become Search cards.
+- Renderer firewalling still runs inside accepted Search payloads: Shorts/reels, disguised reel endpoints, promoted/ad subtrees, shopping/product subtrees and unknown renderers remain blocked.
+- Hostile fixtures cover topbar, header, sidebar, metadata, continuation-command siblings and nested fake append actions outside the accepted boundary.
+- The transport-neutral Search executor now calls the scoped parser.
+- Fake-HTTP tests still prove first-page Search sends the query, continuation Search sends only the opaque continuation token, and the original query is not resent.
+- Live Search remains disabled in the Switch UI.
+
+Scoped Search code/test checkpoint: `ec68df8f06c5801c8b6d58d431bf70bcfc7d0c15`.
+Host configure/build/full `ctest` and the devkitA64 NRO build all pass at this checkpoint.
+The corresponding CI NRO artifact was successfully produced.
+
 This is still a **compile/integration checkpoint**. A live YouTube HTTPS request has not yet been declared successful on real Switch hardware.
 
 ## Immediate next technical checkpoint
 
-1. Install/test the `bdeb76fe...`-or-newer CI artifact on the real Atmosphere Switch.
+1. Install/test the current PR #6 CI artifact on the real Atmosphere Switch.
 2. On Home, explicitly choose `Test YouTube guest connection` and verify the UI remains responsive while the worker runs.
 3. Record only the resulting non-sensitive status (`Guest ready`, transport error code, or bootstrap-shape error); do not capture visitor/session values.
 4. If the probe succeeds, treat direct libnx HTTPS + guest bootstrap as hardware accepted.
-5. Then enable the first live Search POST using the in-memory guest session.
-6. Parse Search results into renderer-neutral records and run every record through the no-Shorts/no-promoted renderer firewall before UI creation.
-7. Wire Home and continuation paging only after first-page Search is proven on real hardware.
+5. Only then connect the already host-tested Search executor to the Switch worker path and enable the first live Search POST.
+6. Keep all Search results behind the scoped response boundary and renderer firewall before UI creation.
+7. Wire Home and continuation paging only after first-page live Search is proven on real hardware.
 
-No account login, playback, SponsorBlock or DeArrow is claimed at this checkpoint.
+No account login, playback, SponsorBlock or DeArrow is claimed at this checkpoint. Shorts remain absent by design.
 
 ## Validation
 
 - M1 is accepted on real Atmosphere hardware.
-- Host CMake tests are green through the strict HTTP/1.1/network-policy/session-bootstrap suites.
-- devkitA64 successfully compiles and links the direct libnx SSL transport into the NRO.
-- The off-thread, user-triggered bootstrap probe also passes devkitA64 compile/link CI.
-- `switch-curl` is not linked into the NRO.
+- Host CMake configure/build/full test suite is green through the scoped Search boundary/executor checkpoint.
+- devkitA64 successfully compiles and links the direct libnx SSL transport and scoped Search code into the NRO.
+- The off-thread, user-triggered bootstrap probe remains the only live M2 YouTube request path in the Switch UI.
+- `switch-curl` is not linked into the NRO; `Makefile.switch` filters the prototype and links native libnx only.
+- Exact M2 outbound allowlist remains `www.youtube.com:443`.
+- Live Search POST is **not** enabled in the UI.
 - Live YouTube networking has **not** yet been accepted on-device.
 
 ## Known high-risk areas
 
 - **Console safety:** Nintendo network destinations must never be reachable through app-controlled networking. 90DNS is defense in depth, not the app's primary safeguard.
-- YouTube response/session shapes are private implementation details and may change. Keep parsing isolated, fail closed on unknown renderers, and cover known shapes with fixtures.
+- YouTube response/session shapes are private implementation details and may change. Keep parsing isolated, scope Search traversal narrowly, fail closed on unknown renderers, and cover known shapes with fixtures.
 - Switch TLS must stay certificate-verified. Do not work around transport bugs by disabling peer, hostname or date verification.
 - Current devkitPro switch-curl has an open certificate-info hard-crash report; it remains excluded from the NRO live path unless that risk is removed and retested.
 - The first real-hardware libnx SSL request may expose service/timeout/firmware edge cases that CI cannot simulate; treat hardware validation as mandatory before declaring the transport accepted.

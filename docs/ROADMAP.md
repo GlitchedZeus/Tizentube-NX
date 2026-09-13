@@ -56,6 +56,11 @@
 - [x] Opaque continuation/pagination model
 - [x] Renderer firewall for Shorts/reels, promoted/ad, shopping and unsupported renderers
 - [x] Tests proving disguised Shorts/promoted renderers cannot become visible records
+- [x] Legacy `videoRenderer`, modern `lockupViewModel`, channel and playlist Search parsing
+- [x] Legacy + modern Search continuation token parsing
+- [x] Transport-neutral Search executor with fake HTTP end-to-end tests
+- [x] Scoped Search boundary: only recognized primary Search and direct continuation payloads reach renderer traversal
+- [x] Hostile topbar/header/sidebar/metadata/continuation-sibling fixtures proving out-of-scope renderers cannot escape
 - [ ] Parse live Search results
 - [ ] Parse live Home/browse results
 - [ ] Channel pages
