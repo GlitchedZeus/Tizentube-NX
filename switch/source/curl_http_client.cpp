@@ -1,5 +1,7 @@
 #include "curl_http_client.hpp"
 
+#include "tizentube_nx/net/outbound_policy.hpp"
+
 #include <curl/curl.h>
 #include <switch.h>
 
@@ -43,24 +45,10 @@ size_t write_header(char* data, size_t size, size_t count, void* userdata) {
     return bytes;
 }
 
-bool is_https(std::string_view url) {
-    constexpr std::string_view prefix = "https://";
-    return url.size() >= prefix.size() &&
-           std::equal(prefix.begin(), prefix.end(), url.begin(), [](char a, char b) {
-               return std::tolower(static_cast<unsigned char>(a)) ==
-                      std::tolower(static_cast<unsigned char>(b));
-           });
-}
-
 }  // namespace
 
 CurlHttpClient::CurlHttpClient(std::string ca_bundle_path)
     : ca_bundle_path_(std::move(ca_bundle_path)) {
-    if (ca_bundle_path_.empty()) {
-        initialization_error_ = "A CA bundle path is required for HTTPS.";
-        return;
-    }
-
     const Result socket_result = socketInitializeDefault();
     if (R_FAILED(socket_result)) {
         char buffer[64]{};
@@ -96,8 +84,14 @@ net::HttpResult CurlHttpClient::perform(const net::HttpRequest& request) {
             : initialization_error_;
         return result;
     }
-    if (!is_https(request.url)) {
-        result.error = "Only HTTPS endpoints are permitted.";
+
+    // CRITICAL CONSOLE-SAFETY BOUNDARY:
+    // This check occurs before curl can perform DNS resolution or create a TLS
+    // connection. The app is deny-by-default and must never rely on 90DNS to
+    // keep Nintendo endpoints unreachable.
+    const auto destination = net::parse_allowed_https_destination(request.url);
+    if (!destination) {
+        result.error = "Outbound destination blocked by TizenTube NX network policy.";
         return result;
     }
 
@@ -131,12 +125,17 @@ net::HttpResult CurlHttpClient::perform(const net::HttpRequest& request) {
     curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, request.timeout_ms > 0 ? request.timeout_ms : 15000L);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS,
                      std::min(request.timeout_ms > 0 ? request.timeout_ms : 15000L, 7000L));
-    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 3L);
+
+    // Never let libcurl follow a redirect autonomously. A redirect must be
+    // surfaced to TizenTube NX and re-validated by the same host allowlist
+    // before another DNS lookup is permitted.
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
     curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
-    curl_easy_setopt(curl, CURLOPT_CAINFO, ca_bundle_path_.c_str());
+    if (!ca_bundle_path_.empty()) {
+        curl_easy_setopt(curl, CURLOPT_CAINFO, ca_bundle_path_.c_str());
+    }
     curl_easy_setopt(curl, CURLOPT_PROTOCOLS, CURLPROTO_HTTPS);
     curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTPS);
 
