@@ -81,6 +81,10 @@ if(TTNX_BUILD_TESTS)
     target_link_libraries(tizentube_nx_search_metadata_tests PRIVATE tizentube_nx_core)
     add_test(NAME search_metadata COMMAND tizentube_nx_search_metadata_tests)
 
+    add_executable(tizentube_nx_search_thumbnail_tests tests/search_thumbnail_tests.cpp)
+    target_link_libraries(tizentube_nx_search_thumbnail_tests PRIVATE tizentube_nx_core)
+    add_test(NAME search_thumbnail COMMAND tizentube_nx_search_thumbnail_tests)
+
     add_executable(tizentube_nx_search_robustness_tests tests/search_robustness_tests.cpp)
     target_link_libraries(tizentube_nx_search_robustness_tests PRIVATE tizentube_nx_core)
     add_test(NAME search_robustness COMMAND tizentube_nx_search_robustness_tests)
