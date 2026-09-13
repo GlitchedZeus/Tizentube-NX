@@ -7,91 +7,143 @@ M2 — YouTube guest browsing / pre-alpha.
 Branch: `feature/m2-guest-browsing`  
 Draft PR: #6 — `M2: guest browsing networking foundation`
 
-## Accepted baseline entering this extended session
+## Accepted baseline entering this session
 
-Previous fully green checkpoint:
+Latest fully green accepted checkpoint at session start:
 
-`72ef8db459ec0911adfc15abbfbafc706130e615`
+`9a69ed7c46b0e5281224d43dc89971c46124c6c9`
 
-At that checkpoint host tests/build and the devkitA64 NRO build were green, scoped Search parsing was integrated, the renderer firewall was intact, `switch-curl` was absent, the allowlist was exactly `www.youtube.com:443`, and live Search remained disabled.
+At that checkpoint host configure/build/ctest and the devkitA64 NRO build were green. Scoped Search parsing, result normalization/dedupe, canonical URL hardening, pagination state, request/privacy hardening, the offline Search model, and the renderer firewall were already present. `switch-curl` was absent, the allowlist was exactly `www.youtube.com:443`, and live Search remained disabled.
 
-## Extended offline M2 hardening
+## Normalized Search metadata hardening
 
-This session continued only work that is safe to complete without the pending real-Switch networking result.
+This session completed the previously partial optional-metadata slice without enabling networking in Search.
 
-### Normalized Search result architecture
+### Video results
 
-Search now has a renderer-agnostic `BrowseResult` presentation model with explicit Video / Channel / Playlist types. The model carries stable IDs, title, channel attribution slots, thumbnail/duration/metadata slots, accessibility text, and live/upcoming indicators without exposing raw renderer JSON to future UI/controller code.
+Legacy `videoRenderer` and supported modern video `lockupViewModel` forms now normalize safely available:
 
-Missing metadata remains empty. Presentation strings and thumbnail/duration values are bounded/sanitized before normalized UI use.
+- channel/owner name;
+- channel ID from an unambiguous browse endpoint;
+- bounded thumbnail candidates with dimensions;
+- duration text and exact seconds when deterministic;
+- view-count text and an exact count only when parsing is unambiguous;
+- published/upload-age text;
+- bounded accessibility text;
+- live state;
+- upcoming state;
+- exact scheduled start time when a unique bounded integer is present.
 
-### Result identity / dedupe
+Malformed or missing optional metadata does not invalidate an otherwise valid video result. Conflicting channel IDs or scheduled-start values are treated as unknown rather than guessed.
 
-Stable identity is type-qualified (`video:`, `channel:`, `playlist:`). Deduplication is deterministic first-wins and happens after the hard renderer firewall, so a blocked Short/ad/shopping object cannot consume an identity belonging to legitimate content.
+### Channel results
 
-### Canonical YouTube links / validation
+Legacy channel renderers and supported modern channel lockups normalize:
 
-Normal video sharing is generated only as:
+- channel ID;
+- title/name;
+- thumbnails;
+- subscriber-count text plus exact numeric count when deterministic;
+- video-count text plus exact numeric count when deterministic;
+- bounded accessibility text.
 
-`https://www.youtube.com/watch?v=VIDEO_ID`
+Missing subscriber/video counts remain unknown without hiding the channel.
 
-Tracking parameters, `si=`, `feature=`, timestamps, playlist contamination, redirect wrappers and source URL garbage are not retained. Stable channel-ID and playlist-ID canonical helpers are also available.
+### Playlist results
 
-Normal video IDs are validated as 11 safe YouTube ID characters. Pasted YouTube watch/embed/live/youtu.be inputs are bounded and validated. Missing/duplicate/conflicting `v`, encoded garbage, deceptive/non-YouTube hosts, malformed authorities, empty/oversized inputs, and Shorts/reel routes fail closed. Shorts/reels are never canonicalized into ordinary videos.
+Legacy playlist/radio renderers and supported modern playlist lockups normalize:
 
-### Search robustness corpus
+- playlist ID;
+- title;
+- owner/channel name;
+- owner/channel ID when an unambiguous browse endpoint is available;
+- video-count text plus exact numeric count when deterministic;
+- thumbnail candidates;
+- bounded accessibility text.
 
-Host tests now cover empty pages, missing ID/title, alternate text runs, malformed thumbnails, missing channel metadata, invalid duration text, live/upcoming/private-looking shapes, duplicates, mixed entity pages, missing/modern continuation tokens, unrelated actions, blocked ad/Shorts subtrees, out-of-scope renderer-shaped data, and unknown future renderers adjacent to legitimate siblings.
+A missing count does not invalidate the playlist.
 
-A deterministic mutation corpus adds malformed JSON, truncations, excessive nesting, oversized strings, randomized unknown renderer names, randomized out-of-scope video renderers, and blocked-subtree nesting. No heavyweight fuzzing dependency was added.
+### Exact numeric parsing policy
 
-### Query / continuation state
+Exact numeric fields are intentionally conservative. Plain ASCII decimal values and correctly comma-grouped values with a small reviewed English unit suffix may be converted to integers. Localized, abbreviated, malformed, overflowing or conflicting values remain presentation text only.
 
-`execute_guest_search()` remains stateless. `GuestSearchFlow` owns a logical query's pagination state:
+Tests cover malformed grouping, localized count strings, abbreviated counts, uint64 overflow, malformed scheduled time and conflicting scheduled times.
 
-- first request sends query only;
-- continuation sends token only;
-- transport/parse failure does not advance state;
-- repeated/consumed token terminates pagination loops;
-- missing token ends pagination;
-- a new query clears all old continuation ownership.
+## Thumbnail normalization
 
-This prevents stale query-A state being reused for query B.
+Thumbnail handling is still metadata-only: no image request is issued and no host is allowlisted.
 
-### Request privacy / minimization
+Normalized candidates are bounded and deterministic:
 
-Guest Search remains on the exact reviewed endpoint:
+- parser-side collection is bounded;
+- normalized consideration is bounded;
+- output is capped at eight candidates;
+- candidate URL length is bounded;
+- malformed/non-HTTPS references are ignored;
+- width/height are retained when valid;
+- duplicate URLs are removed;
+- preference ordering uses pixel area, then width/height, then stable URL ordering.
 
-`https://www.youtube.com/youtubei/v1/search?prettyPrint=false&alt=json`
+The compatibility `thumbnail_url` mirrors the preferred normalized candidate.
 
-Only the reviewed WEB/v1 guest client contract is accepted. Query, continuation and guest-session fields are bounded. User agent is no longer redundantly placed in Search JSON. Tests assert that official-client analytics/ad/tracking style fields are absent.
+## Pure Search presentation helpers
 
-The retained context fields are client name/version, language, region, visitor data and timezone. Locale/region/timezone are kept for response shaping; InnerTube is private, so no claim is made that their exact purpose is publicly documented.
+Host-tested renderer-independent helpers now provide:
 
-### Logging / diagnostic privacy
+- duration formatting;
+- LIVE / UPCOMING labels;
+- optional view-count display;
+- upload-age display;
+- optional video-count display;
+- graceful empty output when values are unknown.
 
-Normal Search/network paths do not dump response bodies, request bodies, cookies, authorization values, visitor/session identifiers, or continuation tokens. Public diagnostics are length-bounded. A diagnostic carrying sensitive markers is replaced wholesale with a generic safe failure instead of partially redacting potentially secret data.
+Renderer-specific YouTube parsing is not placed in Borealis/UI code.
 
-### Offline UI model
+## Offline SearchModel contract
 
-`SearchModel` is host-testable and has no networking dependency. It provides explicit:
+`SearchModel` remains transport-free and now explicitly covers:
 
-- idle
-- loading
-- ready
-- empty
-- error
-- loading-more
-- normalized result list
-- continuation state
-- stable selection identity
-- generation tokens that reject stale async completions
+- idle;
+- loading;
+- ready;
+- empty;
+- error;
+- loading-more;
+- end-of-results;
+- retryable failure;
+- continuation availability;
+- selected stable result identity;
+- stale-generation rejection.
 
-This prepares the UI without activating Search networking.
+Continuation failures can be explicitly retried while preserving continuation ownership. Non-retryable malformed/unsupported responses do not enter a blind retry loop.
 
-### Parser trust-boundary cleanup
+## UI-facing Search error taxonomy
 
-`parse_scoped_search_response()` is the intended application/network API. The lower-level recursive renderer-payload parser is now an explicitly internal build API and is guarded for host callers. This makes the safe scoped path the default and makes boundary bypass a deliberate internal action.
+Search now has a coarse UI-safe error classification separate from technical diagnostics:
+
+- network unavailable;
+- network-policy rejection;
+- HTTP failure;
+- malformed response;
+- unsupported response;
+- empty results;
+- continuation failure.
+
+The executor classifies internal failures before sanitizing technical diagnostics, so coarse classification is retained without leaking tokens, visitor/session values, cookies, request/response bodies or authorization material to the future UI.
+
+## Search robustness / firewall state
+
+The scoped Search boundary remains unchanged: only the recognized first-page primary container and direct recognized continuation item arrays may reach the internal renderer walker.
+
+The hard renderer firewall still runs before normalization. Shorts/reels, ads/promoted objects, shopping/product subtrees and unsupported renderers remain blocked. Tests explicitly attach valid-looking metadata to blocked Shorts/ad/shopping objects and verify that none of it escapes into normalized results.
+
+Parser/resource limits remain explicit for response size, depth, nodes, renderer records, object members, array elements, decoded strings, extracted text, text runs, thumbnail candidates and thumbnail URL length.
+
+## Future feature compatibility
+
+The normalized data and presentation boundaries preserve clean seams for later optional features such as SponsorBlock, alternative/DeArrow-style metadata, playback-quality preferences, original-audio preference, Return YouTube Dislike integration, clean sharing and player cleanup. No such service is enabled or allowlisted in this M2 slice.
+
+Shorts remain a hard project rejection and are not made configurable by any future reference architecture.
 
 ## Hard network safety invariant
 
@@ -117,29 +169,26 @@ The app still makes no hidden YouTube request at startup. The Home action `Test 
 
 The Search UI must not perform the POST until that hardware result is supplied and accepted.
 
-## Validation state
+## Validation rule for the next accepted checkpoint
 
-Previous accepted checkpoint: `72ef8db459ec0911adfc15abbfbafc706130e615`.
+Entering accepted checkpoint: `9a69ed7c46b0e5281224d43dc89971c46124c6c9`.
 
-The extended-session commits are being validated continuously by host and devkitA64 CI. The final session head must pass the complete host configure/build/ctest workflow and the devkitA64 NRO workflow before it may replace the previous accepted checkpoint.
+The metadata-hardening session may replace it only after the exact final documentation/code HEAD passes:
+
+- host configure;
+- full host build;
+- full host `ctest` suite;
+- devkitA64 NRO build and artifact upload;
+- network/linkage/UI-gate review.
+
+Documentation commits themselves do not become accepted merely because an earlier code-only head was green.
 
 ## Remaining external blocker
 
-The required external result is still the physical Atmosphere Switch result from:
+The required external result remains the physical Atmosphere Switch result from:
 
 `Test YouTube guest connection`
 
 Expected successful non-sensitive status: `Guest ready`.
 
 Only after that result is accepted should M2 connect the already host-tested Search execution path to a live Switch Search POST.
-
-## Later M2 work after hardware acceptance
-
-- connect Search flow to the Switch worker path deliberately;
-- validate first live Search response on hardware;
-- render normalized results as Borealis cards;
-- enable live continuation paging;
-- add live Home/browse/channel/playlist presentation;
-- complete real-hardware guest-browsing acceptance.
-
-Account login, playback, SponsorBlock, DeArrow and all Shorts functionality remain out of scope for this checkpoint.
