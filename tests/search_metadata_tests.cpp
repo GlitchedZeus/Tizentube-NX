@@ -223,7 +223,7 @@ int main() {
             {"metadataParts":[{"text":{"content":"Modern Channel","commandRuns":[{"onTap":{"innertubeCommand":{"browseEndpoint":{"browseId":"UCMODERN"}}}}]}}]},
             {"metadataParts":[{"text":{"content":"9,876 views"}},{"text":{"content":"3 hours ago"}}]}
           ]}}
-        }}}
+        }}
       }},
       {"lockupViewModel":{
         "contentType":"LOCKUP_CONTENT_TYPE_PLAYLIST",
@@ -235,7 +235,7 @@ int main() {
             {"metadataParts":[{"text":{"content":"Modern Owner","commandRuns":[{"onTap":{"innertubeCommand":{"browseEndpoint":{"browseId":"UCPLOWNER"}}}}]}}]},
             {"metadataParts":[{"text":{"content":"55 videos"}}]}
           ]}}
-        }}}
+        }}
       }},
       {"lockupViewModel":{
         "contentType":"LOCKUP_CONTENT_TYPE_CHANNEL",
@@ -247,7 +247,7 @@ int main() {
             {"metadataParts":[{"text":{"content":"20,000 subscribers"}}]},
             {"metadataParts":[{"text":{"content":"400 videos"}}]}
           ]}}
-        }}}
+        }}
       }},
       {"lockupViewModel":{
         "contentType":"LOCKUP_CONTENT_TYPE_VIDEO",
@@ -260,7 +260,7 @@ int main() {
         "metadata":{"lockupMetadataViewModel":{
           "title":{"content":"Still blocked"},
           "metadata":{"contentMetadataViewModel":{"metadataRows":[{"metadataParts":[{"text":{"content":"99,999 views"}}]}]}}
-        }}}
+        }}
       }}
     ])JSON";
 
