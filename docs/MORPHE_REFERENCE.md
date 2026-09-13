@@ -1,8 +1,14 @@
 # Morphe reference policy
 
-TizenTube NX treats [Morphe Patches](https://github.com/MorpheApp/morphe-patches) as a first-class feature and behavior reference for YouTube de-bloating, playback quality-of-life features, privacy, ad/promotion filtering, and player cleanup.
+TizenTube NX treats [Morphe Patches](https://github.com/MorpheApp/morphe-patches) as a first-class **feature-discovery and development-research** reference.
 
-Morphe is preferred over ReVanced as a feature-inspiration source when the two differ and Morphe's behavior better matches the TizenTube NX product goals. ReVanced remains a useful secondary reference.
+Morphe is useful for finding YouTube quality-of-life ideas, player cleanup opportunities, privacy improvements, metadata enhancements, audio/quality controls, and other behaviors worth investigating in a native Switch client.
+
+Morphe does **not** define TizenTube NX's visual identity, primary settings layout, or overall product philosophy. Those are guided primarily by YouTube familiarity and TizenTube's ad-free TV-style experience.
+
+SponsorBlock is the primary reference for community-defined in-video sponsor/segment skipping behavior and settings.
+
+ReVanced is not a current TizenTube NX philosophy/design reference.
 
 ## How to use Morphe
 
@@ -11,21 +17,19 @@ Morphe patches the Android YouTube application, while TizenTube NX is a native N
 Use Morphe primarily as:
 
 1. a feature catalogue for useful YouTube improvements;
-2. a behavior/UX reference when designing equivalent native features;
-3. a research source for YouTube player, ad, promotion, response, and UI changes;
+2. a behavior/research source when investigating equivalent native features;
+3. a research source for YouTube player, promotion, response, and UI changes;
 4. an early-warning source for upstream YouTube behavior changes worth investigating in TizenTube NX.
 
 Prefer independent native implementations that fit TizenTube NX's architecture and existing trust boundaries.
 
 ## High-value feature candidates
 
-Future milestone planning should explicitly review Morphe for features such as:
+Future milestone planning should explicitly review Morphe for ideas such as:
 
-- ad, promoted-content, Premium-upsell, and shopping suppression;
-- SponsorBlock;
 - DeArrow / alternative thumbnails and titles;
 - Return YouTube Dislike;
-- canonical / sanitized sharing links;
+- canonical / sanitized sharing behavior;
 - default video quality and quality selection;
 - custom playback speeds;
 - original-audio preference and audio-track controls;
@@ -35,7 +39,12 @@ Future milestone planning should explicitly review Morphe for features such as:
 - livestream resume/position behavior;
 - fullscreen and player-layout cleanup;
 - codec, HDR, AV1/VP9/H.264-related preferences where practical on Switch;
-- useful player controls and de-bloating options that fit a controller-first UI.
+- privacy/de-bloat ideas;
+- useful controller-friendly player controls.
+
+Ad-free playback itself is not merely a Morphe-inspired enhancement. It is a TizenTube NX product invariant defined in `docs/PRODUCT_PHILOSOPHY.md` and `docs/SCOPE.md`.
+
+SponsorBlock category behavior/settings should be researched against SponsorBlock itself rather than treating Morphe's integration as the canonical definition.
 
 This list is a backlog/reference source, not permission to implement unrelated features during an active milestone.
 
@@ -55,11 +64,13 @@ Default to independent native implementations. If source code is ever reused or 
 
 ## Planning rule
 
-Before major player, ad-blocking, SponsorBlock, thumbnail/title, quality/audio, privacy, sharing, or polish work, review the current Morphe patch catalogue and classify relevant ideas as:
+Before major player, metadata, quality/audio, privacy, sharing, or polish work, review the current Morphe patch catalogue and classify relevant ideas as:
 
 - Definitely add
 - Maybe / investigate
 - Not applicable to native Switch
 - Explicitly reject
+
+For ad-free playback and SponsorBlock work, also review `docs/PRODUCT_PHILOSOPHY.md`; SponsorBlock itself remains the primary segment-skipping reference.
 
 Record worthwhile additions in the TizenTube NX roadmap rather than relying on chat history.
