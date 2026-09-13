@@ -6,11 +6,36 @@
 
 **TizenTube NX** is a native, controller-first YouTube client for Nintendo Switch homebrew.
 
-The goal is simple: keep the useful parts of YouTube, remove the clutter, make the interface feel at home on a Switch, and build the networking/privacy model conservatively from the start.
+The target is simple: make it feel like **TizenTube/YouTube was intentionally brought to Nintendo Switch** — familiar navigation and settings, but without Shorts, YouTube ads, tracking-heavy links or unnecessary engagement clutter.
 
-The project takes inspiration from **TizenTube**, **ReVanced**, **NewPipe** and **Morphe**, while using its own native Switch architecture and UI.
+> **Status: pre-alpha / active development.** Guest browsing and Search are being brought up first. Playback comes later, and playback is not considered complete unless the ad-free experience is complete with it.
 
-> **Status: pre-alpha / active development.** TizenTube NX is not a daily-driver YouTube replacement yet. Guest browsing and Search are being brought up first; playback comes later.
+## Product philosophy
+
+A few rules define the project more strongly than individual features:
+
+- **Playback and ad-free viewing are equally important.** A player that deliberately shows YouTube-served pre-roll, mid-roll or post-roll ads is not finished playback.
+- **SponsorBlock is part of the core player experience.** It will have Switch-native settings for per-category behavior such as auto-skip, ask/show a Skip button, or do not skip.
+- **No Shorts.** Shorts/reels are filtered at the data boundary and are not a user-facing feature.
+- **No promoted/shopping/Premium clutter.** Ads and promotional surfaces do not become acceptable because YouTube sends them alongside normal content.
+- **Clean links only.** A video shares as `https://www.youtube.com/watch?v=VIDEO_ID`, without tracking junk.
+- **Switch-first UX.** Controller navigation comes first, with touch where it genuinely helps.
+- **Local-first profiles for v1.** TizenTube profiles, follows, playlists, Watch Later, favorites and history are planned without requiring a Google account.
+- **No credential scraping.** The project will not ask for Google passwords, browser cookies or exported cookie files.
+
+The full contract is in [`docs/PRODUCT_PHILOSOPHY.md`](docs/PRODUCT_PHILOSOPHY.md).
+
+### Reference roles
+
+TizenTube NX uses different projects for different kinds of guidance:
+
+- **YouTube** — familiar information architecture and concepts users already know.
+- **TizenTube** — the primary UI/settings and ad-free viewing-behavior guide.
+- **SponsorBlock** — the primary reference for community-defined sponsor/segment skipping behavior and category settings.
+- **Morphe** — feature discovery and development research for future quality-of-life ideas.
+- **NewPipe** — a lightweight/privacy-conscious independent-client and technical/product reference.
+
+**ReVanced is not a current TizenTube NX product-philosophy/design reference.**
 
 ## What works today
 
@@ -28,21 +53,9 @@ On real Atmosphère hardware, the project has already passed these gates:
 - full sidebar traversal after Search without the earlier blank-page/focus regression;
 - explicit **Load more** continuation that has successfully fetched and appended more results on hardware.
 
-The continuation data path works, but its **focus/scroll UX is still under hardware review**. The current M2 gate is making pagination navigation feel correct after results are appended.
+The continuation data path works. The current M2 gate is the controller focus/scroll behavior after pagination; the latest focus fix is awaiting physical acceptance.
 
 For exact accepted/rejected hardware checkpoints, see the active-branch [`HARDWARE_GATES.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/HARDWARE_GATES.md).
-
-## Project rules
-
-These are not optional preferences; they are part of the design contract.
-
-- **No Shorts.** Shorts/reels are filtered at the data boundary and are not a user-facing feature.
-- **No YouTube ads or promoted/shopping renderers.**
-- **Clean links only.** A video shares as `https://www.youtube.com/watch?v=VIDEO_ID`, without tracking junk.
-- **Switch-first UX.** Controller navigation comes first, with touch used where it actually helps.
-- **Local-first profiles for v1.** TizenTube profiles, follows, playlists, Watch Later, favorites and history are planned without requiring a Google account.
-- **No credential scraping.** The project will not ask for Google passwords, browser cookies or exported cookie files.
-- **Future enhancement support.** SponsorBlock, DeArrow-style metadata, Return YouTube Dislike and other Morphe/ReVanced-style quality-of-life features are planned as separate reviewed integrations.
 
 ## Network & privacy model
 
@@ -71,9 +84,9 @@ More detail: [`NETWORK_SAFETY.md`](https://github.com/GlitchedZeus/Tizentube-NX/
 | **M0 — Foundation** | ✅ Complete | Repository, host tests, clean URL handling, no-Shorts invariant, first NRO |
 | **M1 — Switch shell** | ✅ Complete | Borealis UI, controller/touch navigation, storage, real-hardware shell acceptance |
 | **M2 — Guest browsing** | 🚧 In progress | Safe guest networking, Search, pagination, Home/channel/playlist guest surfaces |
-| **M3 — Playback** | ⏳ Planned | Stream resolver, Switch playback pipeline, quality/captions/audio/seek/resume |
+| **M3 — Playback + ad-free viewing** | ⏳ Planned | Media pipeline, no YouTube-served ads, SponsorBlock + settings, quality/captions/audio/seek/resume |
 | **M4 — Local profiles** | ⏳ Planned | Local subscriptions/follows, playlists, Watch Later, likes/favorites, history, multiple profiles |
-| **M5 — Enhancements** | ⏳ Planned | SponsorBlock, DeArrow-style titles/thumbnails, Return YouTube Dislike, player cleanup |
+| **M5 — Morphe-inspired enhancements** | ⏳ Planned | DeArrow-style metadata, Return YouTube Dislike, player cleanup and selected quality-of-life ideas |
 | **M6 — Daily-driver polish / v1** | ⏳ Planned | Stability, caching/retry, dock/undock, applet/title-takeover testing, release packaging |
 | **M7 — Optional post-v1 YouTube linking** | ⏳ Planned | Official limited-input/device OAuth and controlled import/sync into local profiles |
 
@@ -85,18 +98,35 @@ Guest bootstrap, startup recovery, first-page live Search, inline result details
 
 `Load more` has also proven that continuation requests can fetch and append additional normalized results. The remaining pagination gate is UI-focused: keep the selector visible, preserve natural Up/Down movement around the last result / `Load more` boundary, and keep the accepted Search/sidebar lifecycle intact.
 
-After that, M2 continues with guest Home browsing, channel pages and playlist pages before moving into playback.
+After that, M2 continues with guest Home browsing, channel pages and playlist pages before moving into M3 playback + ad-free viewing.
+
+## Planned player philosophy
+
+M3 is deliberately broader than “make a video play.” The player is accepted only as a complete viewing experience:
+
+1. normal video starts and plays reliably;
+2. no YouTube-served ad is deliberately shown;
+3. seek/pause/resume work;
+4. quality/audio/captions controls work where supported;
+5. SponsorBlock honors the user's category settings;
+6. controller focus/overlays remain stable;
+7. no Shorts route or ad-bearing fallback sneaks around the product rules;
+8. every media/SponsorBlock host receives explicit outbound-policy review before DNS.
+
+SponsorBlock and YouTube-ad suppression are separate layers: SponsorBlock skips community-marked sections inside the creator's video, while TizenTube NX's ad-free contract covers platform-served advertising.
 
 ## Not implemented yet
 
 TizenTube NX is still early. In particular, the current builds do **not** yet provide:
 
 - video playback;
+- YouTube ad-free playback pipeline;
+- SponsorBlock integration/settings;
 - remote thumbnails;
 - live Home/channel/playlist browsing pages;
 - local TizenTube profiles;
 - YouTube/Google account linking;
-- SponsorBlock, DeArrow or Return YouTube Dislike integration;
+- DeArrow or Return YouTube Dislike integration;
 - a polished end-user release installer/update flow.
 
 If you are looking for a finished YouTube replacement today, this repository is not there yet.
@@ -161,6 +191,7 @@ See [`docs/THIRD_PARTY.md`](docs/THIRD_PARTY.md) for dependency attribution.
 
 The newest development documentation currently lives on `feature/m2-guest-browsing`:
 
+- [`PRODUCT_PHILOSOPHY.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/PRODUCT_PHILOSOPHY.md) — product/reference hierarchy and ad-free playback contract
 - [`PROJECT_STATUS.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/PROJECT_STATUS.md) — current implementation status and active gate
 - [`HARDWARE_GATES.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/HARDWARE_GATES.md) — what has actually passed or failed on a physical Switch
 - [`ROADMAP.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/ROADMAP.md) — full milestone checklist
@@ -169,16 +200,16 @@ The newest development documentation currently lives on `feature/m2-guest-browsi
 - [`NETWORK_SAFETY.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/NETWORK_SAFETY.md) — outbound-network policy
 - [`PROFILES_AND_IMPORT.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/PROFILES_AND_IMPORT.md) — local-first profile direction
 - [`OAUTH_ACCOUNT_LINKING.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/OAUTH_ACCOUNT_LINKING.md) — post-v1 optional account-linking design
-- [`MORPHE_REFERENCE.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/MORPHE_REFERENCE.md) — future feature/behavior reference policy
+- [`MORPHE_REFERENCE.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/MORPHE_REFERENCE.md) — Morphe's feature-discovery/research role
 
 ## Contributing / development
 
 This is currently an actively changing homebrew project rather than a stable public release. Small, focused changes are preferred, especially around networking, parser behavior, controller focus and hardware-tested UI paths.
 
-When changing network behavior, do not widen the allowlist casually. New hosts should be treated as an explicit security review, not just added because a YouTube response happens to reference them.
+When changing network behavior, do not widen the allowlist casually. New media, SponsorBlock or metadata hosts must receive explicit policy review rather than being added just because an upstream response references them.
 
 ## License
 
 GPL-3.0-or-later. See [`LICENSE`](LICENSE).
 
-TizenTube NX is an independent homebrew project and is not affiliated with Google, YouTube, TizenTube, ReVanced, NewPipe, Morphe or Nintendo.
+TizenTube NX is an independent homebrew project and is not affiliated with Google, YouTube, TizenTube, SponsorBlock, NewPipe, Morphe or Nintendo.
