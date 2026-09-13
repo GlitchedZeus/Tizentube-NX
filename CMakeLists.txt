@@ -11,6 +11,7 @@ add_library(tizentube_nx_core
     src/core/guest_browse.cpp
     src/core/guest_api.cpp
     src/core/session_bootstrap.cpp
+    src/core/browse_response.cpp
     src/core/outbound_policy.cpp
     src/core/http1.cpp
     src/core/settings.cpp
@@ -35,6 +36,10 @@ if(TTNX_BUILD_TESTS)
     add_executable(tizentube_nx_http1_tests tests/http1_tests.cpp)
     target_link_libraries(tizentube_nx_http1_tests PRIVATE tizentube_nx_core)
     add_test(NAME http1 COMMAND tizentube_nx_http1_tests)
+
+    add_executable(tizentube_nx_browse_response_tests tests/browse_response_tests.cpp)
+    target_link_libraries(tizentube_nx_browse_response_tests PRIVATE tizentube_nx_core)
+    add_test(NAME browse_response COMMAND tizentube_nx_browse_response_tests)
 
     if(UNIX)
         add_executable(tizentube_nx_storage_tests tests/storage_tests.cpp switch/source/app_storage.cpp)
