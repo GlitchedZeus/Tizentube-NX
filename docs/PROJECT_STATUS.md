@@ -7,7 +7,7 @@ M2 — YouTube guest browsing / pre-alpha.
 Branch: `feature/m2-guest-browsing`  
 Draft PR: #6 — `M2: guest browsing networking foundation`
 
-The real-Switch guest bootstrap and startup-recovery gates are accepted. First-page live Search is being re-enabled incrementally on the accepted plain-page shell; physical live-Search acceptance remains pending.
+The real-Switch guest bootstrap, startup-recovery, and first-page live Search gates are accepted. The accepted first-page Search checkpoint is `a5fb638abd6e41d82490a460f41ea096b11d1ea5`; the next UI-only checkpoint fixes result-detail visibility without changing Search networking.
 
 ## Real-hardware guest-bootstrap acceptance
 
@@ -134,13 +134,15 @@ Remote thumbnails remain disabled. Search may normalize thumbnail references, bu
 
 Selecting a result proves normalized routing without starting playback.
 
-The temporary selection detail displays normalized title/type/ID and, when the stable ID is valid, a locally generated canonical clean URL:
+Hardware testing of checkpoint `a5fb638abd6e41d82490a460f41ea096b11d1ea5` exposed a presentation-only issue: the original detail label lived after the entire results box, so its normalized ID/URL was usually off-screen unless a result near the bottom of the first page was selected.
+
+The follow-up UI opens a dedicated Borealis result-detail activity when A is pressed. It displays normalized title/type/ID and, when the stable ID is valid, a locally generated canonical clean URL immediately, with B returning to Search:
 
 - Video: `https://www.youtube.com/watch?v=VIDEO_ID`
 - Channel: canonical stable `/channel/CHANNEL_ID` URL
 - Playlist: canonical `playlist?list=PLAYLIST_ID` URL
 
-No source tracking parameters are preserved.
+The detail activity consumes only the already-normalized in-memory result and performs no additional network request. No source tracking parameters are preserved.
 
 ### Continuation / Load more
 
@@ -241,13 +243,15 @@ No host is authorized merely because YouTube returns a URL for it. Future OAuth/
 
 The real-Switch guest bootstrap remains accepted as `Guest ready`.
 
-The startup-recovery NRO at checkpoint `dbe1de9e0aa278999479dd3eac7a04d37b005b58` has now also been physically tested on the Atmosphère Switch and **booted without crashing**. Treat startup recovery as hardware accepted.
+The startup-recovery NRO at checkpoint `dbe1de9e0aa278999479dd3eac7a04d37b005b58` is physically accepted and boots without the earlier pre-first-frame abort.
 
-The original pre-first-frame `std::abort (0xFFE)` root cause remains **UNKNOWN**. Do not attribute it to Search networking, `bad_alloc`, or the worker hardening without new evidence.
+First-page live Search is now also **PHYSICALLY ACCEPTED** at checkpoint `a5fb638abd6e41d82490a460f41ea096b11d1ea5`. On the real Atmosphère Switch, the query `nintendo switch homebrew` returned 15 normalized live results, the UI reported that more results were available, controller navigation worked, and selecting a normal video produced its normalized video ID plus clean canonical `https://www.youtube.com/watch?v=...` URL. User-supplied screenshots show both the live result list and the selected-video detail.
 
-The current gate is incremental first-page live Search reactivation on the accepted plain `ScrollingFrame` shell. The build must keep startup boot markers, no remote thumbnails, no `Load more`, and the exact `www.youtube.com:443` allowlist.
+The hardware test also found one presentation-only defect: the selection detail label was positioned after the whole first-page result list, making it difficult to see for non-bottom results. The next UI checkpoint replaces that list-bottom label with a dedicated result-detail activity opened by A and closed with B. This does not alter the accepted Search POST/parser/session/network path.
 
-Live Search remains **not hardware accepted** until the new NRO passes the next physical Search test.
+The original pre-first-frame `std::abort (0xFFE)` root cause remains **UNKNOWN**. Do not retroactively attribute it to Search networking, `bad_alloc`, or the worker hardening without new evidence.
+
+`Load more` remains disabled until the result-detail UI checkpoint is verified and continuation is deliberately reintroduced as its own hardware-gated slice. Startup boot markers, remote-thumbnail blocking, and the exact `www.youtube.com:443` allowlist remain unchanged.
 
 ## Physical startup crash investigation — 2026-09-13
 
@@ -260,4 +264,4 @@ Live Search remains **not hardware accepted** until the new NRO passes the next 
 - Preventative Search hardening is retained separately: `std::bad_alloc`, `std::exception` and unknown exceptions are contained by a no-throw worker boundary; exception text is discarded; publication has a no-throw emergency error path; first-page flow state is reset on fatal-like worker failures. This is **not** claimed as the cause of the physical startup crash.
 - Exact outbound policy remains `www.youtube.com:443`; Nintendo hard deny, TLS verification, redirect revalidation, IP-literal rejection and the absence of `switch-curl` remain unchanged.
 - The startup-recovery NRO was subsequently tested on the real Atmosphère Switch and booted without crashing. Startup recovery is therefore **PHYSICALLY ACCEPTED** at `dbe1de9e0aa278999479dd3eac7a04d37b005b58`.
-- Next hardware gate is first-page Search only: preserve the accepted startup shell, manually establish the memory-only guest session, enter a query, verify keyboard close does not search, explicitly press Search, navigate/select normalized results, leave/re-enter Search, exit, and relaunch. `Load more` remains disabled for this gate.
+- First-page Search was subsequently exercised successfully on the physical Atmosphère Switch at `a5fb638abd6e41d82490a460f41ea096b11d1ea5`: the live query returned 15 results and a selected normal video showed its normalized ID and clean canonical URL. First-page live Search is therefore **PHYSICALLY ACCEPTED**. A presentation-only follow-up moves selection details into a dedicated activity because the original label was usually below the visible list. `Load more` remains disabled pending the next hardware-gated slice.

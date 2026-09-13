@@ -109,7 +109,10 @@
 - [x] Real-Switch startup-recovery shell accepted after pre-first-frame crash
 - [x] Re-enable first-page Search on the accepted plain `ScrollingFrame` ownership model
 - [x] Keep `Load more` UI disabled for the first Search-reactivation hardware gate
-- [ ] Real-hardware first-page live Search acceptance
+- [x] Real-hardware first-page live Search acceptance
+- [x] Replace the list-bottom selection detail with a dedicated A-open/B-back result-detail activity
+- [ ] Real-hardware result-detail activity acceptance
+- [ ] Re-enable continuation / `Load more` as a separate hardware-gated slice
 
 ### Future feature seams — not active in M2
 

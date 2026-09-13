@@ -55,6 +55,48 @@ brls::Button* button(brls::Box* box, const std::string& text) {
     return view;
 }
 
+class SearchResultActivity : public brls::Activity {
+public:
+    explicit SearchResultActivity(ttnx::core::BrowseResult result)
+        : result_(std::move(result)) {}
+
+    brls::View* createContentView() override {
+        auto* frame = new brls::AppletFrame();
+        frame->setTitle("Search result");
+
+        auto* scroll = new brls::ScrollingFrame();
+        auto* content = new brls::Box(brls::Axis::COLUMN);
+        content->setPadding(32, 36, 32, 36);
+        scroll->setContentView(content);
+        frame->setContentView(scroll);
+
+        const auto kind = ttnx::core::search_result_kind_label(result_.kind);
+        const auto title = result_.title.empty() ? std::string("Untitled result") : result_.title;
+        label(content, "[" + kind + "] " + bounded_ui_text(title, kMaxUiTitleChars), 30);
+
+        const auto metadata = ttnx::core::search_result_metadata_display(result_);
+        if (!metadata.empty()) {
+            label(content, bounded_ui_text(metadata, kMaxUiMetadataChars), 20);
+        }
+
+        label(content, ttnx::core::search_result_selection_display(result_), 20);
+        label(content,
+              "This screen uses only the normalized Search result already in memory. No extra network request is made.",
+              18);
+
+        auto close = [](brls::View*) {
+            brls::Application::popActivity();
+            return true;
+        };
+        button(content, "Back to Search")->registerClickAction(close);
+        content->registerAction("Back", brls::BUTTON_B, close);
+        return frame;
+    }
+
+private:
+    ttnx::core::BrowseResult result_;
+};
+
 class ShellActivity : public brls::Activity {
 public:
     ShellActivity(
@@ -167,7 +209,6 @@ private:
     brls::Label* search_status_label_{nullptr};
     brls::Button* search_action_button_{nullptr};
     brls::Box* search_results_box_{nullptr};
-    brls::Label* search_selection_label_{nullptr};
 
     void refresh_footer() {
         if (!footer_) return;
@@ -285,7 +326,9 @@ private:
             select->setHeight(72);
             select->registerClickAction([this, identity](brls::View*) {
                 if (!search_model_.select(identity)) return true;
-                refresh_search_selection();
+                if (const auto* selected = selected_search_result()) {
+                    brls::Application::pushActivity(new SearchResultActivity(*selected));
+                }
                 return true;
             });
 
@@ -297,17 +340,6 @@ private:
                     18);
                 metadata_label->setMarginBottom(14);
             }
-        }
-    }
-
-    void refresh_search_selection() {
-        if (!search_selection_label_) return;
-        if (const auto* result = selected_search_result()) {
-            search_selection_label_->setText(
-                ttnx::core::search_result_selection_display(*result));
-        } else {
-            search_selection_label_->setText(
-                "Select a result to inspect its normalized identity. Playback is not enabled yet.");
         }
     }
 
@@ -331,7 +363,6 @@ private:
 
 
         if (rebuild_results) rebuild_search_results();
-        refresh_search_selection();
     }
 
     void publish_network_result(
@@ -671,7 +702,6 @@ private:
         search_status_label_ = nullptr;
         search_action_button_ = nullptr;
         search_results_box_ = nullptr;
-        search_selection_label_ = nullptr;
         auto* scroll = new brls::ScrollingFrame();
         auto* content = new brls::Box(brls::Axis::COLUMN);
         content->setPadding(32, 36, 32, 36);
@@ -736,14 +766,13 @@ private:
             });
 
             search_status_label_ = label(content, "", 20);
+            label(content,
+                  "Press A on any result to open its normalized ID and clean canonical URL.",
+                  18);
             search_results_box_ = new brls::Box(brls::Axis::COLUMN);
             search_results_box_->setMarginBottom(8);
             content->addView(search_results_box_);
 
-            search_selection_label_ = label(
-                content,
-                "Select a result to inspect its normalized identity. Playback is not enabled yet.",
-                18);
             label(content,
                   "Load more is disabled for this hardware gate. No Shorts, ads, promoted or shopping renderers may reach this list.",
                   18);
