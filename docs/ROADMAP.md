@@ -116,7 +116,7 @@
 - [x] Hardware-observe inline detail rendering at `36015cb...` but reject the overall UI checkpoint after blank-page/sidebar-focus regression
 - [x] Remove destructive selection-time result-tree rebuilding and forced result refocus
 - [x] Return B to the active SidebarItem instead of the Sidebar container/default Home item
-- [ ] Real-hardware inline-detail + full sidebar traversal acceptance
+- [x] Real-hardware inline-detail + full sidebar traversal acceptance at `d6910a232732b2bd9169abb11dfdf320cf35a34b`
 - [ ] Re-enable continuation / `Load more` as a separate hardware-gated slice
 
 ### Future feature seams — not active in M2
@@ -229,4 +229,4 @@ See `docs/PROFILES_AND_IMPORT.md` and `docs/OAUTH_ACCOUNT_LINKING.md` for the fu
 
 ## Current gate
 
-**Guest bootstrap, startup recovery and first-page live Search are physically accepted. The current gate is the inline-detail/sidebar lifecycle fix after `36015cb...` was rejected for blank Search content and Home/Search-only sidebar traversal. `Load more` remains disabled. Preserve the exact `www.youtube.com:443` allowlist and hard Shorts/ad firewall; post-v1 OAuth remains documentation only during M2.**
+**Guest bootstrap, startup recovery, first-page live Search, inline result detail, and full sidebar traversal are physically accepted. The next Search gate is continuation / `Load more`, reintroduced as a separate hardware-gated slice. Preserve the accepted non-destructive result View lifecycle, exact `www.youtube.com:443` allowlist, hard Shorts/ad firewall, remote-thumbnail block, and post-v1 OAuth documentation-only boundary during M2.**
