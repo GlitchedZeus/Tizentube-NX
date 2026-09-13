@@ -7,7 +7,7 @@ M2 — YouTube guest browsing / pre-alpha.
 Branch: `feature/m2-guest-browsing`  
 Draft PR: #6 — `M2: guest browsing networking foundation`
 
-The real-Switch guest bootstrap, startup-recovery, and first-page live Search gates remain accepted. Checkpoint `36015cb2bf9ae98fc983674563e9df0935232123` proved inline result detail rendering but is rejected as an overall UI checkpoint because Search can blank and sidebar traversal becomes trapped at Home/Search. The current UI-only fix removes destructive selection-time result rebuilding and returns B to the active sidebar item without changing Search networking.
+The real-Switch guest bootstrap, startup-recovery, first-page live Search, inline result-detail, and full sidebar traversal gates are now physically accepted. Hardware-tested NRO head `d6910a232732b2bd9169abb11dfdf320cf35a34b` closes the blank-Search/Home-Search-focus regression introduced by `36015cb...`. The next Search hardware gate is continuation / `Load more`, reintroduced without changing the accepted first-page networking/parser path or the accepted non-destructive Borealis result lifecycle.
 
 ## Real-hardware guest-bootstrap acceptance
 
@@ -138,19 +138,21 @@ Hardware testing of checkpoint `a5fb638abd6e41d82490a460f41ea096b11d1ea5` expose
 
 The first follow-up attempted a dedicated Borealis result-detail activity at clean checkpoint `5e566c0a4a8c2b5c040686bcc95a305c675cc4ce`. Physical hardware rejected that presentation: pressing A produced a black blank pushed activity, while the correct normalized detail content became visible only for a fraction of a second during the B/pop transition. The underlying result data remained correct; this was a presentation/navigation failure.
 
-The replacement keeps result details inside the already-stable Search `ScrollingFrame`. Pressing A selects the normalized result, returns from the button callback, and schedules a one-frame-deferred list rebuild. On the next UI tick, the selected result's normalized type/title/ID and locally generated clean canonical URL are inserted directly below that result, and controller focus is restored to the same card:
+Checkpoint `36015cb2bf9ae98fc983674563e9df0935232123` then proved that inline detail rendering itself worked, but its selection path rebuilt the entire result tree and force-focused a replacement result. Combined with focusing the Sidebar container on B, that caused a blank Search page and trapped sidebar traversal at Home/Search. That overall UI checkpoint was rejected.
+
+The accepted replacement is the hardware-tested NRO at `d6910a232732b2bd9169abb11dfdf320cf35a34b`, with underlying UI fix `2642ba7ff559879222a6cddc2b236afbd07c0012`. Result buttons remain alive for selection; each result owns a pre-created inline detail label and A only changes detail visibility. The normalized type/title/ID and locally generated clean canonical URL appear directly with the selected result:
 
 - Video: `https://www.youtube.com/watch?v=VIDEO_ID`
 - Channel: canonical stable `/channel/CHANNEL_ID` URL
 - Playlist: canonical `playlist?list=PLAYLIST_ID` URL
 
-The one-frame defer is deliberate: it avoids removing/deleting the focused Borealis button while that button's own A callback is executing. The inline detail uses only the already-normalized in-memory result and performs no additional network request. No source tracking parameters are preserved.
+B now focuses the active SidebarItem instead of the Sidebar container/default Home descendant. Physical testing confirmed Search stays populated and full sidebar traversal through Home, Search, Subscriptions, Library and Settings works normally. The inline detail uses only already-normalized in-memory result data and performs no additional network request. No source tracking parameters are preserved.
 
 ### Continuation / Load more
 
-The continuation core remains host-tested, but the first Search-reactivation hardware gate intentionally exposes **first-page Search only**. No `Load more` action is shown in this build.
+The continuation core remains host-tested. The accepted Search UI intentionally kept **first-page Search only** while the result-detail/sidebar lifecycle gate was being proven on hardware.
 
-The existing continuation flow, token ownership, repeated-token loop prevention, dedupe and retry behavior remain in core code/tests for a later hardware-gated slice. Disabling the UI action reduces page-lifetime and worker-state complexity while first-page Search is validated on the physical Switch.
+That gate is now accepted. `Load more` is therefore the next deliberate hardware slice. It must preserve existing first-page results, the accepted non-destructive result View lifecycle, sidebar traversal, stale-generation safety, repeated-token loop prevention, normalized dedupe, retryability, and the existing renderer firewall. It must not widen the network allowlist.
 
 ### Error states
 
@@ -247,15 +249,13 @@ The real-Switch guest bootstrap remains accepted as `Guest ready`.
 
 The startup-recovery NRO at checkpoint `dbe1de9e0aa278999479dd3eac7a04d37b005b58` is physically accepted and boots without the earlier pre-first-frame abort.
 
-First-page live Search is now also **PHYSICALLY ACCEPTED** at checkpoint `a5fb638abd6e41d82490a460f41ea096b11d1ea5`. On the real Atmosphère Switch, the query `nintendo switch homebrew` returned 15 normalized live results, the UI reported that more results were available, controller navigation worked, and selecting a normal video produced its normalized video ID plus clean canonical `https://www.youtube.com/watch?v=...` URL. User-supplied screenshots show both the live result list and the selected-video detail.
+First-page live Search is **PHYSICALLY ACCEPTED** at checkpoint `a5fb638abd6e41d82490a460f41ea096b11d1ea5`. On the real Atmosphère Switch, the query `nintendo switch homebrew` returned 15 normalized live results, the UI reported that more results were available, controller navigation worked, and selecting a normal video produced its normalized video ID plus clean canonical `https://www.youtube.com/watch?v=...` URL.
 
-The hardware test also found one presentation-only defect: the selection detail label was positioned after the whole first-page result list, making it difficult to see for non-bottom results. A dedicated result-detail activity was then tested at `5e566c0a4a8c2b5c040686bcc95a305c675cc4ce` and failed its physical UI gate: the pushed activity stayed black until B was pressed, when the correct detail screen flashed briefly during the pop transition. That checkpoint is **NOT accepted** as a result-detail UI.
-
-The next UI-only checkpoint therefore removes the separate Activity path and expands the selected normalized result inline within the existing hardware-stable Search page. This does not alter the accepted Search POST/parser/session/network path.
+The result-detail/sidebar lifecycle is also **PHYSICALLY ACCEPTED** using NRO head `d6910a232732b2bd9169abb11dfdf320cf35a34b` and UI fix checkpoint `2642ba7ff559879222a6cddc2b236afbd07c0012`. Hardware confirmed inline detail selection, persistent Search content after B, correct Search sidebar focus, and traversal through Home, Search, Subscriptions, Library and Settings without the previous blank-page or Home/Search-only trap.
 
 The original pre-first-frame `std::abort (0xFFE)` root cause remains **UNKNOWN**. Do not retroactively attribute it to Search networking, `bad_alloc`, or the worker hardening without new evidence.
 
-`Load more` remains disabled until the result-detail UI checkpoint is verified and continuation is deliberately reintroduced as its own hardware-gated slice. Startup boot markers, remote-thumbnail blocking, and the exact `www.youtube.com:443` allowlist remain unchanged.
+The next activation gate is continuation / `Load more`. Startup boot markers, remote-thumbnail blocking, and the exact `www.youtube.com:443` allowlist remain unchanged.
 
 ## Physical startup crash investigation — 2026-09-13
 
@@ -268,7 +268,7 @@ The original pre-first-frame `std::abort (0xFFE)` root cause remains **UNKNOWN**
 - Preventative Search hardening is retained separately: `std::bad_alloc`, `std::exception` and unknown exceptions are contained by a no-throw worker boundary; exception text is discarded; publication has a no-throw emergency error path; first-page flow state is reset on fatal-like worker failures. This is **not** claimed as the cause of the physical startup crash.
 - Exact outbound policy remains `www.youtube.com:443`; Nintendo hard deny, TLS verification, redirect revalidation, IP-literal rejection and the absence of `switch-curl` remain unchanged.
 - The startup-recovery NRO was subsequently tested on the real Atmosphère Switch and booted without crashing. Startup recovery is therefore **PHYSICALLY ACCEPTED** at `dbe1de9e0aa278999479dd3eac7a04d37b005b58`.
-- First-page Search was subsequently exercised successfully on the physical Atmosphère Switch at `a5fb638abd6e41d82490a460f41ea096b11d1ea5`: the live query returned 15 results and a selected normal video showed its normalized ID and clean canonical URL. First-page live Search is therefore **PHYSICALLY ACCEPTED**. A presentation-only follow-up moves selection details into a dedicated activity because the original label was usually below the visible list. `Load more` remains disabled pending the next hardware-gated slice.
+- First-page Search was subsequently exercised successfully on the physical Atmosphère Switch at `a5fb638abd6e41d82490a460f41ea096b11d1ea5`: the live query returned 15 results and a selected normal video showed its normalized ID and clean canonical URL. First-page live Search is therefore **PHYSICALLY ACCEPTED**. `Load more` remained disabled pending the later UI lifecycle gate.
 
 ## Inline-detail focus/page-lifecycle regression — 2026-09-13
 
@@ -278,6 +278,6 @@ Source review of pinned Borealis `20e2d33b6c4ffce139ce304c503c04f5b94da920` iden
 
 The Sections/B path also targeted the Sidebar container. Borealis resolves container focus via `getDefaultFocus()`, which selects the first sidebar item (Home); activating Home causes TabFrame to synchronously remove the Search page. The replacement resolves the actual active SidebarItem instead, so B from Search does not change the active tab or destroy the Search page.
 
-The candidate fix also removes selection-time list rebuilding entirely. Result buttons and metadata remain alive; each result owns a pre-created detail label whose `VISIBLE`/`GONE` state changes when selection changes. Full list rebuilding remains limited to genuinely new Search results or reconstructing a Search page after a real tab switch.
+The accepted fix removes selection-time list rebuilding entirely. Result buttons and metadata remain alive; each result owns a pre-created detail label whose `VISIBLE`/`GONE` state changes when selection changes. Full list rebuilding remains limited to genuinely new Search results or reconstructing a Search page after a real tab switch.
 
-`Load more` remains disabled. Guest bootstrap and first-page Search acceptance remain unchanged.
+Hardware-tested NRO head `d6910a232732b2bd9169abb11dfdf320cf35a34b` passed the full inline-detail/sidebar traversal sequence and is now accepted for this UI lifecycle gate. `Load more` remains the next separate hardware-gated slice. Guest bootstrap and first-page Search acceptance remain unchanged.
