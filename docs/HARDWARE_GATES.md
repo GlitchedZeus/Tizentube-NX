@@ -198,6 +198,10 @@ Hardware-tested NRO head: `ba0066b34270bfa1809dc5d3567aead86a298033`
 
 Physical Switch result: **REJECTED**. Guest bootstrap, sockets, SSL and verified HTTPS all succeeded, and the explicit `Load Home` action completed, but the UI reported `YouTube Home returned no supported normal results.` No Home rows were rendered. This is therefore treated as a Home response-shape/parser-scope problem, not a guest-network failure.
 
-The next candidate adds bounded structural diagnostics only: browse layout, tab/selected-tab counts, reviewed renderer/container family names and counts, blocked-category counts, continuation-renderer counts, opaque-wrapper counts, and at most 16 bounded opaque family names. It never exposes titles, IDs, URLs, continuation tokens, visitor data, API keys, cookies, request headers or raw response bodies. Unknown wrappers remain opaque to normalization, and the diagnostic scanner also stops at them instead of inspecting descendants.
+The diagnostic implementation is `8d4bbc7e58e80e711232cade97c7608b8b3e6e42`. The exact-head hardware-diagnostic candidate is `f903d26606ff0bb84a7a1988393708114e7fa01d`; host tests and the devkitA64 build are green at that head.
+
+The diagnostic candidate adds bounded structural diagnostics only: browse layout, tab/selected-tab counts, reviewed renderer/container family names and counts, blocked-category counts, continuation-renderer counts, opaque-wrapper counts, and at most 16 bounded opaque family names. It never exposes titles, IDs, URLs, continuation tokens, visitor data, API keys, cookies, request headers or raw response bodies. Unknown wrappers remain opaque to normalization, and the diagnostic scanner also stops at them instead of inspecting descendants.
 
 The exact M2 network allowlist remains `www.youtube.com:443`. Search checkpoint `428497c90be6e768c607e45c68171827d74f0faf` remains a protected accepted baseline. Home continuation, thumbnails, playback and OAuth remain disabled for this diagnostic gate.
+
+Next physical test: launch -> Guest ready -> `Load Home` -> photograph the bounded `Home diag:` summary. Home first-page content remains **NOT ACCEPTED** until that hardware evidence identifies the actual response family.
