@@ -6,6 +6,7 @@
 #include <limits>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace ttnx::net {
 namespace {
@@ -32,11 +33,6 @@ bool iequals(std::string_view a, std::string_view b) {
         }
     }
     return true;
-}
-
-bool contains_crlf(std::string_view value) {
-    return value.find('\r') != std::string_view::npos ||
-           value.find('\n') != std::string_view::npos;
 }
 
 bool valid_header_name(std::string_view name) {
@@ -220,6 +216,7 @@ std::optional<HttpsUrl> parse_https_url(std::string_view url) {
         if (value == 0) return std::nullopt;
         port = static_cast<unsigned short>(value);
     }
+    if (port != 443) return std::nullopt;
 
     if (!valid_host_ascii(host)) return std::nullopt;
 
@@ -246,7 +243,7 @@ std::optional<HttpsUrl> parse_https_url(std::string_view url) {
 std::optional<std::string> build_http1_request(
     const HttpRequest& request,
     const HttpsUrl& url) {
-    if (!valid_host_ascii(url.host) || !valid_request_target(url.target)) {
+    if (!valid_host_ascii(url.host) || url.port != 443 || !valid_request_target(url.target)) {
         return std::nullopt;
     }
 
@@ -256,10 +253,6 @@ std::optional<std::string> build_http1_request(
     output += url.target;
     output += " HTTP/1.1\r\nHost: ";
     output += url.host;
-    if (url.port != 443) {
-        output += ':';
-        output += std::to_string(url.port);
-    }
     output += "\r\nConnection: close\r\nAccept-Encoding: identity\r\n";
 
     for (const auto& header : request.headers) {
