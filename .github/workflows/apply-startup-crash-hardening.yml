@@ -1,0 +1,134 @@
+name: apply-startup-crash-hardening
+
+on:
+  push:
+    branches:
+      - feature/m2-guest-browsing
+    paths:
+      - .github/workflows/apply-startup-crash-hardening.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/m2-guest-browsing
+          fetch-depth: 0
+      - name: Apply startup quarantine and crash hardening
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, found {count}")
+              return text.replace(old, new, 1)
+
+          path = Path('switch/source/main.cpp')
+          text = path.read_text()
+
+          text = replace_once(
+              text,
+              '#include "tizentube_nx/youtube/search_flow.hpp"\n',
+              '#include "tizentube_nx/youtube/search_flow.hpp"\n#include "tizentube_nx/youtube/search_worker_guard.hpp"\n',
+              'guard include')
+
+          text = replace_once(
+              text,
+              '    brls::View* createContentView() override {\n        auto* frame = new brls::TabFrame();\n',
+              '    brls::View* createContentView() override {\n        ttnx::record_boot_event("boot-07-create-content");\n        auto* frame = new brls::TabFrame();\n        ttnx::record_boot_event("boot-08-tabframe");\n',
+              'createContent markers')
+
+          text = replace_once(
+              text,
+              '        }\n        refresh_footer();\n        return frame;\n    }\n\n    void tick() {\n        pump_network_result();\n        pump_search_result();\n        update_frame_rate();\n',
+              '        }\n        ttnx::record_boot_event("boot-09-tabs-added");\n        refresh_footer();\n        return frame;\n    }\n\n    void tick() {\n        pump_network_result();\n        // Live Search is quarantined for the startup-only hardware gate.\n        // No Search worker completion is pumped until startup is accepted.\n        update_frame_rate();\n',
+              'tabs/tick quarantine')
+
+          text = replace_once(
+              text,
+              '    bool pending_search_result_{false};\n    std::uint64_t pending_search_generation_{0};\n    SearchWorkerKind pending_search_kind_{SearchWorkerKind::FirstPage};\n    ttnx::youtube::GuestSearchResult pending_search_;\n',
+              '    bool pending_search_result_{false};\n    std::uint64_t pending_search_generation_{0};\n    SearchWorkerKind pending_search_kind_{SearchWorkerKind::FirstPage};\n    ttnx::youtube::GuestSearchResult pending_search_;\n    std::atomic_bool pending_search_emergency_{false};\n    std::atomic<std::uint64_t> pending_search_emergency_generation_{0};\n    std::atomic<ttnx::core::SearchErrorCode> pending_search_emergency_code_{\n        ttnx::core::SearchErrorCode::None};\n    std::atomic<ttnx::youtube::SearchWorkerStage> search_worker_stage_{\n        ttnx::youtube::SearchWorkerStage::Idle};\n',
+              'search emergency fields')
+
+          old_publish = '''    void publish_search_result(\n        std::uint64_t generation,\n        SearchWorkerKind kind,\n        ttnx::youtube::GuestSearchResult result) {\n        {\n            std::lock_guard<std::mutex> lock(search_mutex_);\n            pending_search_generation_ = generation;\n            pending_search_kind_ = kind;\n            pending_search_ = std::move(result);\n            pending_search_result_ = true;\n        }\n        // Keep search_busy_ true until the UI thread joins and applies the\n        // completion. This closes the tiny window where a second button press\n        // could overwrite an unconsumed pending completion.\n        search_worker_done_.store(true);\n    }\n'''
+          new_publish = '''    void publish_search_result(\n        std::uint64_t generation,\n        SearchWorkerKind kind,\n        ttnx::youtube::GuestSearchResult result) noexcept {\n        try {\n            std::lock_guard<std::mutex> lock(search_mutex_);\n            pending_search_generation_ = generation;\n            pending_search_kind_ = kind;\n            pending_search_ = std::move(result);\n            pending_search_result_ = true;\n        } catch (const std::bad_alloc&) {\n            pending_search_emergency_generation_.store(generation);\n            pending_search_emergency_code_.store(ttnx::core::SearchErrorCode::MemoryPressure);\n            pending_search_emergency_.store(true);\n        } catch (...) {\n            pending_search_emergency_generation_.store(generation);\n            pending_search_emergency_code_.store(ttnx::core::SearchErrorCode::InternalFailure);\n            pending_search_emergency_.store(true);\n        }\n        // Keep search_busy_ true until the UI thread joins and applies the\n        // completion. This closes the tiny window where a second button press\n        // could overwrite an unconsumed pending completion.\n        search_worker_done_.store(true);\n    }\n'''
+          text = replace_once(text, old_publish, new_publish, 'noexcept publication')
+
+          text = replace_once(
+              text,
+              '        search_worker_done_.store(false);\n        search_busy_.store(false);\n\n        bool applied = false;\n        if (have_result) {\n',
+              '        const bool have_emergency = pending_search_emergency_.exchange(false);\n        const auto emergency_generation = pending_search_emergency_generation_.load();\n        const auto emergency_code = pending_search_emergency_code_.load();\n\n        search_worker_done_.store(false);\n        search_busy_.store(false);\n\n        bool applied = false;\n        if (have_result) {\n',
+              'emergency pump read')
+
+          text = replace_once(
+              text,
+              '                applied = search_model_.fail(generation, code);\n            }\n        }\n\n        refresh_footer();\n',
+              '                applied = search_model_.fail(generation, code);\n            }\n        } else if (have_emergency) {\n            applied = search_model_.fail(emergency_generation, emergency_code);\n        }\n\n        refresh_footer();\n',
+              'emergency pump apply')
+
+          old_worker = '''        const auto session = *guest_session_;\n        try {\n            search_worker_ = std::thread(\n                [this, generation, kind, query = std::move(query), session] {\n                    ttnx::youtube::GuestSearchResult result;\n                    if (kind == SearchWorkerKind::Continuation) {\n                        result = search_flow_.next(network_client_, session);\n                    } else {\n                        result = search_flow_.begin(network_client_, session, query);\n                    }\n                    publish_search_result(generation, kind, std::move(result));\n                });\n        } catch (...) {\n            search_busy_.store(false);\n            search_worker_done_.store(false);\n            search_model_.fail(generation, ttnx::core::SearchErrorCode::NetworkUnavailable);\n            refresh_footer();\n            refresh_search_page(false);\n        }\n'''
+          new_worker = '''        try {\n            const auto session = *guest_session_;\n            search_worker_ = std::thread(\n                [this, generation, kind, query = std::move(query), session] {\n                    ttnx::youtube::SearchWorkerStage stage =\n                        ttnx::youtube::SearchWorkerStage::BuildingRequest;\n                    search_worker_stage_.store(stage);\n                    auto protected_result = ttnx::youtube::protect_search_worker_operation(\n                        stage,\n                        [&] {\n                            stage = ttnx::youtube::SearchWorkerStage::SendingRequest;\n                            search_worker_stage_.store(stage);\n                            auto result = kind == SearchWorkerKind::Continuation\n                                ? search_flow_.next(network_client_, session)\n                                : search_flow_.begin(network_client_, session, query);\n                            stage = ttnx::youtube::SearchWorkerStage::Normalizing;\n                            search_worker_stage_.store(stage);\n                            return result;\n                        },\n                        [&] {\n                            if (kind == SearchWorkerKind::FirstPage) search_flow_.reset();\n                        });\n                    search_worker_stage_.store(protected_result.failure_stage);\n                    publish_search_result(\n                        generation, kind, std::move(protected_result.result));\n                    if (!protected_result.caught_exception) {\n                        search_worker_stage_.store(ttnx::youtube::SearchWorkerStage::Complete);\n                    }\n                });\n        } catch (const std::bad_alloc&) {\n            search_busy_.store(false);\n            search_worker_done_.store(false);\n            const bool applied = search_model_.fail(\n                generation, ttnx::core::SearchErrorCode::MemoryPressure);\n            refresh_footer();\n            refresh_search_page(applied);\n        } catch (...) {\n            search_busy_.store(false);\n            search_worker_done_.store(false);\n            const bool applied = search_model_.fail(\n                generation, ttnx::core::SearchErrorCode::InternalFailure);\n            refresh_footer();\n            refresh_search_page(applied);\n        }\n'''
+          text = replace_once(text, old_worker, new_worker, 'worker exception boundary')
+
+          text = replace_once(
+              text,
+              '        auto* scroll = new TrackedSectionPage(this, section);\n        active_page_ = scroll;\n        auto* content = new brls::Box(brls::Axis::COLUMN);\n',
+              '        // Startup recovery build: use the same plain ScrollingFrame ownership\n        // model as the physically accepted checkpoint. Tab switches are synchronous\n        // on the UI thread, so stale UI-only pointers are cleared before creating\n        // the replacement page.\n        home_probe_button_ = nullptr;\n        home_status_label_ = nullptr;\n        home_detail_label_ = nullptr;\n        search_query_label_ = nullptr;\n        search_status_label_ = nullptr;\n        search_action_button_ = nullptr;\n        search_results_box_ = nullptr;\n        search_load_more_button_ = nullptr;\n        search_selection_label_ = nullptr;\n        auto* scroll = new brls::ScrollingFrame();\n        auto* content = new brls::Box(brls::Axis::COLUMN);\n',
+              'plain startup page ownership')
+
+          text = replace_once(
+              text,
+              '            refresh_home_page();\n            break;\n        }\n        case RootSection::Search: {\n',
+              '            ttnx::record_boot_event("boot-10-home-created");\n            break;\n        }\n        case RootSection::Search: {\n',
+              'home startup marker')
+
+          start = text.index('        case RootSection::Search: {\n')
+          end = text.index('        case RootSection::Subscriptions:', start)
+          static_search = '''        case RootSection::Search: {\n            label(content, "Search", 34);\n            label(content,\n                  "Startup recovery build: live Search is temporarily quarantined.",\n                  20);\n            label(content,\n                  "This page performs no network request. Startup must be accepted on hardware before Search is re-enabled.",\n                  20);\n            label(content,\n                  "The Search parser, firewall and worker hardening remain in the codebase for the next gated slice.",\n                  18);\n            ttnx::record_boot_event("boot-11-search-created");\n            break;\n        }\n'''
+          text = text[:start] + static_search + text[end:]
+
+          old_main = '''int main(int, char**) {\n    const bool storage_ready = ttnx::initialize_storage();\n    const auto settings = ttnx::load_settings();\n    ttnx::record_boot_event("starting-interface");\n\n    brls::Logger::setLogLevel(brls::LogLevel::ERROR);\n    if (!brls::Application::init()) {\n        ttnx::record_boot_event("interface-initialization-failed");\n        return EXIT_FAILURE;\n    }\n\n    brls::Application::createWindow("TizenTube NX");\n    brls::Application::setGlobalQuit(true);\n\n    // Borealis userAppInit() has already initialized the process socket runtime.\n    // This app-lifetime client borrows sockets and acquires one ref-counted SSL\n    // initialization. Its destructor runs when main() unwinds, before Borealis\n    // userAppExit() releases the framework-owned socket environment.\n    ttnx::switch_app::LibnxHttpClient network_client;\n    auto* shell = new ShellActivity(settings, storage_ready, network_client);\n    brls::Application::pushActivity(shell);\n    hidInitializeTouchScreen();\n    ttnx::record_boot_event("interface-ready");\n\n    while (brls::Application::mainLoop()) {\n        handle_touch(shell);\n        shell->tick();\n    }\n'''
+          new_main = '''int main(int, char**) {\n    ttnx::record_boot_event("boot-00-main");\n    const bool storage_ready = ttnx::initialize_storage();\n    ttnx::record_boot_event("boot-01-storage");\n    const auto settings = ttnx::load_settings();\n\n    brls::Logger::setLogLevel(brls::LogLevel::ERROR);\n    ttnx::record_boot_event("boot-02-brls-init-begin");\n    if (!brls::Application::init()) {\n        ttnx::record_boot_event("boot-02-brls-init-failed");\n        return EXIT_FAILURE;\n    }\n    ttnx::record_boot_event("boot-02-brls-init-done");\n\n    ttnx::record_boot_event("boot-03-window-begin");\n    brls::Application::createWindow("TizenTube NX");\n    ttnx::record_boot_event("boot-03-window-done");\n    brls::Application::setGlobalQuit(true);\n\n    // Borealis userAppInit() has already initialized the process socket runtime.\n    // This app-lifetime client borrows sockets and acquires one ref-counted SSL\n    // initialization. Its destructor runs when main() unwinds, before Borealis\n    // userAppExit() releases the framework-owned socket environment.\n    ttnx::record_boot_event("boot-04-network-client-begin");\n    ttnx::switch_app::LibnxHttpClient network_client;\n    ttnx::record_boot_event("boot-04-network-client-done");\n    auto* shell = new ShellActivity(settings, storage_ready, network_client);\n    ttnx::record_boot_event("boot-05-shell-ctor");\n    ttnx::record_boot_event("boot-06-push-activity-begin");\n    brls::Application::pushActivity(shell);\n    ttnx::record_boot_event("boot-12-push-activity-done");\n    hidInitializeTouchScreen();\n    ttnx::record_boot_event("boot-13-touch");\n    ttnx::record_boot_event("boot-14-interface-ready");\n\n    bool first_loop = true;\n    ttnx::record_boot_event("boot-15-first-loop");\n    while (brls::Application::mainLoop()) {\n        if (first_loop) {\n            first_loop = false;\n            ttnx::record_boot_event("boot-16-first-frame-done");\n        }\n        handle_touch(shell);\n        shell->tick();\n    }\n'''
+          text = replace_once(text, old_main, new_main, 'boot markers')
+          path.write_text(text)
+
+          # Memory-pressure failures are safe to retry; unexpected internal
+          # failures remain non-retryable until a fresh explicit Search action.
+          model = Path('src/core/search_model.cpp')
+          model_text = model.read_text()
+          model_text = replace_once(
+              model_text,
+              '    return code == SearchErrorCode::NetworkUnavailable ||\n           code == SearchErrorCode::HttpFailure ||\n           code == SearchErrorCode::ContinuationFailure;\n',
+              '    return code == SearchErrorCode::NetworkUnavailable ||\n           code == SearchErrorCode::HttpFailure ||\n           code == SearchErrorCode::ContinuationFailure ||\n           code == SearchErrorCode::MemoryPressure;\n',
+              'retryable memory pressure')
+          model.write_text(model_text)
+
+          workflow = Path('.github/workflows/switch-build.yml')
+          workflow_text = workflow.read_text()
+          workflow_text = replace_once(
+              workflow_text,
+              '      - name: Upload NRO\n        uses: actions/upload-artifact@v4\n        with:\n          name: tizentube-nx-nro\n          path: tizentube_nx.nro\n          if-no-files-found: error\n',
+              '      - name: Upload NRO\n        uses: actions/upload-artifact@v4\n        with:\n          name: tizentube-nx-nro\n          path: tizentube_nx.nro\n          if-no-files-found: error\n      - name: Upload exact debug symbols\n        uses: actions/upload-artifact@v4\n        with:\n          name: tizentube-nx-debug-symbols\n          path: |\n            tizentube_nx.elf\n            build-switch/tizentube_nx.map\n          if-no-files-found: error\n',
+              'debug symbol artifact')
+          workflow.write_text(workflow_text)
+
+          status = Path('docs/PROJECT_STATUS.md')
+          status_text = status.read_text()
+          marker = '## Physical startup crash investigation — 2026-09-13'
+          if marker not in status_text:
+              status_text += '''\n\n## Physical startup crash investigation — 2026-09-13\n\n- First hardware attempt of checkpoint `5b46829ead0a94089696e1521cb101637e2bfb3e` aborted immediately from Spaira before the TizenTube NX UI became visible. Atmosphère reported `std::abort (0xFFE)`.\n- No guest probe, Search tab interaction, keyboard, Search POST or live YouTube Search response occurred. Live Search hardware acceptance is therefore **FAILED / BLOCKED**, while the earlier guest-bootstrap checkpoint `96dbf0be46d7fddb38a5510d9269d267e74fcce2` remains physically accepted.\n- The exact bad NRO was reconstructed byte-for-byte. Its hardware offsets were symbolicated against the matching ELF/map. The reported PC `+0x89568` resolves inside pinned Borealis `SwitchVideoContext::updateWindowSize()` to a normal `ldr x21, [sp,#32]` in the display-resolution fallback path; the mixed stack-scan candidates do not form a trustworthy unwind chain. Root cause remains **UNKNOWN**.\n- Pinned Borealis creates TabFrame pages lazily. Initial focus creates Home; Search is not eagerly constructed, so `refresh_search_page()` is not on the normal pre-first-frame startup path.\n- Accepted-vs-bad binary review found identical `.bss`/TLS sizes. The bad image added about 168 KiB of allocatable sections, mostly code, which does not support a startup OOM conclusion.\n- Startup recovery build quarantines live Search UI/network execution, restores plain `ScrollingFrame` page ownership used by the accepted shell, and writes bounded last-stage boot markers through first-frame completion.\n- Preventative Search hardening is retained separately: `std::bad_alloc`, `std::exception` and unknown exceptions are contained by a no-throw worker boundary; exception text is discarded; publication has a no-throw emergency error path; first-page flow state is reset on fatal-like worker failures. This is **not** claimed as the cause of the physical startup crash.\n- Exact outbound policy remains `www.youtube.com:443`; Nintendo hard deny, TLS verification, redirect revalidation, IP-literal rejection and the absence of `switch-curl` remain unchanged.\n- Next hardware gate is startup only: launch, idle 30 seconds, navigate all tabs without Guest/Search networking, exit, and relaunch once.\n'''
+              status.write_text(status_text)
+          PY
+
+          git rm .github/workflows/apply-startup-crash-hardening.yml
+          git config user.name "GlitchedZeus"
+          git config user.email "user91746@protonmail.com"
+          git add switch/source/main.cpp src/core/search_model.cpp .github/workflows/switch-build.yml docs/PROJECT_STATUS.md
+          git commit -m "switch: quarantine Search for startup crash recovery"
+          git push origin HEAD:feature/m2-guest-browsing
