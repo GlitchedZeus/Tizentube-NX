@@ -1,0 +1,41 @@
+name: refresh-crash-status
+
+on:
+  push:
+    branches:
+      - debug/refresh-crash-status
+    paths:
+      - .github/workflows/refresh-crash-status.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-doc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: debug/refresh-crash-status
+      - name: Make crash gate authoritative
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          p = Path('docs/PROJECT_STATUS.md')
+          s = p.read_text()
+          old_phase = 'The real-Switch guest bootstrap gate is accepted. Live Search is now implemented and CI-built; physical live-Search acceptance is the current hardware gate.'
+          new_phase = 'The real-Switch guest bootstrap gate remains accepted. The first live-Search build later failed at process startup before any TizenTube NX UI appeared, so the current hardware gate is startup recovery only; live Search remains blocked pending that gate.'
+          if old_phase not in s:
+              raise SystemExit('current-phase sentence not found')
+          s = s.replace(old_phase, new_phase, 1)
+          start = s.index('## Current activation gate\n')
+          end = s.index('\n\n## Physical startup crash investigation — 2026-09-13', start)
+          replacement = '''## Current activation gate\n\nThe real-Switch guest bootstrap remains accepted as `Guest ready` at:\n\n`96dbf0be46d7fddb38a5510d9269d267e74fcce2`\n\nThe first physical launch of the live-Search checkpoint:\n\n`5b46829ead0a94089696e1521cb101637e2bfb3e`\n\nfailed before the first visible TizenTube NX UI with Atmosphère `std::abort (0xFFE)`. No Search request occurred. Live Search is therefore **FAILED / BLOCKED**, not hardware accepted.\n\nThe startup-recovery code checkpoint built for the next physical gate is:\n\n`dbe1de9e0aa278999479dd3eac7a04d37b005b58`\n\nThat recovery build deliberately quarantines live Search UI/network execution while retaining the core Search implementation and preventative worker exception hardening in source.\n\nThe next physical-Switch gate is **startup only**:\n\n1. launch TizenTube NX from Spaira;\n2. confirm Home appears;\n3. leave the app idle for 30 seconds;\n4. navigate Home / Search / Subscriptions / Library / Settings;\n5. do **not** run the guest connection diagnostic;\n6. do **not** perform Search;\n7. exit normally;\n8. relaunch once;\n9. report whether both launches succeed.\n\nOnly after this becomes `STARTUP ACCEPTED` should the guest bootstrap be retested, and only after that should first-page Search be tested.\n'''
+          s = s[:start] + replacement + s[end:]
+          p.write_text(s)
+          PY
+          git config user.name "GlitchedZeus"
+          git config user.email "user91746@protonmail.com"
+          git add docs/PROJECT_STATUS.md
+          git commit -m "docs: make startup recovery the active hardware gate"
+          git push origin HEAD:debug/refresh-crash-status
