@@ -4,6 +4,7 @@
 #include "tizentube_nx/net/http.hpp"
 #include "tizentube_nx/ui/navigation.hpp"
 #include "tizentube_nx/youtube/guest_api.hpp"
+#include "tizentube_nx/youtube/session_bootstrap.hpp"
 
 #include "tizentube_nx/core/settings.hpp"
 
@@ -33,6 +34,26 @@ std::optional<std::string_view> header_value(
         if (header.name == name) return header.value;
     }
     return std::nullopt;
+}
+
+std::string make_bootstrap_fixture(bool visitor_is_string = true) {
+    std::vector<std::string> fields(108, "null");
+    fields[0] = "\"en-US\"";
+    fields[1] = "\"CA\"";
+    // Exercise JSON unicode decoding while keeping the resulting visitor token ASCII.
+    fields[13] = visitor_is_string ? "\"visitor\\u002Ddata\"" : "123";
+    fields[16] = "\"2.20260912.01.00\"";
+    fields[79] = "\"America/Toronto\"";
+
+    std::string device_info = "[";
+    for (std::size_t i = 0; i < fields.size(); ++i) {
+        if (i != 0) device_info += ',';
+        device_info += fields[i];
+    }
+    device_info += ']';
+
+    // root[0][2] = ytcfg; ytcfg[0][0] = device_info.
+    return ")]}'\n[[null,null,[[" + device_info + "],\"unused-api-key\"]]]";
 }
 
 }  // namespace
@@ -134,6 +155,50 @@ int main() {
     expect(header_value(bootstrap.headers, "Cookie") ==
                "PREF=tz=America.Toronto;VISITOR_INFO1_LIVE=Visitor12345;",
            "session bootstrap normalizes timezone and carries visitor cookie id");
+
+    const auto parsed_bootstrap = parse_session_bootstrap(make_bootstrap_fixture());
+    expect(parsed_bootstrap.session.has_value(),
+           "valid JSPB session bootstrap fixture parses");
+    if (parsed_bootstrap.session) {
+        expect(parsed_bootstrap.session->client_name == "WEB",
+               "bootstrap parser selects guest WEB client");
+        expect(parsed_bootstrap.session->client_version == "2.20260912.01.00",
+               "bootstrap parser extracts web client version");
+        expect(parsed_bootstrap.session->visitor_data == "visitor-data",
+               "bootstrap parser extracts and decodes visitor data");
+        expect(parsed_bootstrap.session->language == "en-US",
+               "bootstrap parser uses server language when not overridden");
+        expect(parsed_bootstrap.session->region == "CA",
+               "bootstrap parser uses server region when not overridden");
+        expect(parsed_bootstrap.session->timezone == "America/Toronto",
+               "bootstrap parser uses server timezone when not overridden");
+    }
+
+    SessionBootstrapOptions bootstrap_options;
+    bootstrap_options.language = "fr-CA";
+    bootstrap_options.region = "CA";
+    bootstrap_options.timezone = "America/Vancouver";
+    bootstrap_options.user_agent = "TizenTubeNX-Test/2.0";
+    const auto overridden_bootstrap = parse_session_bootstrap(make_bootstrap_fixture(), bootstrap_options);
+    expect(overridden_bootstrap.session.has_value(),
+           "bootstrap parser accepts explicit locale/timezone options");
+    if (overridden_bootstrap.session) {
+        expect(overridden_bootstrap.session->language == "fr-CA",
+               "explicit language overrides server bootstrap language");
+        expect(overridden_bootstrap.session->timezone == "America/Vancouver",
+               "explicit timezone overrides server bootstrap timezone");
+        expect(overridden_bootstrap.session->user_agent == "TizenTubeNX-Test/2.0",
+               "bootstrap parser preserves caller user agent");
+    }
+
+    expect(!parse_session_bootstrap("[[null]]").session,
+           "bootstrap parser rejects missing JSPB prefix");
+    expect(!parse_session_bootstrap(")]}'\n[[null,null").session,
+           "bootstrap parser rejects truncated JSON");
+    expect(!parse_session_bootstrap(make_bootstrap_fixture(false)).session,
+           "bootstrap parser rejects non-string visitor data");
+    expect(!parse_session_bootstrap(std::string(4 * 1024 * 1024 + 1, 'x')).session,
+           "bootstrap parser rejects oversized responses before parsing");
 
     GuestSession session;
     session.client_version = "test-client-version";

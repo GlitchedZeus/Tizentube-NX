@@ -10,6 +10,7 @@ add_library(tizentube_nx_core
     src/core/content_filter.cpp
     src/core/guest_browse.cpp
     src/core/guest_api.cpp
+    src/core/session_bootstrap.cpp
     src/core/settings.cpp
 )
 target_include_directories(tizentube_nx_core PUBLIC include)
