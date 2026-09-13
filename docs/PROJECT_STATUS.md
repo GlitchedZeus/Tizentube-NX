@@ -131,17 +131,35 @@ Implemented and compile-verified:
 Native transport checkpoint: `9042b2ba376c10d5f51ada8487f4799187b625af`.
 Host tests and devkitA64 Switch build both pass at this checkpoint.
 
-This is a **compile/integration checkpoint**, not yet a claim that a live YouTube HTTPS request has succeeded on real hardware.
+### User-triggered hardware probe
+
+A first real-network path is now wired into the Borealis shell for hardware validation without adding hidden startup traffic:
+
+- Home exposes `Test YouTube guest connection`.
+- No YouTube request is made automatically when the app boots.
+- The action starts a worker thread; DNS, TCP, TLS, HTTP and bootstrap parsing stay off the Borealis UI loop.
+- The worker uses the native libnx transport and therefore the same pre-DNS exact-host allowlist.
+- The probe GETs only the existing `https://www.youtube.com/sw.js_data` bootstrap endpoint.
+- Successful guest session data is held in memory only.
+- Visitor/session values are never written to the UI status text, logs or SD storage.
+- Worker results are transferred through a mutex-protected model; the worker never mutates Borealis views directly.
+- The worker is joined during normal shutdown so socket/SSL services are torn down cleanly.
+- Search remains intentionally network-disabled until the bootstrap itself succeeds on real hardware.
+
+Hardware-probe compile checkpoint: `bdeb76fe5a896127ca0c4a304a0bb3794a064b0a`.
+Host tests and devkitA64 Switch build both pass at this checkpoint.
+
+This is still a **compile/integration checkpoint**. A live YouTube HTTPS request has not yet been declared successful on real Switch hardware.
 
 ## Immediate next technical checkpoint
 
-1. Add the first user-triggered guest bootstrap action without performing hidden networking at app startup.
-2. Execute `sw.js_data` on a worker thread so DNS/TCP/TLS/HTTP never block the Borealis UI loop.
-3. Marshal only non-sensitive success/error state back to the UI; do not log visitor/session data.
-4. Prove the native HTTPS handshake/bootstrap on real Atmosphere hardware.
-5. Parse live Search/Home results into renderer-neutral records.
-6. Run every parsed record through the renderer firewall before creating UI cards.
-7. Wire continuation paging only after first-page guest browsing is proven on real hardware.
+1. Install/test the `bdeb76fe...`-or-newer CI artifact on the real Atmosphere Switch.
+2. On Home, explicitly choose `Test YouTube guest connection` and verify the UI remains responsive while the worker runs.
+3. Record only the resulting non-sensitive status (`Guest ready`, transport error code, or bootstrap-shape error); do not capture visitor/session values.
+4. If the probe succeeds, treat direct libnx HTTPS + guest bootstrap as hardware accepted.
+5. Then enable the first live Search POST using the in-memory guest session.
+6. Parse Search results into renderer-neutral records and run every record through the no-Shorts/no-promoted renderer firewall before UI creation.
+7. Wire Home and continuation paging only after first-page Search is proven on real hardware.
 
 No account login, playback, SponsorBlock or DeArrow is claimed at this checkpoint.
 
@@ -150,6 +168,7 @@ No account login, playback, SponsorBlock or DeArrow is claimed at this checkpoin
 - M1 is accepted on real Atmosphere hardware.
 - Host CMake tests are green through the strict HTTP/1.1/network-policy/session-bootstrap suites.
 - devkitA64 successfully compiles and links the direct libnx SSL transport into the NRO.
+- The off-thread, user-triggered bootstrap probe also passes devkitA64 compile/link CI.
 - `switch-curl` is not linked into the NRO.
 - Live YouTube networking has **not** yet been accepted on-device.
 
