@@ -1,4 +1,5 @@
 #include "tizentube_nx/core/content_filter.hpp"
+#include "tizentube_nx/core/guest_browse.hpp"
 #include "tizentube_nx/core/url.hpp"
 #include "tizentube_nx/ui/navigation.hpp"
 
@@ -7,6 +8,8 @@
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -47,15 +50,63 @@ int main() {
 
     FilterPolicy relaxed;
     relaxed.hide_shorts = false; // must not override the hard invariant
-    relaxed.hide_promoted = false;
+    relaxed.hide_promoted = false; // ads/promotions are also non-negotiable
     relaxed.hide_shopping = false;
 
     expect(should_hide({ContentKind::Short, "id", "short"}, relaxed),
            "Shorts stay hidden even if a future setting is misconfigured");
+    expect(should_hide({ContentKind::Video, "id", "ad", true, false}, relaxed),
+           "promoted content stays hidden even if a future setting is misconfigured");
     expect(should_hide({ContentKind::Video, "id", "ad", true, false}),
            "promoted content hidden by default");
     expect(!should_hide({ContentKind::Video, "id", "normal"}),
            "normal video remains visible");
+
+    expect(valid_guest_request({BrowseSurface::Home, "", ""}),
+           "guest Home request may omit a key");
+    expect(valid_guest_request({BrowseSurface::Search, "switch homebrew", ""}),
+           "guest Search request requires search text");
+    expect(!valid_guest_request({BrowseSurface::Search, "", ""}),
+           "empty initial Search request rejected");
+    expect(valid_guest_request({BrowseSurface::Search, "", "CONTINUATION"}),
+           "opaque continuation can drive the next Search page");
+
+    expect(classify_renderer("videoRenderer") == ContentKind::Video,
+           "video renderer classified");
+    expect(classify_renderer("channelRenderer") == ContentKind::Channel,
+           "channel renderer classified");
+    expect(classify_renderer("playlistRenderer") == ContentKind::Playlist,
+           "playlist renderer classified");
+    expect(classify_renderer("reelItemRenderer") == ContentKind::Short,
+           "legacy reel renderer classified as Shorts");
+    expect(classify_renderer("shortsLockupViewModel") == ContentKind::Short,
+           "Shorts view model classified as Shorts");
+
+    expect(renderer_disposition({"reelItemRenderer", {ContentKind::Video, "s", "short"}}) ==
+               RendererDisposition::DropShorts,
+           "renderer-name firewall drops disguised Shorts");
+    expect(renderer_disposition({"promotedVideoRenderer", {ContentKind::Video, "a", "ad"}}) ==
+               RendererDisposition::DropPromoted,
+           "renderer-name firewall drops promoted videos");
+    expect(renderer_disposition({"adSlotRenderer", {ContentKind::Unknown, "", "ad slot"}}) ==
+               RendererDisposition::DropPromoted,
+           "renderer-name firewall drops ad slots");
+
+    std::vector<RendererRecord> raw_page{
+        {"videoRenderer", {ContentKind::Video, "video1", "Normal video"}, "Channel", "thumb", "12:34"},
+        {"reelItemRenderer", {ContentKind::Video, "short1", "Short disguised as video"}},
+        {"adSlotRenderer", {ContentKind::Unknown, "", "Advertisement"}},
+        {"channelRenderer", {ContentKind::Channel, "UC123", "A channel"}},
+        {"shoppingShelfRenderer", {ContentKind::Unknown, "shop", "Shopping", false, true}},
+        {"mysteryRenderer", {ContentKind::Unknown, "mystery", "Unknown"}},
+    };
+    const auto sanitized = sanitize_guest_page(std::move(raw_page), "NEXT_PAGE");
+    expect(sanitized.items.size() == 2,
+           "guest page exposes only supported non-Shorts non-ad renderers");
+    expect(sanitized.items[0].item.id == "video1", "normal video survives renderer firewall");
+    expect(sanitized.items[1].item.id == "UC123", "channel survives renderer firewall");
+    expect(sanitized.has_more() && sanitized.continuation == "NEXT_PAGE",
+           "pagination continuation is preserved as opaque data");
 
     expect(parse_settings(serialize_settings({true}))->show_fps, "settings round trip");
     expect(!parse_settings("version=1\nshow_fps=0\n")->show_fps, "disabled preference loads");
