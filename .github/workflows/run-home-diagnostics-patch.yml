@@ -1,0 +1,48 @@
+name: Run Home diagnostics patch
+
+on:
+  push:
+    branches:
+      - feature/m2-guest-browsing
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/m2-guest-browsing
+          fetch-depth: 0
+      - name: Extract and apply staged patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          src = Path('.github/workflows/apply-home-diagnostics.yml').read_text().splitlines()
+          start = next(i for i, line in enumerate(src) if "python3 - <<'PY'" in line) + 1
+          end = next(i for i in range(start, len(src)) if src[i] == '          PY')
+          lines = src[start:end]
+          out = []
+          for line in lines:
+              out.append(line[10:] if line.startswith('          ') else line)
+          Path('/tmp/home_diag_patch.py').write_text('\n'.join(out) + '\n')
+          PY
+          python3 /tmp/home_diag_patch.py
+      - name: Host configure build and tests
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel
+          ctest --test-dir build --output-on-failure
+      - name: Commit implementation
+        shell: bash
+        run: |
+          rm .github/workflows/apply-home-diagnostics.yml
+          rm .github/workflows/run-home-diagnostics-patch.yml
+          git config user.name GlitchedZeus
+          git config user.email user91746@protonmail.com
+          git add -A
+          git commit -m "home: add privacy-safe response diagnostics"
+          git push origin HEAD:feature/m2-guest-browsing
