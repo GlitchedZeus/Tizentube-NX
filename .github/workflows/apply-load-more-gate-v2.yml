@@ -1,0 +1,75 @@
+name: apply-load-more-gate-v2
+
+on:
+  push:
+    branches:
+      - feature/m2-guest-browsing
+    paths:
+      - .github/workflows/apply-load-more-gate-v2.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/m2-guest-browsing
+          submodules: recursive
+
+      - name: Reuse asserted patch script from v1 workflow
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          lines = Path('.github/workflows/apply-load-more-gate.yml').read_text().splitlines()
+          start = None
+          for i, line in enumerate(lines):
+              if line.strip() == '- name: Apply asserted continuation UI patch':
+                  start = i
+                  break
+          if start is None:
+              raise SystemExit('patch step not found')
+          run_line = None
+          for i in range(start + 1, len(lines)):
+              if lines[i].startswith('      - name:'):
+                  break
+              if lines[i].strip() == 'run: |':
+                  run_line = i
+                  break
+          if run_line is None:
+              raise SystemExit('patch run block not found')
+          body = []
+          for line in lines[run_line + 1:]:
+              if line.startswith('      - name:'):
+                  break
+              if line.startswith('          '):
+                  body.append(line[10:])
+              elif not line.strip():
+                  body.append('')
+              else:
+                  raise SystemExit(f'unexpected indentation: {line!r}')
+          Path('/tmp/apply-load-more.sh').write_text('\n'.join(body) + '\n')
+          PY
+          bash /tmp/apply-load-more.sh
+
+      - name: Host configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Host build
+        run: cmake --build build --parallel
+      - name: Host tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Commit and push
+        shell: bash
+        run: |
+          git config user.name "GlitchedZeus"
+          git config user.email "user91746@protonmail.com"
+          git add switch/source/main.cpp tests/search_model_tests.cpp tests/search_flow_tests.cpp
+          git diff --cached --check
+          git diff --cached --stat
+          git commit -m "search: re-enable safe continuation UI"
+          git push origin HEAD:feature/m2-guest-browsing
