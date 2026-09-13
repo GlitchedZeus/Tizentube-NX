@@ -7,12 +7,12 @@
 - [x] Canonical clean YouTube share URL generator
 - [x] Hard Shorts content filter invariant
 - [x] Minimal libnx boot skeleton
-- [x] Build the first `.nro` in a devkitPro environment and test on Atmosphere hardware
+- [x] First `.nro` build + Atmosphere hardware test
 
 ## M1 — Switch application shell
 
-- [x] Add Borealis
-- [x] Home/Search/Subscriptions/Library/Settings navigation shell
+- [x] Borealis shell
+- [x] Home/Search/Subscriptions/Library/Settings navigation
 - [x] Controller + touch interaction contract
 - [x] SD-card settings/log paths
 - [x] App icon/resources
@@ -26,47 +26,72 @@
 - [x] Explicit Nintendo-domain hard deny independent of 90DNS
 - [x] Enforce host policy before DNS/connect
 - [x] Block HTTP, alternate ports, IP literals and userinfo authority tricks
-- [x] Disable autonomous curl redirects
-- [x] Host tests for Nintendo roots, deep subdomains and deceptive URL forms
-- [x] Require every native HTTP redirect target to pass policy before a second DNS lookup
-- [ ] Require every future network subsystem (media/images/auth/updater/etc.) to use the same policy
+- [x] Revalidate every redirect before a second DNS lookup
+- [x] Keep exact live allowlist at `www.youtube.com:443`
+- [x] Exclude `switch-curl` from the NRO
+- [ ] Require every future media/image/auth/updater subsystem to use the same policy
 
 ### Networking foundation
 
 - [x] Transport-neutral HTTP request/response/client contract
-- [x] Search/Browse/Home InnerTube request builders
-- [x] Dynamic guest session bootstrap request (`sw.js_data`)
-- [x] Prototype strict-verification Switch libcurl transport
-- [x] Identify current devkitPro switch-curl cert-info crash risk and block it from becoming default live transport
-- [x] Host + devkitA64 CI for the networking foundation
-- [x] Parse bootstrap response into a guest session
-- [x] Strict bounded HTTP/1.1 request/response codec with host tests
-- [x] Direct libnx SSL-service HTTP/1.1 transport
-- [x] GET + POST serialization with bounded request/response bodies
-- [x] Configure peer-CA + hostname + certificate-date verification using the Switch SSL service
-- [x] Remove switch-curl and its TLS/zlib dependencies from the NRO link path
-- [x] DevkitA64 compile/link gate for the native libnx transport
-- [x] User-triggered guest bootstrap action with no hidden startup request
-- [x] Move guest-bootstrap networking off the Borealis UI thread
-- [ ] First live verified HTTPS request on Switch
+- [x] Search/Browse/Home request builders
+- [x] Dynamic `sw.js_data` guest bootstrap request/parser
+- [x] Strict bounded HTTP/1.1 codec
+- [x] Direct libnx BSD socket + Horizon SSL transport
+- [x] Peer-CA + hostname + date verification
+- [x] User-triggered off-UI-thread guest bootstrap probe
+- [ ] First verified real-Switch guest bootstrap result
 
-### Guest data and presentation
+### Search parsing and data model
 
-- [x] Renderer-neutral Home/Search/Channel/Playlist data model
-- [x] Opaque continuation/pagination model
-- [x] Renderer firewall for Shorts/reels, promoted/ad, shopping and unsupported renderers
-- [x] Tests proving disguised Shorts/promoted renderers cannot become visible records
-- [x] Legacy `videoRenderer`, modern `lockupViewModel`, channel and playlist Search parsing
-- [x] Legacy + modern Search continuation token parsing
-- [x] Transport-neutral Search executor with fake HTTP end-to-end tests
-- [x] Scoped Search boundary: only recognized primary Search and direct continuation payloads reach renderer traversal
-- [x] Hostile topbar/header/sidebar/metadata/continuation-sibling fixtures proving out-of-scope renderers cannot escape
-- [ ] Parse live Search results
-- [ ] Parse live Home/browse results
+- [x] Scoped Search primary/continuation boundary
+- [x] Legacy `videoRenderer`
+- [x] Modern `lockupViewModel`
+- [x] Channel and playlist results
+- [x] Legacy + modern continuation items
+- [x] Renderer firewall for Shorts/reels, ads/promoted, shopping and unsupported renderers
+- [x] Opaque blocked subtrees
+- [x] Renderer-agnostic Video / Channel / Playlist result model
+- [x] Stable type-qualified result identity
+- [x] Deterministic post-firewall dedupe
+- [x] Presentation metadata bounds/sanitization
+- [x] Hostile/odd Search fixture corpus
+- [x] Deterministic mutation/property-style parser corpus
+- [x] Guard low-level unscoped parser as an internal API
+
+### URLs / local routing
+
+- [x] Strict normal video-ID validation
+- [x] Clean canonical video URL: `https://www.youtube.com/watch?v=VIDEO_ID`
+- [x] Canonical stable channel-ID URL helper
+- [x] Canonical playlist URL helper
+- [x] Strip tracking/query contamination during canonicalization
+- [x] Reject duplicate/conflicting `v` values and malformed/oversized inputs
+- [x] Reject Shorts/reel URLs rather than converting them into normal videos
+
+### Search execution / privacy / UI preparation
+
+- [x] Stateless transport-neutral Search executor
+- [x] First-page and continuation fake-HTTP tests
+- [x] Continuation requests do not resend query
+- [x] Query-owned pagination state machine
+- [x] Repeated-token loop prevention
+- [x] HTTP/parse failure leaves continuation retryable
+- [x] New query invalidates old continuation state
+- [x] Bound/minimize reviewed WEB/v1 request contract
+- [x] Tests proving analytics/ad/tracking-style JSON fields are absent
+- [x] Sensitive diagnostic replacement + length bounds
+- [x] Offline Search model with loading/empty/error/loading-more states
+- [x] Stable selection identity + stale-generation rejection
+- [ ] Enable live Search POST in Switch UI — **blocked pending real-Switch bootstrap result**
+- [ ] Render normalized Search results as Borealis cards
+- [ ] Live continuation paging on Switch
+
+### Remaining guest surfaces
+
+- [ ] Parse/present live Home browse results
 - [ ] Channel pages
 - [ ] Playlist pages
-- [ ] Live continuation paging
-- [ ] Render sanitized guest results as Borealis cards
 - [ ] Real-hardware guest browsing acceptance
 
 ## M3 — Playback
@@ -76,40 +101,32 @@
 - [ ] Apply outbound host policy to every media/CDN destination before DNS
 - [ ] 720p handheld / 1080p docked defaults
 - [ ] Quality selector
-- [ ] Captions
-- [ ] Alternate audio tracks
-- [ ] Playback speed
-- [ ] Seek/resume
+- [ ] Captions / alternate audio / speed / seek / resume
 
-## M4 — Easy account login
+## M4 — Account login
 
 - [ ] Validate compliant TV/device-code authorization strategy
 - [ ] Apply outbound host policy to every auth destination before DNS
-- [ ] QR/code sign-in view
-- [ ] Token/session persistence
-- [ ] Refresh/recovery/sign-out
-- [ ] Profile identity
-- [ ] Personalized Home
-- [ ] Subscriptions
-- [ ] Likes/playlists/history features supported by the chosen account backend
+- [ ] QR/code sign-in
+- [ ] Token/session persistence + refresh/recovery/sign-out
+- [ ] Subscriptions/likes/playlists/history as supported by chosen backend
 
 ## M5 — TizenTube/ReVanced features
 
-- [ ] SponsorBlock categories + auto-skip/skip-button modes
-- [ ] DeArrow titles
-- [ ] DeArrow thumbnails
-- [ ] Apply outbound host policy to all third-party API destinations before DNS
-- [ ] Ad/promotion suppression hardening
-- [ ] Hide end-screen clutter
-- [ ] Optional additional feed filters
+- [ ] SponsorBlock
+- [ ] DeArrow titles/thumbnails
+- [ ] Third-party API destinations reviewed through outbound policy
+- [ ] Additional non-Shorts feed filters
 
 ## M6 — Daily-driver polish
 
-- [ ] Crash recovery
-- [ ] Caching
-- [ ] Network retry/backoff
+- [ ] Crash recovery / caching / retry-backoff
 - [ ] Dock/undock handling
 - [ ] Applet vs title-takeover testing
-- [ ] Multiple Switch profiles/account mapping (research + implementation)
-- [ ] Release audit: no network code path can bypass the outbound policy
+- [ ] Multiple Switch profiles/account mapping
+- [ ] Release audit: no network path bypasses outbound policy
 - [ ] Release packaging
+
+## Current gate
+
+**Live Search remains disabled pending the real-Switch `Test YouTube guest connection` result.**

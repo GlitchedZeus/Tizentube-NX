@@ -4,200 +4,142 @@
 
 M2 — YouTube guest browsing / pre-alpha.
 
-## Accepted baseline
+Branch: `feature/m2-guest-browsing`  
+Draft PR: #6 — `M2: guest browsing networking foundation`
 
-M1 is **device accepted** on a real Atmosphere Switch.
+## Accepted baseline entering this extended session
 
-Hardware acceptance reported on 2026-09-12:
+Previous fully green checkpoint:
 
-- The latest M1 `tizentube_nx.nro` boots and works on-device.
-- The native Borealis shell is the accepted UI baseline.
-- Home, Search, Subscriptions, Library and Settings remain the only root sections.
-- Shorts are not a root route and the hard no-Shorts invariant remains covered by host tests.
-- Canonical clean YouTube share-link behavior remains covered by host tests.
-- M1 was squash-merged to `main` at `4505fabdda70b22227257848a8d8cbb110bbd81e`.
+`72ef8db459ec0911adfc15abbfbafc706130e615`
 
-The last pre-merge M1 native artifact was built from
-`3d869ebd88e57da4b2391401d78e16464ea71a06`:
+At that checkpoint host tests/build and the devkitA64 NRO build were green, scoped Search parsing was integrated, the renderer firewall was intact, `switch-curl` was absent, the allowlist was exactly `www.youtube.com:443`, and live Search remained disabled.
 
-- NRO: `tizentube_nx.nro`, 1,864,638 bytes
-- SHA-256: `9c31ab733f03d33e6a202c574f4bf8c5e6d07ff0707309fb35a74e0856e10d70`
+## Extended offline M2 hardening
 
-## Hard console-network safety invariant
+This session continued only work that is safe to complete without the pending real-Switch networking result.
+
+### Normalized Search result architecture
+
+Search now has a renderer-agnostic `BrowseResult` presentation model with explicit Video / Channel / Playlist types. The model carries stable IDs, title, channel attribution slots, thumbnail/duration/metadata slots, accessibility text, and live/upcoming indicators without exposing raw renderer JSON to future UI/controller code.
+
+Missing metadata remains empty. Presentation strings and thumbnail/duration values are bounded/sanitized before normalized UI use.
+
+### Result identity / dedupe
+
+Stable identity is type-qualified (`video:`, `channel:`, `playlist:`). Deduplication is deterministic first-wins and happens after the hard renderer firewall, so a blocked Short/ad/shopping object cannot consume an identity belonging to legitimate content.
+
+### Canonical YouTube links / validation
+
+Normal video sharing is generated only as:
+
+`https://www.youtube.com/watch?v=VIDEO_ID`
+
+Tracking parameters, `si=`, `feature=`, timestamps, playlist contamination, redirect wrappers and source URL garbage are not retained. Stable channel-ID and playlist-ID canonical helpers are also available.
+
+Normal video IDs are validated as 11 safe YouTube ID characters. Pasted YouTube watch/embed/live/youtu.be inputs are bounded and validated. Missing/duplicate/conflicting `v`, encoded garbage, deceptive/non-YouTube hosts, malformed authorities, empty/oversized inputs, and Shorts/reel routes fail closed. Shorts/reels are never canonicalized into ordinary videos.
+
+### Search robustness corpus
+
+Host tests now cover empty pages, missing ID/title, alternate text runs, malformed thumbnails, missing channel metadata, invalid duration text, live/upcoming/private-looking shapes, duplicates, mixed entity pages, missing/modern continuation tokens, unrelated actions, blocked ad/Shorts subtrees, out-of-scope renderer-shaped data, and unknown future renderers adjacent to legitimate siblings.
+
+A deterministic mutation corpus adds malformed JSON, truncations, excessive nesting, oversized strings, randomized unknown renderer names, randomized out-of-scope video renderers, and blocked-subtree nesting. No heavyweight fuzzing dependency was added.
+
+### Query / continuation state
+
+`execute_guest_search()` remains stateless. `GuestSearchFlow` owns a logical query's pagination state:
+
+- first request sends query only;
+- continuation sends token only;
+- transport/parse failure does not advance state;
+- repeated/consumed token terminates pagination loops;
+- missing token ends pagination;
+- a new query clears all old continuation ownership.
+
+This prevents stale query-A state being reused for query B.
+
+### Request privacy / minimization
+
+Guest Search remains on the exact reviewed endpoint:
+
+`https://www.youtube.com/youtubei/v1/search?prettyPrint=false&alt=json`
+
+Only the reviewed WEB/v1 guest client contract is accepted. Query, continuation and guest-session fields are bounded. User agent is no longer redundantly placed in Search JSON. Tests assert that official-client analytics/ad/tracking style fields are absent.
+
+The retained context fields are client name/version, language, region, visitor data and timezone. Locale/region/timezone are kept for response shaping; InnerTube is private, so no claim is made that their exact purpose is publicly documented.
+
+### Logging / diagnostic privacy
+
+Normal Search/network paths do not dump response bodies, request bodies, cookies, authorization values, visitor/session identifiers, or continuation tokens. Public diagnostics are length-bounded. A diagnostic carrying sensitive markers is replaced wholesale with a generic safe failure instead of partially redacting potentially secret data.
+
+### Offline UI model
+
+`SearchModel` is host-testable and has no networking dependency. It provides explicit:
+
+- idle
+- loading
+- ready
+- empty
+- error
+- loading-more
+- normalized result list
+- continuation state
+- stable selection identity
+- generation tokens that reject stale async completions
+
+This prepares the UI without activating Search networking.
+
+### Parser trust-boundary cleanup
+
+`parse_scoped_search_response()` is the intended application/network API. The lower-level recursive renderer-payload parser is now an explicitly internal build API and is guarded for host callers. This makes the safe scoped path the default and makes boundary bypass a deliberate internal action.
+
+## Hard network safety invariant
 
 **TizenTube NX must never intentionally resolve or connect to Nintendo network endpoints.**
 
-This is release-blocking and does not rely on 90DNS:
+This remains release-blocking and independent of 90DNS:
 
-- Outbound networking is default-deny.
-- M2 currently allowlists only exact `www.youtube.com:443`.
-- The policy runs before DNS lookup, socket connect, TLS or HTTP transmission.
-- Known Nintendo domain families are explicitly hard-denied as defense in depth.
-- Automatic cross-host redirects are forbidden; every redirect must be revalidated before another DNS lookup.
-- IP-literal destinations, userinfo authority tricks, non-HTTPS destinations and alternate ports are denied.
-- Host tests cover Nintendo roots/deep subdomains and deceptive authority forms.
-- Any future network stack (direct libnx SSL, image loader, media resolver, auth, updater, SponsorBlock, DeArrow, etc.) must pass the same policy before DNS.
+- outbound networking is default-deny;
+- exact M2 allowlist remains `www.youtube.com:443` only;
+- policy evaluation happens before DNS/connect/TLS/HTTP;
+- Nintendo domain families are hard-denied;
+- HTTP, alternate ports, IP literals, userinfo and malformed authorities are rejected;
+- every redirect is revalidated before another DNS lookup;
+- `switch-curl` remains excluded from the NRO.
 
-See `docs/NETWORK_SAFETY.md`.
+No new host was authorized in this session.
 
-## M2 implemented so far
+## Switch UI networking state
 
-Branch: `feature/m2-guest-browsing`.
-Draft PR: #6 — `M2: guest browsing networking foundation`.
+The app still makes no hidden YouTube request at startup. The Home action `Test YouTube guest connection` remains the only deliberately live M2 probe and still targets the existing allowlisted `https://www.youtube.com/sw.js_data` bootstrap endpoint.
 
-### Guest content boundary
+**Live Search remains disabled pending the real-Switch `Test YouTube guest connection` result.**
 
-- Renderer-neutral guest request/page model for Home, Search, Channel and Playlist surfaces.
-- Opaque continuation tokens for pagination; tokens are never rewritten or interpreted.
-- A renderer firewall runs before UI presentation.
-- Known Shorts/reel renderers are rejected even if they claim to be ordinary videos.
-- Promoted/ad renderers are rejected before UI presentation.
-- Shopping/product renderers are rejected by the default policy.
-- Unsupported/unknown leaf renderers are dropped instead of being guessed into a visible card.
-- Shorts and promoted content are hard invariants: future settings cannot re-enable them accidentally.
+The Search UI must not perform the POST until that hardware result is supplied and accepted.
 
-Checkpoint: `190797bb96991d417f9dc5811cfa900b983bb4b4`.
-Host and devkitA64 Switch CI both pass.
+## Validation state
 
-### Guest request construction
+Previous accepted checkpoint: `72ef8db459ec0911adfc15abbfbafc706130e615`.
 
-- Transport-neutral HTTP request/response/client contract.
-- YouTube guest session model with client version, visitor data, locale, region and timezone.
-- Session bootstrap request for YouTube `sw.js_data`.
-- Search, Browse and Home InnerTube request builders.
-- Home uses the standard `FEwhat_to_watch` browse ID.
-- Continuation requests preserve the opaque continuation token and do not resend the original query/browse ID.
-- JSON string escaping is covered by host tests.
-- Normal InnerTube request builders do **not** embed a fixed third-party/private API key in source or URLs.
+The extended-session commits are being validated continuously by host and devkitA64 CI. The final session head must pass the complete host configure/build/ctest workflow and the devkitA64 NRO workflow before it may replace the previous accepted checkpoint.
 
-Checkpoint: `2edf3ab18c798e1e69e548e1b2623fd079a2c254`.
-Host and devkitA64 Switch CI both pass.
+## Remaining external blocker
 
-### Guest session bootstrap parser
+The required external result is still the physical Atmosphere Switch result from:
 
-- Bounded parser for YouTube's `sw.js_data` JSPB/XSSI response.
-- Requires the expected XSSI prefix and current guest bootstrap array shape; unexpected shapes fail closed.
-- Extracts only the data required for anonymous guest requests: WEB client version, visitor data, locale/region and timezone.
-- Caller locale/timezone/user-agent overrides are supported without logging or persisting visitor/session values.
-- JSON strings are decoded safely, including escapes and Unicode surrogate pairs.
-- Input is capped at 4 MiB and nesting at 128 levels.
-- Malformed, truncated, oversized and wrong-type fixtures are covered by host tests.
+`Test YouTube guest connection`
 
-Checkpoint: `ba3d807ef4e417c4fb10fb7b6cb3569a1d2d5185`.
-Host CI and the devkitA64 NRO build both pass.
+Expected successful non-sensitive status: `Guest ready`.
 
-### Outbound network policy
+Only after that result is accepted should M2 connect the already host-tested Search execution path to a live Switch Search POST.
 
-- Default deny; no wildcard hosts.
-- Exact M2 application-layer allowlist: `www.youtube.com:443` only.
-- Explicit Nintendo-family hard deny independent of 90DNS.
-- URL validation occurs before DNS/connect.
-- HTTP, alternate ports, IP literals, userinfo and malformed DNS names are rejected.
-- Every native HTTP redirect is revalidated immediately and again before the next DNS lookup.
-- Dedicated host tests verify Nintendo and redirect/authority tricks are blocked locally.
+## Later M2 work after hardware acceptance
 
-Network-safety policy remains release-blocking.
+- connect Search flow to the Switch worker path deliberately;
+- validate first live Search response on hardware;
+- render normalized results as Borealis cards;
+- enable live continuation paging;
+- add live Home/browse/channel/playlist presentation;
+- complete real-hardware guest-browsing acceptance.
 
-### Strict HTTP/1.1 codec
-
-- Host-tested HTTPS URL parser restricted to port 443.
-- GET/POST request serializer owns `Host`, `Connection`, `Accept-Encoding`, framing and POST `Content-Length`.
-- Caller CRLF/control-character header injection is rejected.
-- Response parser accepts bounded HTTP/1.0/1.1 responses, fixed-length, chunked and connection-close framing.
-- Ambiguous framing (duplicate `Content-Length`, duplicate `Transfer-Encoding`, or both TE + CL) fails closed.
-- Truncation, trailing bytes after declared framing, invalid chunks, oversized bodies and body-forbidden status responses fail closed.
-- Redirect `Location` is surfaced but never followed by the codec itself.
-
-Host CI passes with the HTTP/1.1 suite wired into CMake.
-
-### Native Switch HTTPS transport
-
-The approved M2 transport is now a direct libnx implementation using BSD sockets plus the console's local Horizon SSL service.
-
-Implemented and compile-verified:
-
-- Two application policy gates exist before remote contact: `perform()` validates the full URL before networking, and the only DNS helper checks the allowlisted hostname immediately before `getaddrinfo()`.
-- IPv4 TCP connect is bounded with a non-blocking connect/poll timeout and socket send/receive timeouts.
-- TLS is limited to TLS 1.2, plus TLS 1.3 on HOS 11.0.0+.
-- Peer-CA, hostname and certificate-date verification are explicitly enabled.
-- Hostname/SNI is set before handshake.
-- The libnx socket-to-SSL descriptor wrapper is used, with correct returned-descriptor ownership/close order.
-- Requests and raw/decoded responses are bounded.
-- GET redirects are bounded to three hops and each target is policy-validated before another DNS lookup.
-- POST redirects fail closed for the first milestone rather than changing method semantics implicitly.
-- The current `switch-curl` prototype remains source reference only and is filtered out of the Switch build.
-- Curl/mbedTLS/zlib link dependencies were removed from the NRO build path; the native transport links through libnx only.
-
-Native transport checkpoint: `9042b2ba376c10d5f51ada8487f4799187b625af`.
-Host tests and devkitA64 Switch build both pass at this checkpoint.
-
-### User-triggered hardware probe
-
-A first real-network path is now wired into the Borealis shell for hardware validation without adding hidden startup traffic:
-
-- Home exposes `Test YouTube guest connection`.
-- No YouTube request is made automatically when the app boots.
-- The action starts a worker thread; DNS, TCP, TLS, HTTP and bootstrap parsing stay off the Borealis UI loop.
-- The worker uses the native libnx transport and therefore the same pre-DNS exact-host allowlist.
-- The probe GETs only the existing `https://www.youtube.com/sw.js_data` bootstrap endpoint.
-- Successful guest session data is held in memory only.
-- Visitor/session values are never written to the UI status text, logs or SD storage.
-- Worker results are transferred through a mutex-protected model; the worker never mutates Borealis views directly.
-- The worker is joined during normal shutdown so socket/SSL services are torn down cleanly.
-- Search remains intentionally network-disabled until the bootstrap itself succeeds on real hardware.
-
-Hardware-probe compile checkpoint: `bdeb76fe5a896127ca0c4a304a0bb3794a064b0a`.
-Host tests and devkitA64 Switch build both pass at this checkpoint.
-
-### Scoped Search parsing and executor
-
-The offline/host-tested Search path is now hardened before any live Search UI activation:
-
-- The reusable low-level renderer parser still supports legacy `videoRenderer`, modern `lockupViewModel`, channels, playlists, legacy continuation renderers and modern continuation-item views.
-- A separate `parse_scoped_search_response()` boundary now validates the full JSON document without running renderer extraction over unrelated root data.
-- Only `contents.twoColumnSearchResultsRenderer.primaryContents` and direct `appendContinuationItemsAction` / `reloadContinuationItemsCommand` continuation payloads under the recognized `onResponseReceived*` arrays can reach renderer traversal.
-- Continuation discovery is deliberately non-recursive outside those direct action shapes, so renderer-looking command/menu/metadata siblings cannot become Search cards.
-- Renderer firewalling still runs inside accepted Search payloads: Shorts/reels, disguised reel endpoints, promoted/ad subtrees, shopping/product subtrees and unknown renderers remain blocked.
-- Hostile fixtures cover topbar, header, sidebar, metadata, continuation-command siblings and nested fake append actions outside the accepted boundary.
-- The transport-neutral Search executor now calls the scoped parser.
-- Fake-HTTP tests still prove first-page Search sends the query, continuation Search sends only the opaque continuation token, and the original query is not resent.
-- Live Search remains disabled in the Switch UI.
-
-Scoped Search code/test checkpoint: `ec68df8f06c5801c8b6d58d431bf70bcfc7d0c15`.
-Host configure/build/full `ctest` and the devkitA64 NRO build all pass at this checkpoint.
-The corresponding CI NRO artifact was successfully produced.
-
-This is still a **compile/integration checkpoint**. A live YouTube HTTPS request has not yet been declared successful on real Switch hardware.
-
-## Immediate next technical checkpoint
-
-1. Install/test the current PR #6 CI artifact on the real Atmosphere Switch.
-2. On Home, explicitly choose `Test YouTube guest connection` and verify the UI remains responsive while the worker runs.
-3. Record only the resulting non-sensitive status (`Guest ready`, transport error code, or bootstrap-shape error); do not capture visitor/session values.
-4. If the probe succeeds, treat direct libnx HTTPS + guest bootstrap as hardware accepted.
-5. Only then connect the already host-tested Search executor to the Switch worker path and enable the first live Search POST.
-6. Keep all Search results behind the scoped response boundary and renderer firewall before UI creation.
-7. Wire Home and continuation paging only after first-page live Search is proven on real hardware.
-
-No account login, playback, SponsorBlock or DeArrow is claimed at this checkpoint. Shorts remain absent by design.
-
-## Validation
-
-- M1 is accepted on real Atmosphere hardware.
-- Host CMake configure/build/full test suite is green through the scoped Search boundary/executor checkpoint.
-- devkitA64 successfully compiles and links the direct libnx SSL transport and scoped Search code into the NRO.
-- The off-thread, user-triggered bootstrap probe remains the only live M2 YouTube request path in the Switch UI.
-- `switch-curl` is not linked into the NRO; `Makefile.switch` filters the prototype and links native libnx only.
-- Exact M2 outbound allowlist remains `www.youtube.com:443`.
-- Live Search POST is **not** enabled in the UI.
-- Live YouTube networking has **not** yet been accepted on-device.
-
-## Known high-risk areas
-
-- **Console safety:** Nintendo network destinations must never be reachable through app-controlled networking. 90DNS is defense in depth, not the app's primary safeguard.
-- YouTube response/session shapes are private implementation details and may change. Keep parsing isolated, scope Search traversal narrowly, fail closed on unknown renderers, and cover known shapes with fixtures.
-- Switch TLS must stay certificate-verified. Do not work around transport bugs by disabling peer, hostname or date verification.
-- Current devkitPro switch-curl has an open certificate-info hard-crash report; it remains excluded from the NRO live path unless that risk is removed and retested.
-- The first real-hardware libnx SSL request may expose service/timeout/firmware edge cases that CI cannot simulate; treat hardware validation as mandatory before declaring the transport accepted.
-- Account authentication remains a future risk. The product requirement is easy console-style login without cookie-file import. Before account-dependent UI, validate a sustainable TV/device authorization flow suitable for redistribution and avoid embedding third-party private credentials.
-- Playback is a separate M3 risk and is not implied by successful guest browsing.
+Account login, playback, SponsorBlock, DeArrow and all Shorts functionality remain out of scope for this checkpoint.
