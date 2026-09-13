@@ -46,6 +46,6 @@ The repository contains the first libnx entry point under `switch/source/main.cp
 
 ## License
 
-GPL-3.0-only. See `LICENSE`.
+GPL-3.0-or-later. See `LICENSE`.
 
 TizenTube NX is an independent homebrew project and is not affiliated with Google, YouTube, TizenTube, ReVanced, or Nintendo.
