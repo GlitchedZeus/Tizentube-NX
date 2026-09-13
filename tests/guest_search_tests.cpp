@@ -15,6 +15,13 @@ void expect(bool condition, const char* message) {
     }
 }
 
+bool contains_id(const ttnx::core::BrowsePage& page, const std::string& id) {
+    for (const auto& record : page.items) {
+        if (record.item.id == id) return true;
+    }
+    return false;
+}
+
 class FakeHttpClient final : public ttnx::net::HttpClient {
 public:
     int calls{0};
@@ -42,6 +49,12 @@ ttnx::youtube::GuestSession usable_session() {
 
 std::string response_fixture() {
     return R"JSON({
+      "topbar": {
+        "videoRenderer": {
+          "videoId": "FAKE_TOPBAR_VIDEO",
+          "title": {"runs": [{"text": "THIS MUST NEVER BECOME A SEARCH RESULT"}]}
+        }
+      },
       "contents": {
         "twoColumnSearchResultsRenderer": {
           "primaryContents": {
@@ -111,10 +124,39 @@ int main() {
     if (first.page) {
         expect(first.page->items.size() == 1, "executor returns only sanitized visible Search items");
         expect(first.page->items[0].item.id == "safe-video", "safe video survives executor firewall");
+        expect(!contains_id(*first.page, "FAKE_TOPBAR_VIDEO"),
+               "executor scoped parser blocks hostile topbar renderer");
+        expect(!contains_id(*first.page, "short-video"), "executor still blocks disguised Shorts");
+        expect(!contains_id(*first.page, "sponsored-video"), "executor still blocks promoted subtree");
         expect(first.page->continuation == "NEXT-TOKEN", "executor returns opaque continuation");
     }
 
-    http.next_result.response.body = R"JSON({"onResponseReceivedCommands":[{"appendContinuationItemsAction":{"continuationItems":[{"videoRenderer":{"videoId":"page-two","title":{"simpleText":"Page Two"}}}]}}]})JSON";
+    http.next_result.response.body = R"JSON({
+      "onResponseReceivedCommands": [
+        {"appendContinuationItemsAction": {
+          "continuationItems": [
+            {"videoRenderer": {
+              "videoId": "page-two",
+              "title": {"simpleText": "Page Two"}
+            }},
+            {"videoRenderer": {
+              "videoId": "page-two-short",
+              "title": {"simpleText": "Never surface"},
+              "navigationEndpoint": {"reelWatchEndpoint": {"videoId": "page-two-short"}}
+            }},
+            {"continuationItemView": {
+              "continuationCommand": {"token": "PAGE-THREE"}
+            }}
+          ]
+        }},
+        {"menuCommand": {
+          "videoRenderer": {
+            "videoId": "fake-command-video",
+            "title": {"simpleText": "Must remain out of scope"}
+          }
+        }}
+      ]
+    })JSON";
     GuestRequest next_page;
     next_page.surface = BrowseSurface::Search;
     next_page.value = "switch homebrew";
@@ -127,6 +169,14 @@ int main() {
            "continuation Search body carries opaque token");
     expect(http.last_request.body.find("\"query\"") == std::string::npos,
            "continuation Search does not resend original query");
+    if (next.page) {
+        expect(next.page->items.size() == 1, "continuation executor returns only scoped sanitized item");
+        expect(contains_id(*next.page, "page-two"), "continuation result survives executor");
+        expect(!contains_id(*next.page, "page-two-short"), "continuation Shorts remain blocked");
+        expect(!contains_id(*next.page, "fake-command-video"),
+               "renderer-shaped continuation sibling cannot escape scope");
+        expect(next.page->continuation == "PAGE-THREE", "modern continuation-item view token preserved");
+    }
 
     FakeHttpClient invalid_http;
     GuestRequest wrong_surface;
