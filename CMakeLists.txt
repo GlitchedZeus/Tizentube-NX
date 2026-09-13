@@ -93,6 +93,10 @@ if(TTNX_BUILD_TESTS)
     target_link_libraries(tizentube_nx_guest_search_tests PRIVATE tizentube_nx_core)
     add_test(NAME guest_search COMMAND tizentube_nx_guest_search_tests)
 
+    add_executable(tizentube_nx_search_executor_error_tests tests/search_executor_error_tests.cpp)
+    target_link_libraries(tizentube_nx_search_executor_error_tests PRIVATE tizentube_nx_core)
+    add_test(NAME search_executor_error COMMAND tizentube_nx_search_executor_error_tests)
+
     add_executable(tizentube_nx_search_flow_tests tests/search_flow_tests.cpp)
     target_link_libraries(tizentube_nx_search_flow_tests PRIVATE tizentube_nx_core)
     add_test(NAME search_flow COMMAND tizentube_nx_search_flow_tests)
