@@ -43,8 +43,13 @@ brls::Button* button(brls::Box* box, const std::string& text) {
 
 class ShellActivity : public brls::Activity {
 public:
-    ShellActivity(ttnx::core::Settings settings, bool storage_ready)
-        : settings_(settings), storage_ready_(storage_ready) {}
+    ShellActivity(
+        ttnx::core::Settings settings,
+        bool storage_ready,
+        ttnx::switch_app::LibnxHttpClient& network_client)
+        : settings_(settings),
+          storage_ready_(storage_ready),
+          network_client_(network_client) {}
 
     ~ShellActivity() override {
         shutdown_network();
@@ -93,11 +98,9 @@ private:
     bool storage_ready_;
     std::string query_;
 
-    // The socket environment is process-level and Borealis initializes it from
-    // userAppInit before main(). Keep our SSL reference/client at activity
-    // lifetime so button presses borrow one stable service environment instead
-    // of repeatedly initializing and tearing services down in each worker.
-    ttnx::switch_app::LibnxHttpClient network_client_;
+    // main() owns this app-lifetime client. Workers only borrow it, so repeated
+    // guest-test presses never cycle socket/SSL service initialization.
+    ttnx::switch_app::LibnxHttpClient& network_client_;
     std::atomic_bool network_busy_{false};
     std::thread network_worker_;
     std::mutex network_mutex_;
@@ -449,7 +452,13 @@ int main(int, char**) {
 
     brls::Application::createWindow("TizenTube NX");
     brls::Application::setGlobalQuit(true);
-    auto* shell = new ShellActivity(settings, storage_ready);
+
+    // Borealis userAppInit() has already initialized the process socket runtime.
+    // This app-lifetime client borrows sockets and acquires one ref-counted SSL
+    // initialization. Its destructor runs when main() unwinds, before Borealis
+    // userAppExit() releases the framework-owned socket environment.
+    ttnx::switch_app::LibnxHttpClient network_client;
+    auto* shell = new ShellActivity(settings, storage_ready, network_client);
     brls::Application::pushActivity(shell);
     hidInitializeTouchScreen();
     ttnx::record_boot_event("interface-ready");
@@ -459,10 +468,8 @@ int main(int, char**) {
         shell->tick();
     }
 
-    // Do not let a network worker survive application shutdown. No session data
-    // is persisted; joining guarantees the worker is done before ShellActivity's
-    // app-lifetime SSL reference is released. Borealis retains ownership of its
-    // pre-existing socket initialization through userAppExit().
+    // Do not let a request worker survive application shutdown. The client is
+    // still alive here; it is destroyed only after this function leaves scope.
     shell->shutdown_network();
     ttnx::record_boot_event("clean-exit");
     return EXIT_SUCCESS;
