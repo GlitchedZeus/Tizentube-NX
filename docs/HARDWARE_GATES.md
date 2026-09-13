@@ -106,7 +106,9 @@ The current code places the persistent `Load more` button outside `search_result
 
 The continuation gate remains **NOT ACCEPTED** until focus remains visible and directional navigation is continuous across the last result / `Load more` boundary.
 
-Also approved for the same UI-fix slice: inline result detail should become a toggle. Pressing A on an unselected result opens its normalized detail; pressing A again on the same result closes it using `SearchModel::clear_selection()` and the existing non-destructive detail visibility path. This must not rebuild result Views.
+Pinned Borealis source confirms the focus mechanism: Up from the sibling `Load more` control enters the nested result Box through its default focus, which resolves to result 1, while appending rows above an already-focused `Load more` button moves that button without generating a new child-focus event for ScrollingFrame recentering. Fix candidate `d432ef8c6eee8e1b77ecd8a96b78832c43bb8a5b` keeps the append-only result tree, routes Load-more-Up explicitly to the current last result, and defers focus by stable identity to the first newly-added result until the next post-layout frame.
+
+Also implemented in the same UI-fix slice: inline result detail is now a toggle. Pressing A on an unselected result opens its normalized detail; pressing A again on the same result closes it using `SearchModel::clear_selection()` and the existing non-destructive detail visibility path. This does not rebuild result Views.
 
 ## Current physical gate — Search continuation focus polish
 

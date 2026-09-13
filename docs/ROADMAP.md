@@ -118,7 +118,11 @@
 - [x] Return B to the active SidebarItem instead of the Sidebar container/default Home item
 - [x] Real-hardware inline-detail + full sidebar traversal acceptance at `d6910a232732b2bd9169abb11dfdf320cf35a34b`
 - [x] Re-enable explicit continuation / `Load more` with append-only result Views at `534f576a77aeb8f7226b2f3a3549be23c621e06a`
-- [ ] Real-hardware continuation / `Load more` acceptance
+- [x] Physically verify continuation fetch/append at `959a46e7c1d5de1743cdf3b11a48b1b227ab0b4e`
+- [x] Hardware-reject `959a46e...` focus UX after selector loss and Up-from-Load-more jump to result 1
+- [x] Prove pinned Borealis nested-Box/default-focus + ScrollingFrame recenter behavior behind that regression
+- [x] Implement focus fix + A-again detail toggle at `d432ef8c6eee8e1b77ecd8a96b78832c43bb8a5b`
+- [ ] Real-hardware continuation / `Load more` focus/UI acceptance
 
 ### Future feature seams — not active in M2
 

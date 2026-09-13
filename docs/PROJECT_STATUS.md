@@ -7,7 +7,7 @@ M2 — YouTube guest browsing / pre-alpha.
 Branch: `feature/m2-guest-browsing`  
 Draft PR: #6 — `M2: guest browsing networking foundation`
 
-The real-Switch guest bootstrap, startup-recovery, first-page live Search, inline result-detail, and full sidebar traversal gates are physically accepted. Hardware-tested NRO head `d6910a232732b2bd9169abb11dfdf320cf35a34b` closes the blank-Search/Home-Search-focus regression introduced by `36015cb...`. Explicit continuation / `Load more` is now implemented at code checkpoint `534f576a77aeb8f7226b2f3a3549be23c621e06a` using append-only result Views; it is host validated and remains pending exact-head devkitA64 plus physical Switch acceptance.
+The real-Switch guest bootstrap, startup-recovery, first-page live Search, inline result-detail, and full sidebar traversal gates are physically accepted. Hardware-tested NRO head `d6910a232732b2bd9169abb11dfdf320cf35a34b` closes the blank-Search/Home-Search-focus regression introduced by `36015cb...`. Physical testing of continuation build `959a46e7c1d5de1743cdf3b11a48b1b227ab0b4e` proved that `Load more` fetches and appends additional videos, but rejected that overall UI checkpoint because the selector could move out of view and Up from `Load more` could jump to result 1. Focus-lifecycle fix `d432ef8c6eee8e1b77ecd8a96b78832c43bb8a5b` now explicitly routes Load-more-Up to the last result, defers focus to the first newly appended result after layout, and adds A-again inline-detail collapse; physical retest remains required.
 
 ## Real-hardware guest-bootstrap acceptance
 
@@ -170,7 +170,7 @@ The continuation UI also preserves the core state-machine behavior already cover
 
 If `Load more` is the focused View when a terminal page removes it, the UI first moves focus to a stable existing result. B/sidebar handling is otherwise unchanged from the physically accepted lifecycle fix.
 
-Host validation passed all `22/22` test executables with added assertions for result preservation/retry, stale continuation rejection, terminal continuation, continuation-added selection, and continuation firewall behavior. The candidate is **not hardware accepted** until it passes the real-Switch continuation checklist.
+Physical hardware subsequently proved the continuation request/data path at `959a46e7c1d5de1743cdf3b11a48b1b227ab0b4e`: additional videos fetched and appended without a crash. That overall UI checkpoint was rejected because the selector could become invisible after append and Up from the sibling `Load more` control could enter the nested results box at its first result. Pinned Borealis confirms the mechanism: sibling traversal into a Box resolves through that Box's default focus, while ScrollingFrame recenters on focus gain rather than merely on a focused View moving after layout growth. Fix `d432ef8c6eee8e1b77ecd8a96b78832c43bb8a5b` preserves append-only result Views, adds an explicit Up route from `Load more` to the current last result, queues focus by stable identity to the first newly appended result for the next post-layout frame, and lets A on an already-selected result call `clear_selection()` to collapse its inline detail. The continuation UI is **not hardware accepted** until that corrected focus sequence passes on the real Switch.
 
 ### Error states
 
