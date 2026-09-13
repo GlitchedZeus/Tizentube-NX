@@ -7,7 +7,7 @@ M2 — YouTube guest browsing / pre-alpha.
 Branch: `feature/m2-guest-browsing`  
 Draft PR: #6 — `M2: guest browsing networking foundation`
 
-The real-Switch guest bootstrap gate is now accepted. The next activation target is live Search on physical hardware.
+The real-Switch guest bootstrap gate is accepted. Live Search is now implemented and CI-built; physical live-Search acceptance is the current hardware gate.
 
 ## Real-hardware guest-bootstrap acceptance
 
@@ -41,7 +41,7 @@ The footer reported:
 
 `M2 guest | Guest ready`
 
-Therefore the physical hardware has now verified the complete guest bootstrap path through:
+Therefore the physical hardware has verified the complete guest bootstrap path through:
 
 - borrowed BSD socket environment;
 - SSL service initialization;
@@ -54,7 +54,7 @@ Therefore the physical hardware has now verified the complete guest bootstrap pa
 - bounded YouTube guest bootstrap parsing;
 - usable guest session creation.
 
-This does **not** yet mean live Search is hardware-accepted; Search activation is the next M2 gate.
+This acceptance remains the prerequisite for live Search. It does not itself accept live Search.
 
 ## Native network lifetime model
 
@@ -76,32 +76,105 @@ TizenTube NX therefore tracks SSL separately from sockets.
 
 ### Application / worker lifetime
 
-The native HTTPS client is owned by `main()` for application lifetime. `ShellActivity` and explicit request workers borrow it. Repeated guest-test button presses do not create service init/exit cycles.
+The native HTTPS client is owned by `main()` for application lifetime. `ShellActivity` and explicit request workers borrow it. Repeated guest-test or Search button presses do not create service init/exit cycles.
 
 See `docs/NATIVE_NETWORK_LIFETIME.md` for the ownership analysis.
 
-## Search / normalized-model state
+## Live Search implementation
 
-The offline M2 Search work remains intact:
+Live guest Search is now wired into the Switch application without bypassing the existing core architecture.
+
+The active path is:
+
+`Borealis Search UI -> SearchModel -> GuestSearchFlow -> worker thread -> main-lifetime LibnxHttpClient -> www.youtube.com Search POST -> scoped Search parser -> Shorts/ad renderer firewall -> normalized BrowseResult -> Borealis text result UI`
+
+The UI does not parse raw YouTube JSON and does not consume renderer-specific structures.
+
+### Explicit query execution
+
+Search remains user initiated:
+
+1. choose `Enter search`;
+2. enter/edit query with the Switch keyboard;
+3. return to the Search page with the query visible;
+4. press the explicit `Search` button;
+5. the network request runs off the Borealis/UI thread.
+
+Closing the keyboard does not automatically perform a Search.
+
+The existing usable guest session is reused in memory. Visitor/session identifiers are not displayed, persisted or logged. If no usable guest session exists, the UI directs the user to the Home `Test YouTube guest connection` action.
+
+### Worker and stale-result safety
+
+Only one live Search worker is allowed at a time. Search and the manual guest-bootstrap diagnostic are not run concurrently.
+
+`SearchModel` remains UI-thread-owned. `GuestSearchFlow` is used by the Search worker. Async completion publishes only normalized result/error data plus the captured `SearchModel` generation.
+
+Editing the query or beginning a newer Search invalidates older generations, so a stale completion cannot replace newer results. Application shutdown joins both the guest diagnostic worker and Search worker before the app-lifetime native HTTP client is destroyed.
+
+Borealis `TabFrame` destroys inactive tab pages. The Search page therefore uses a tracked page wrapper that unregisters its UI pointers synchronously during tab destruction. Workers never capture Borealis page/result view pointers, so leaving Search while a request is in flight does not leave a worker with stale UI references.
+
+### First page and result presentation
+
+The existing `GuestSearchFlow::begin()` and `execute_guest_search()` path performs the real Search POST and routes the response through `parse_scoped_search_response()` and the existing renderer firewall.
+
+Normalized Video / Channel / Playlist results are rendered as controller-focusable, text-only Borealis entries inside a scrolling Search page.
+
+Where safely available:
+
+- Video shows title, uploader/channel, duration, views, upload age, LIVE/UPCOMING state;
+- Channel shows title, subscriber count and video count;
+- Playlist shows title, owner/channel and video count.
+
+Unknown optional metadata is omitted rather than fabricated as values such as `0 views`.
+
+Remote thumbnails remain disabled. Search may normalize thumbnail references, but this UI does not fetch them and no thumbnail/CDN host was added to the outbound policy.
+
+### Result selection seam
+
+Selecting a result proves normalized routing without starting playback.
+
+The temporary selection detail displays normalized title/type/ID and, when the stable ID is valid, a locally generated canonical clean URL:
+
+- Video: `https://www.youtube.com/watch?v=VIDEO_ID`
+- Channel: canonical stable `/channel/CHANNEL_ID` URL
+- Playlist: canonical `playlist?list=PLAYLIST_ID` URL
+
+No source tracking parameters are preserved.
+
+### Continuation / Load more
+
+Search uses an explicit `Load more` action rather than infinite scrolling.
+
+Continuation continues through the same `GuestSearchFlow`, scoped parser and renderer firewall. The existing flow prevents cross-query token reuse and repeated-token loops; continuation requests do not resend the original query. `SearchModel` deduplicates appended results by stable type-qualified identity.
+
+A continuation failure retains existing first-page results and exposes the safe retry state. Terminal pages expose end-of-results.
+
+### Error states
+
+The Switch UI consumes the existing UI-safe Search error taxonomy rather than raw request/response data. It distinguishes policy/network/HTTP/parser/unsupported/continuation conditions through safe user-facing text.
+
+The UI does not expose request JSON, response JSON, continuation tokens, cookies, authorization material, visitor IDs or session identifiers.
+
+## Search hardening state
+
+The previously host-tested M2 Search protections remain intact:
 
 - scoped Search response boundary;
 - hard Shorts/reel firewall;
 - ads/promoted/shopping firewall;
 - legacy and modern renderer normalization;
 - bounded video/channel/playlist metadata;
-- deterministic thumbnail candidates;
+- deterministic normalized thumbnail candidates;
 - canonical clean sharing;
 - query-owned continuation flow;
 - request/privacy hardening;
 - renderer-independent presentation helpers;
-- offline `SearchModel` with stale-generation and retry/end-of-results state;
-- UI-safe Search error taxonomy.
+- `SearchModel` stale-generation, retry and end-of-results state;
+- UI-safe Search error taxonomy;
+- hostile and mutation/parser robustness corpus.
 
-The physical guest-bootstrap prerequisite for activating Search is now satisfied.
-
-The next work should wire the existing Search stack into the Switch UI, keep the request off the UI thread, render normalized results, support continuation/load-more, and then produce a new NRO for physical-Switch Search acceptance.
-
-Remote thumbnail downloads must not silently widen the outbound allowlist. If Search results contain image hosts other than `www.youtube.com`, keep placeholders/text-only cards until those hosts are separately reviewed and approved.
+No unsafe generic parser fallback was added for live Search.
 
 ## V1 profile/account direction
 
@@ -115,9 +188,13 @@ A post-v1 optional YouTube→TizenTube migration feature is planned separately. 
 
 See `docs/PROFILES_AND_IMPORT.md`.
 
+No profile/import implementation is part of this M2 Search slice.
+
 ## Feature-reference policy
 
 Morphe remains a first-class future feature reference through `AGENTS.md` and `docs/MORPHE_REFERENCE.md`. Morphe does not weaken the project-wide no-Shorts invariant.
+
+No SponsorBlock, DeArrow, Return YouTube Dislike or other unrelated Morphe network integration was enabled by this Search milestone.
 
 ## Hard network safety invariant
 
@@ -131,7 +208,9 @@ This remains release-blocking and independent of 90DNS:
 - Nintendo domain families are hard-denied;
 - HTTP, alternate ports, IP literals, userinfo and malformed authorities are rejected;
 - every redirect is revalidated before another DNS lookup;
-- `switch-curl` remains excluded from the NRO.
+- `switch-curl` remains excluded from the NRO;
+- no thumbnail/image CDN host was added;
+- no Google-authentication endpoint was added.
 
 No host is authorized merely because YouTube returns a URL for it.
 
@@ -139,12 +218,17 @@ No host is authorized merely because YouTube returns a URL for it.
 
 The real-Switch guest bootstrap is accepted as `Guest ready`.
 
-The next gate is:
+The live Search implementation has passed host configure/build/full `ctest` and a devkitA64 NRO build at the first live-Search code checkpoint. It is **not** yet hardware accepted.
 
-1. enable the already-tested live Search request path in the Switch UI;
-2. render normalized Video/Channel/Playlist results without widening the allowlist for thumbnails;
-3. retain the hard Shorts/ad/promoted/shopping firewall;
-4. build a new NRO;
-5. physically test first-page Search and continuation/load-more on the Switch.
+The next physical-Switch gate is:
 
-Live Search must not be called hardware-accepted until that new build is tested on the physical Switch.
+1. launch the new NRO;
+2. confirm Home still reaches `Guest ready` when manually tested;
+3. open Search;
+4. search `Nintendo Switch homebrew`;
+5. verify normal Video/Channel/Playlist results can be navigated;
+6. select one normal video result and verify its clean identity/URL detail;
+7. use `Load more` if offered;
+8. report any exact safe Search error/status text.
+
+Only after that physical result should live Search be called hardware-accepted.
