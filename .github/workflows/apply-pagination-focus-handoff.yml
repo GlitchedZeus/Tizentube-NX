@@ -1,0 +1,93 @@
+name: apply-pagination-focus-handoff
+
+on:
+  push:
+    branches:
+      - feature/m2-guest-browsing
+    paths:
+      - .github/workflows/apply-pagination-focus-handoff.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/m2-guest-browsing
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Apply post-pagination focus handoff
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('switch/source/main.cpp')
+          text = path.read_text()
+
+          replacements = [
+              (
+                  '''    brls::ScrollingFrame* search_scroll_{nullptr};\n    bool search_scroll_reflow_pending_{false};\n''',
+                  '''    brls::ScrollingFrame* search_scroll_{nullptr};\n    bool search_scroll_reflow_pending_{false};\n    std::string search_post_load_focus_identity_;\n'''
+              ),
+              (
+                  '''    void apply_pending_search_scroll_reflow() {\n        if (!search_scroll_reflow_pending_) return;\n        search_scroll_reflow_pending_ = false;\n        if (!search_scroll_ || !search_results_box_) return;\n\n        auto* focused = brls::Application::getCurrentFocus();\n''',
+                  '''    void apply_pending_search_scroll_reflow() {\n        // Continuation completion mutates the detached Search tree after the\n        // current frame has already been laid out. Defer the focus handoff until\n        // the next post-layout tick, then focus the first newly-rendered result.\n        // The local pixel-offset ScrollingFrame backport now makes this safe: a\n        // programmatic focus change can re-center against stable pixel state.\n        if (!search_post_load_focus_identity_.empty()) {\n            const std::string identity = std::move(search_post_load_focus_identity_);\n            search_post_load_focus_identity_.clear();\n            for (const auto& row : search_detail_rows_) {\n                if (row.identity == identity && row.button) {\n                    brls::Application::giveFocus(row.button);\n                    // Re-run one more centering pass on the following frame.\n                    // This keeps the focus highlight and viewport aligned even\n                    // if Borealis starts an animated focus scroll here.\n                    if (search_scroll_) search_scroll_reflow_pending_ = true;\n                    return;\n                }\n            }\n        }\n\n        if (!search_scroll_reflow_pending_) return;\n        search_scroll_reflow_pending_ = false;\n        if (!search_scroll_ || !search_results_box_) return;\n\n        auto* focused = brls::Application::getCurrentFocus();\n'''
+              ),
+              (
+                  '''            const std::size_t new_total = search_model_.results().size();\n            const std::size_t added = new_total >= previous_result_count\n                ? new_total - previous_result_count\n                : 0;\n            if (search_detail_rows_.size() + added > kMaxRenderedSearchResults) {\n''',
+                  '''            const std::size_t new_total = search_model_.results().size();\n            const std::size_t added = new_total >= previous_result_count\n                ? new_total - previous_result_count\n                : 0;\n\n            // Choose the first newly-added result that will actually exist in\n            // the bounded hardware view. With normal YouTube page sizes this is\n            // exactly results[previous_result_count]. The max() also stays safe\n            // if a future response adds more than the 40-row render window.\n            std::string first_new_visible_identity;\n            if (added > 0) {\n                const std::size_t rendered_start = new_total > kMaxRenderedSearchResults\n                    ? new_total - kMaxRenderedSearchResults\n                    : 0;\n                const std::size_t focus_index =\n                    std::max(previous_result_count, rendered_start);\n                if (focus_index < new_total) {\n                    first_new_visible_identity = ttnx::core::browse_result_identity(\n                        search_model_.results()[focus_index]);\n                }\n            }\n\n            if (search_detail_rows_.size() + added > kMaxRenderedSearchResults) {\n'''
+              ),
+              (
+                  '''            // The focused control can move when the detached Search content is\n            // relaid out. Re-run ScrollingFrame centering after one rendered\n            // frame so it sees the new Yoga coordinates.\n            if (search_scroll_) search_scroll_reflow_pending_ = true;\n''',
+                  '''            // Real-hardware testing at 57eac3c proved the pixel-offset\n            // ScrollingFrame fix keeps pagination stable through 156 loaded\n            // results, but leaving focus on Load more forces the user to scroll\n            // upward manually to discover what was appended. Hand focus to the\n            // first newly-rendered result on the next post-layout tick instead.\n            if (!first_new_visible_identity.empty()) {\n                search_post_load_focus_identity_ =\n                    std::move(first_new_visible_identity);\n                search_scroll_reflow_pending_ = false;\n            } else if (search_scroll_) {\n                search_scroll_reflow_pending_ = true;\n            }\n'''
+              ),
+              (
+                  '''        search_scroll_ = nullptr;\n        search_scroll_reflow_pending_ = false;\n        search_detail_rows_.clear();\n''',
+                  '''        search_scroll_ = nullptr;\n        search_scroll_reflow_pending_ = false;\n        search_post_load_focus_identity_.clear();\n        search_detail_rows_.clear();\n'''
+              ),
+          ]
+
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'main.cpp expected exactly one match, got {count}: {old[:120]!r}')
+              text = text.replace(old, new, 1)
+
+          path.write_text(text)
+
+          gates = Path('docs/HARDWARE_GATES.md')
+          doc = gates.read_text()
+          marker = '## Current physical gate — Search continuation focus polish\n'
+          if marker not in doc:
+              raise SystemExit('hardware gate marker missing')
+
+          note = '''### Pagination scrolling/stability foundation — hardware accepted\n\nHardware-tested NRO head: `57eac3c19fd19faa24a41d92dd60aa948b832d6b`\n\nPhysical Switch result: **SCROLL/STABILITY FIX ACCEPTED; FINAL POST-LOAD FOCUS UX STILL PENDING**.\n\nObserved on hardware:\n\n- repeated `Load more` remained stable through **156 loaded results**;\n- the previous disappearing/off-screen selector problem did not recur;\n- the earlier roughly 60–80-result unexpected exit did not recur during this stress run;\n- selecting visible loaded results still opens/toggles their inline normalized detail correctly;\n- the bounded 40-row hardware view remained usable while `SearchModel` retained the larger accumulated result set.\n\nThis hardware result strongly validates the local absolute-pixel `ScrollingFrame` backport and bounded live-view tree as the fix for the prior dynamic-content scroll divergence/stability problem. It does **not** yet accept the overall continuation UX.\n\nOne polish issue remains: after `Load more` succeeds, focus intentionally remains on the `Load more` button while the newly appended results appear immediately above it. The user therefore has to press/scroll Up to discover the new page. The next candidate should preserve the now-stable pixel scroll state but defer focus by stable result identity to the **first newly-added visible result** after layout.\n\n'''
+          if note not in doc:
+              doc = doc.replace(marker, note + marker, 1)
+
+          old_gate = '''## Current physical gate — Search continuation focus polish\n\nThe next candidate must preserve the already-proven continuation request/data path while fixing only the Borealis focus/scroll behavior:\n\n- `Load more` must fetch and append additional normalized results without losing the visible selector;\n- after append, focus must remain on a visible stable control or be moved deliberately to the first newly-added result;\n- Up from `Load more` must go to the last result immediately above it, not the first Search result;\n- Down from the last result must reach `Load more` naturally;\n- pressing A twice on the same Search result must toggle inline detail open then closed without deleting/recreating the row;\n- B/sidebar traversal, first-page Search, accumulated result state and all previously accepted lifecycle behavior must remain unchanged;\n- no network/parser/security policy changes are part of this gate.\n'''
+          new_gate = '''## Current physical gate — Search continuation post-load focus handoff\n\nThe dynamic-scroll and repeated-pagination stability problem is now hardware accepted at `57eac3c19fd19faa24a41d92dd60aa948b832d6b`. The remaining continuation gate is narrower:\n\n- pressing `Load more` must still fetch and append normally;\n- once the new page is laid out, the visible selector should move automatically to the **first newly-added visible result**, rather than remaining on `Load more`;\n- the viewport must follow that focus transfer without disappearing, jumping to result 1, or losing the selector;\n- Up from that first new result should move naturally to the previous/older result when one is rendered;\n- Down should continue through the newly-added page, and the last result must still reach `Load more`;\n- repeated pagination should remain stable past the previously verified 156-result stress point;\n- A-twice inline-detail toggle, B/sidebar traversal, first-page Search, accumulated model state and all accepted lifecycle behavior must remain unchanged;\n- no network/parser/security policy changes are part of this gate.\n'''
+          if old_gate not in doc:
+              raise SystemExit('current hardware gate block changed unexpectedly')
+          doc = doc.replace(old_gate, new_gate, 1)
+          gates.write_text(doc)
+          PY
+
+      - name: Host validation
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel
+          ctest --test-dir build --output-on-failure
+
+      - name: Commit and push
+        run: |
+          git config user.name "GlitchedZeus"
+          git config user.email "user91746@protonmail.com"
+          git add switch/source/main.cpp docs/HARDWARE_GATES.md
+          git diff --cached --check
+          git commit -m "ui: focus first new Search result after pagination"
+          git push origin HEAD:feature/m2-guest-browsing
