@@ -117,7 +117,8 @@
 - [x] Remove destructive selection-time result-tree rebuilding and forced result refocus
 - [x] Return B to the active SidebarItem instead of the Sidebar container/default Home item
 - [x] Real-hardware inline-detail + full sidebar traversal acceptance at `d6910a232732b2bd9169abb11dfdf320cf35a34b`
-- [ ] Re-enable continuation / `Load more` as a separate hardware-gated slice
+- [x] Re-enable explicit continuation / `Load more` with append-only result Views at `534f576a77aeb8f7226b2f3a3549be23c621e06a`
+- [ ] Real-hardware continuation / `Load more` acceptance
 
 ### Future feature seams — not active in M2
 
@@ -229,4 +230,4 @@ See `docs/PROFILES_AND_IMPORT.md` and `docs/OAUTH_ACCOUNT_LINKING.md` for the fu
 
 ## Current gate
 
-**Guest bootstrap, startup recovery, first-page live Search, inline result detail, and full sidebar traversal are physically accepted. The next Search gate is continuation / `Load more`, reintroduced as a separate hardware-gated slice. Preserve the accepted non-destructive result View lifecycle, exact `www.youtube.com:443` allowlist, hard Shorts/ad firewall, remote-thumbnail block, and post-v1 OAuth documentation-only boundary during M2.**
+**Guest bootstrap, startup recovery, first-page live Search, inline result detail, and full sidebar traversal are physically accepted. Explicit continuation / `Load more` is implemented as an append-only candidate and is pending exact-head devkitA64 plus physical Switch acceptance. Preserve the accepted non-destructive result View lifecycle, exact `www.youtube.com:443` allowlist, hard Shorts/ad firewall, remote-thumbnail block, and post-v1 OAuth documentation-only boundary during M2.**
