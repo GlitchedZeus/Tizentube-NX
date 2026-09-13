@@ -70,7 +70,8 @@ CXXFLAGS	:= $(CFLAGS) -std=gnu++20 -include optional -O2 -Wno-volatile
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
-LIBS	:= -lnx
+# switch-curl is statically linked; keep its TLS/zlib dependencies in link order.
+LIBS	:= -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -lz -lnx
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing
