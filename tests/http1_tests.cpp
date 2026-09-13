@@ -32,7 +32,7 @@ int main() {
     expect(!parse_https_url("http://www.youtube.com/"), "plain HTTP URL rejected");
     expect(!parse_https_url("https://user@www.youtube.com/"), "userinfo rejected");
     expect(!parse_https_url("https://[::1]/"), "IPv6 literal rejected");
-    expect(!parse_https_url("https://www.youtube.com:444/"), "non-443 URL still parses only as explicit port");
+    expect(!parse_https_url("https://www.youtube.com:444/"), "non-443 port rejected");
     expect(!parse_https_url("https://-bad.youtube.com/"), "leading-hyphen DNS label rejected");
     expect(!parse_https_url("https://bad-.youtube.com/"), "trailing-hyphen DNS label rejected");
     expect(!parse_https_url("https://www.youtube.com/a path"), "space in request target rejected");
@@ -73,7 +73,10 @@ int main() {
            "header CRLF injection rejected");
 
     HttpRequest control_header = post;
-    control_header.headers.push_back({"X-Test", std::string("safe\x01bad", 8)});
+    std::string control_value = "safe";
+    control_value.push_back(static_cast<char>(0x01));
+    control_value += "bad";
+    control_header.headers.push_back({"X-Test", control_value});
     expect(post_url && !build_http1_request(control_header, *post_url),
            "header control characters rejected");
 
