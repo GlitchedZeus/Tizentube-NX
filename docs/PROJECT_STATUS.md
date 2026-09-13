@@ -309,3 +309,7 @@ The Sections/B path also targeted the Sidebar container. Borealis resolves conta
 The accepted fix removes selection-time list rebuilding entirely. Result buttons and metadata remain alive; each result owns a pre-created detail label whose `VISIBLE`/`GONE` state changes when selection changes. Full list rebuilding remains limited to genuinely new Search results or reconstructing a Search page after a real tab switch.
 
 Hardware-tested NRO head `d6910a232732b2bd9169abb11dfdf320cf35a34b` passed the full inline-detail/sidebar traversal sequence and is now accepted for this UI lifecycle gate. Explicit continuation / `Load more` is implemented separately at `534f576a77aeb8f7226b2f3a3549be23c621e06a` and remains pending physical Switch acceptance. Guest bootstrap and first-page Search acceptance remain unchanged.
+
+## Home first-page hardware diagnostic gate
+
+The first Home NRO at `ba0066b34270bfa1809dc5d3567aead86a298033` is physically rejected only for zero normalized Home results; guest networking succeeded. A privacy-safe structural diagnostic candidate is the active M2 task. Search through `428497c90be6e768c607e45c68171827d74f0faf` remains hardware accepted and protected.

@@ -20,6 +20,10 @@ constexpr std::size_t kMaxObjectMembers = 1024;
 constexpr std::size_t kMaxArrayElements = 4096;
 constexpr std::size_t kMaxSectionTitleBytes = 256;
 constexpr unsigned kMaxScopeDepth = 128;
+constexpr std::size_t kMaxDiagnosticFamilies = 16;
+constexpr std::size_t kMaxDiagnosticFamilyBytes = 64;
+constexpr std::size_t kMaxDiagnosticSummaryBytes = 1600;
+constexpr unsigned kMaxDiagnosticDepth = 32;
 
 bool is_ws(char c) {
     return c == ' ' || c == '\t' || c == '\r' || c == '\n';
@@ -384,6 +388,304 @@ std::optional<std::string_view> recognized_tab_contents(std::string_view tab_ren
     return std::nullopt;
 }
 
+bool has_suffix(std::string_view value, std::string_view suffix) {
+    return value.size() >= suffix.size() &&
+ value.substr(value.size() - suffix.size()) == suffix;
+}
+
+bool diagnostic_family_name(std::string_view name) {
+    if (name.empty() || name.size() > kMaxDiagnosticFamilyBytes) return false;
+    if (!(has_suffix(name, "Renderer") || has_suffix(name, "ViewModel") ||
+has_suffix(name, "View"))) {
+        return false;
+    }
+    for (const unsigned char c : name) {
+        if (!(std::isalnum(c) || c == '_')) return false;
+    }
+    return true;
+}
+
+std::string ascii_lower(std::string_view value) {
+    std::string out;
+    out.reserve(value.size());
+    for (const unsigned char c : value) {
+        out.push_back(static_cast<char>(std::tolower(c)));
+    }
+    return out;
+}
+
+bool reviewed_diagnostic_wrapper(std::string_view name) {
+    for (const auto reviewed : {
+   std::string_view{"richGridRenderer"},
+   std::string_view{"sectionListRenderer"},
+   std::string_view{"richItemRenderer"},
+   std::string_view{"richSectionRenderer"},
+   std::string_view{"richShelfRenderer"},
+   std::string_view{"shelfRenderer"},
+   std::string_view{"itemSectionRenderer"},
+   std::string_view{"itemSectionHeaderRenderer"},
+   std::string_view{"horizontalListRenderer"},
+   std::string_view{"expandedShelfContentsRenderer"}}) {
+        if (name == reviewed) return true;
+    }
+    return false;
+}
+
+bool reviewed_diagnostic_leaf(std::string_view name) {
+    for (const auto reviewed : {
+   std::string_view{"videoRenderer"},
+   std::string_view{"channelRenderer"},
+   std::string_view{"playlistRenderer"},
+   std::string_view{"radioRenderer"},
+   std::string_view{"lockupViewModel"},
+   std::string_view{"continuationItemRenderer"},
+   std::string_view{"continuationItemViewModel"},
+   std::string_view{"continuationItemView"}}) {
+        if (name == reviewed) return true;
+    }
+    return false;
+}
+
+bool diagnostic_structural_key(std::string_view key) {
+    for (const auto structural : {
+   std::string_view{"content"},
+   std::string_view{"contents"},
+   std::string_view{"items"},
+   std::string_view{"header"},
+   std::string_view{"footer"},
+   std::string_view{"continuationItems"}}) {
+        if (key == structural) return true;
+    }
+    return false;
+}
+
+struct DiagnosticFamilyCount {
+    std::string name;
+    std::size_t count{0};
+};
+
+struct HomeDiagnosticsBuilder {
+    bool two_column{false};
+    bool single_column{false};
+    std::size_t tab_count{0};
+    std::size_t selected_tab_count{0};
+    std::size_t shorts_reels{0};
+    std::size_t ads_promoted{0};
+    std::size_t shopping_product{0};
+    std::size_t premium_promo{0};
+    std::size_t continuation_renderers{0};
+    std::size_t opaque_wrappers{0};
+    std::size_t truncated_families{0};
+    std::vector<DiagnosticFamilyCount> families;
+    std::vector<std::string> opaque_family_names;
+
+    bool observe_family(std::string_view name) {
+        if (!diagnostic_family_name(name)) return false;
+        bool found = false;
+        for (auto& family : families) {
+  if (family.name == name) {
+      ++family.count;
+      found = true;
+      break;
+  }
+        }
+        if (!found) {
+  if (families.size() < kMaxDiagnosticFamilies) {
+      families.push_back({std::string(name), 1});
+  } else {
+      ++truncated_families;
+  }
+        }
+
+        const auto lower = ascii_lower(name);
+        bool blocked = false;
+        if (lower.find("reel") != std::string::npos ||
+  lower.find("short") != std::string::npos) {
+  ++shorts_reels;
+  blocked = true;
+        }
+        if (lower.rfind("ad", 0) == 0 ||
+  lower.find("promoted") != std::string::npos ||
+  lower.find("sponsored") != std::string::npos) {
+  ++ads_promoted;
+  blocked = true;
+        }
+        if (lower.find("shopping") != std::string::npos ||
+  lower.find("product") != std::string::npos ||
+  lower.find("merch") != std::string::npos) {
+  ++shopping_product;
+  blocked = true;
+        }
+        if (lower.find("premium") != std::string::npos ||
+  lower.find("promo") != std::string::npos ||
+  lower.find("upsell") != std::string::npos ||
+  lower.find("mealbar") != std::string::npos) {
+  ++premium_promo;
+  blocked = true;
+        }
+        if (lower.rfind("continuationitem", 0) == 0) {
+  ++continuation_renderers;
+        }
+        return blocked;
+    }
+
+    void note_opaque(std::string_view name) {
+        ++opaque_wrappers;
+        if (!diagnostic_family_name(name)) return;
+        for (const auto& existing : opaque_family_names) {
+  if (existing == name) return;
+        }
+        if (opaque_family_names.size() < kMaxDiagnosticFamilies) {
+  opaque_family_names.emplace_back(name);
+        }
+    }
+
+    std::string summary() const {
+        std::string out;
+        auto append = [&out](std::string_view value) {
+  if (out.size() >= kMaxDiagnosticSummaryBytes) return;
+  const auto room = kMaxDiagnosticSummaryBytes - out.size();
+  out.append(value.substr(0, room));
+        };
+        append("Home diag: twoColumn=");
+        append(two_column ? "1" : "0");
+        append(" singleColumn=");
+        append(single_column ? "1" : "0");
+        append(" tabs=");
+        append(std::to_string(tab_count));
+        append(" selected=");
+        append(std::to_string(selected_tab_count));
+        append(" | families=");
+        if (families.empty()) {
+  append("(none)");
+        } else {
+  for (std::size_t i = 0; i < families.size(); ++i) {
+      if (i) append(",");
+      append(families[i].name);
+      append(":");
+      append(std::to_string(families[i].count));
+  }
+        }
+        if (truncated_families) {
+  append(",+truncated:");
+  append(std::to_string(truncated_families));
+        }
+        append(" | blocked shorts/reels=");
+        append(std::to_string(shorts_reels));
+        append(" ads/promoted=");
+        append(std::to_string(ads_promoted));
+        append(" shopping/product=");
+        append(std::to_string(shopping_product));
+        append(" premium/promo=");
+        append(std::to_string(premium_promo));
+        append(" continuationRenderers=");
+        append(std::to_string(continuation_renderers));
+        append(" opaque=");
+        append(std::to_string(opaque_wrappers));
+        if (!opaque_family_names.empty()) {
+  append(" | opaqueFamilies=");
+  for (std::size_t i = 0; i < opaque_family_names.size(); ++i) {
+      if (i) append(",");
+      append(opaque_family_names[i]);
+  }
+        }
+        return out;
+    }
+};
+
+void scan_home_structure(
+    std::string_view value,
+    HomeDiagnosticsBuilder& diagnostics,
+    unsigned depth = 0) {
+    if (depth > kMaxDiagnosticDepth) return;
+    std::size_t pos = 0;
+    skip_ws(value, pos);
+    if (pos >= value.size()) return;
+
+    if (value[pos] == '[') {
+        const auto items = array_elements(value);
+        if (!items) return;
+        for (const auto item : *items) {
+  scan_home_structure(item, diagnostics, depth + 1);
+        }
+        return;
+    }
+    if (value[pos] != '{') return;
+
+    const auto members = object_members(value);
+    if (!members) return;
+    for (const auto& member : *members) {
+        if (diagnostic_family_name(member.key)) {
+  const bool blocked = diagnostics.observe_family(member.key);
+  if (blocked) {
+      diagnostics.note_opaque(member.key);
+      continue;
+  }
+  if (reviewed_diagnostic_wrapper(member.key)) {
+      scan_home_structure(member.value, diagnostics, depth + 1);
+      continue;
+  }
+  if (reviewed_diagnostic_leaf(member.key)) {
+      continue;
+  }
+  diagnostics.note_opaque(member.key);
+  continue;
+        }
+        if (diagnostic_structural_key(member.key)) {
+  scan_home_structure(member.value, diagnostics, depth + 1);
+        }
+    }
+}
+
+HomeDiagnosticsBuilder build_home_diagnostics(std::string_view response_body) {
+    HomeDiagnosticsBuilder diagnostics;
+    const auto two = path(response_body, {"contents", "twoColumnBrowseResultsRenderer", "tabs"});
+    const auto one = path(response_body, {"contents", "singleColumnBrowseResultsRenderer", "tabs"});
+    diagnostics.two_column = two.has_value();
+    diagnostics.single_column = one.has_value();
+
+    const auto tabs_json = two ? two : one;
+    if (tabs_json) {
+        if (const auto tabs = array_elements(*tabs_json)) {
+  diagnostics.tab_count = tabs->size();
+  std::optional<std::string_view> fallback_content;
+  for (const auto tab : *tabs) {
+      const auto renderer = field(tab, "tabRenderer");
+      if (!renderer) continue;
+      const auto content = field(*renderer, "content");
+      if (content && !fallback_content) fallback_content = *content;
+      if (!tab_selected(*renderer)) continue;
+      ++diagnostics.selected_tab_count;
+      if (content) scan_home_structure(*content, diagnostics);
+  }
+  if (diagnostics.selected_tab_count == 0 && fallback_content) {
+      scan_home_structure(*fallback_content, diagnostics);
+  }
+        }
+    }
+
+    for (const auto response_key : {
+   std::string_view{"onResponseReceivedActions"},
+   std::string_view{"onResponseReceivedCommands"},
+   std::string_view{"onResponseReceivedEndpoints"}}) {
+        const auto updates_json = field(response_body, response_key);
+        if (!updates_json) continue;
+        const auto updates = array_elements(*updates_json);
+        if (!updates) continue;
+        for (const auto update : *updates) {
+  for (const auto action_key : {
+           std::string_view{"appendContinuationItemsAction"},
+           std::string_view{"reloadContinuationItemsCommand"}}) {
+      const auto action = field(update, action_key);
+      if (!action) continue;
+      const auto items = field(*action, "continuationItems");
+      if (items) scan_home_structure(*items, diagnostics);
+  }
+        }
+    }
+    return diagnostics;
+}
+
 std::string section_title(std::string_view entry) {
     for (const auto candidate : {
              path(entry, {"richSectionRenderer", "content", "richShelfRenderer", "title"}),
@@ -399,9 +701,10 @@ std::string section_title(std::string_view entry) {
     return {};
 }
 
-HomeResponseParseResult fail(std::string error) {
+HomeResponseParseResult fail(std::string error, std::string diagnostics = {}) {
     HomeResponseParseResult result;
     result.error = std::move(error);
+    result.diagnostics = std::move(diagnostics);
     return result;
 }
 
@@ -748,6 +1051,8 @@ HomeResponseParseResult parse_scoped_home_response(
         return fail("Home response is malformed or exceeds scope parser limits.");
     }
 
+    const std::string diagnostics = build_home_diagnostics(response_body).summary();
+
     core::HomePage home;
     std::unordered_set<std::string> seen;
     seen.reserve(128);
@@ -765,7 +1070,7 @@ HomeResponseParseResult parse_scoped_home_response(
             ambiguous_continuation,
             saw_payload,
             error)) {
-        return fail(error.empty() ? "Home primary scope could not be read safely." : std::move(error));
+        return fail(error.empty() ? "Home primary scope could not be read safely." : std::move(error), diagnostics);
     }
     if (!collect_continuation_home(
             response_body,
@@ -776,17 +1081,18 @@ HomeResponseParseResult parse_scoped_home_response(
             ambiguous_continuation,
             saw_payload,
             error)) {
-        return fail(error.empty() ? "Home continuation scope could not be read safely." : std::move(error));
+        return fail(error.empty() ? "Home continuation scope could not be read safely." : std::move(error), diagnostics);
     }
 
     if (!saw_payload) {
-        return fail("Home response did not contain a recognized Home browse payload.");
+        return fail("Home response did not contain a recognized Home browse payload.", diagnostics);
     }
 
     if (!ambiguous_continuation) home.continuation = std::move(continuation);
 
     HomeResponseParseResult result;
     result.page = std::move(home);
+    result.diagnostics = diagnostics;
     return result;
 }
 

@@ -45,15 +45,18 @@ GuestHomeResult execute_guest_home(
 
     auto parsed = parse_scoped_home_response(http_result.response.body, policy);
     if (!parsed || !parsed.page) {
-        return fail(parsed.error.empty()
+        auto result = fail(parsed.error.empty()
             ? std::string{"Guest Home response was rejected."}
             : net::safe_public_diagnostic(
                   parsed.error,
                   "Guest Home response was rejected."));
+        result.diagnostics = std::move(parsed.diagnostics);
+        return result;
     }
 
     GuestHomeResult result;
     result.page = std::move(parsed.page);
+    result.diagnostics = std::move(parsed.diagnostics);
     return result;
 }
 

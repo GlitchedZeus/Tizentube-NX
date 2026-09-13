@@ -266,3 +266,8 @@ See `docs/PROFILES_AND_IMPORT.md` and `docs/OAUTH_ACCOUNT_LINKING.md` for the fu
 ## Current gate
 
 **Guest bootstrap, startup recovery, the complete Search slice, inline detail, sidebar traversal, and explicit Search continuation are physically accepted through `428497c90be6e768c607e45c68171827d74f0faf`. The current M2 gate is the first explicit live guest Home page. Preserve the accepted Search implementation, exact `www.youtube.com:443` allowlist, hard Shorts/ad/promoted/shopping firewall, remote-thumbnail block, and post-v1 OAuth documentation-only boundary.**
+
+
+## Active Home diagnostic gate
+
+Before Home continuation, channel pages or playlist pages, identify the real guest Home renderer/container family returned on Switch using bounded structural diagnostics. Do not widen `www.youtube.com:443`, fetch thumbnails, add OAuth, or loosen the Shorts/ad/shopping firewall for this gate.

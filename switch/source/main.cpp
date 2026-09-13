@@ -156,6 +156,7 @@ private:
     // HomeModel is UI-thread-only. The explicit Home worker publishes normalized
     // HomePage data plus the captured generation and never touches Borealis Views.
     ttnx::core::HomeModel home_model_;
+    std::string home_diagnostics_;
     std::atomic_bool home_busy_{false};
     std::atomic_bool home_worker_done_{false};
     std::thread home_worker_;
@@ -319,12 +320,18 @@ private:
                 text += ". First-page Home hardware gate; continuation is deferred.";
                 return text;
             }
-            case ttnx::core::HomeViewState::Empty:
-                return "YouTube Home returned no supported normal results.";
-            case ttnx::core::HomeViewState::Error:
-                return home_model_.error().empty()
+            case ttnx::core::HomeViewState::Empty: {
+                std::string text = "YouTube Home returned no supported normal results.";
+                if (!home_diagnostics_.empty()) text += "\n" + home_diagnostics_;
+                return text;
+            }
+            case ttnx::core::HomeViewState::Error: {
+                std::string text = home_model_.error().empty()
                     ? "Home could not be loaded safely."
                     : home_model_.error();
+                if (!home_diagnostics_.empty()) text += "\n" + home_diagnostics_;
+                return text;
+            }
         }
         return "Home state unavailable.";
     }
@@ -447,6 +454,12 @@ private:
         home_worker_done_.store(false);
         home_busy_.store(false);
 
+        if (have_result) {
+            home_diagnostics_ = std::move(result.diagnostics);
+        } else {
+            home_diagnostics_.clear();
+        }
+
         bool applied = false;
         if (have_result && result.page) {
             applied = home_model_.apply_page(generation, std::move(*result.page));
@@ -476,6 +489,7 @@ private:
         if (home_worker_.joinable()) home_worker_.join();
 
         const auto generation = home_model_.begin_load();
+        home_diagnostics_.clear();
         home_busy_.store(true);
         home_worker_done_.store(false);
         refresh_footer();

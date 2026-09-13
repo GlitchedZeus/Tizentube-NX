@@ -12,6 +12,9 @@ namespace ttnx::youtube {
 struct HomeResponseParseResult {
     std::optional<core::HomePage> page;
     std::string error;
+    // Privacy-safe, bounded structural diagnostics only. This must never contain
+    // response values such as titles, IDs, tokens, visitor data or URLs.
+    std::string diagnostics;
 
     [[nodiscard]] explicit operator bool() const noexcept {
         return page.has_value();

@@ -92,6 +92,13 @@ int main() {
 
     const auto result = execute_guest_home(http, session, home);
     expect(result.page.has_value(), "guest Home first page succeeds through fake transport");
+    expect(!result.diagnostics.empty(), "guest Home propagates structural diagnostics");
+    expect(result.diagnostics.find("richGridRenderer:") != std::string::npos,
+           "guest Home diagnostics retain renderer-family structure");
+    expect(result.diagnostics.find("safe-home-video") == std::string::npos,
+           "guest Home diagnostics never expose video IDs");
+    expect(result.diagnostics.find("visitor-home-test") == std::string::npos,
+           "guest Home diagnostics never expose visitor data");
     expect(http.calls == 1, "guest Home performs exactly one HTTP request");
     expect(http.last_request.method == HttpMethod::Post, "Home uses POST");
     expect(http.last_request.url == "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false&alt=json",

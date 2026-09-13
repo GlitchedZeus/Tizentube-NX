@@ -56,3 +56,7 @@ Playback, channel pages, playlist pages, profiles, OAuth, SponsorBlock, DeArrow,
 The complete Search slice is physically accepted through `428497c90be6e768c607e45c68171827d74f0faf`, including explicit continuation, first-new-result focus handoff, inline A/A-again detail toggle, sidebar traversal and the previously stress-tested 156-result scrolling foundation.
 
 Home development must not reopen or redesign that accepted Search path unless a real regression requires it.
+
+## Physical zero-result diagnostic follow-up
+
+The first physical Home candidate at `ba0066b34270bfa1809dc5d3567aead86a298033` reached `Guest ready` and completed `Load Home`, but normalized zero supported results. The diagnostic follow-up does **not** loosen the renderer firewall or introduce generic result recursion. It reports only bounded structural renderer/container-family information from the selected Home scope and stops at blocked or unknown families. This is intended to identify the real modern Home wrapper returned on hardware before any new family is admitted to normalization.

@@ -166,6 +166,32 @@ int main() {
 
     const auto parsed = parse_scoped_home_response(home_fixture());
     expect(parsed.page.has_value(), "recognized selected Home tab parses");
+    expect(parsed.diagnostics.find("twoColumn=1") != std::string::npos,
+           "Home diagnostics identify two-column browse layout");
+    expect(parsed.diagnostics.find("tabs=2") != std::string::npos,
+           "Home diagnostics count browse tabs");
+    expect(parsed.diagnostics.find("selected=1") != std::string::npos,
+           "Home diagnostics count selected tabs");
+    expect(parsed.diagnostics.find("richGridRenderer:") != std::string::npos,
+           "Home diagnostics report richGridRenderer structurally");
+    expect(parsed.diagnostics.find("richItemRenderer:") != std::string::npos,
+           "Home diagnostics report richItemRenderer structurally");
+    expect(parsed.diagnostics.find("reelShelfRenderer:") != std::string::npos,
+           "Home diagnostics report blocked reel structural family");
+    expect(parsed.diagnostics.find("adSlotRenderer:") != std::string::npos,
+           "Home diagnostics report blocked ad structural family");
+    expect(parsed.diagnostics.find("productRenderer:") != std::string::npos,
+           "Home diagnostics report blocked shopping structural family");
+    expect(parsed.diagnostics.find("totallyUnknownRenderer") != std::string::npos,
+           "Home diagnostics report bounded opaque family names");
+    expect(parsed.diagnostics.find("home-video") == std::string::npos,
+           "Home diagnostics never expose video IDs");
+    expect(parsed.diagnostics.find("Normal Home Video") == std::string::npos,
+           "Home diagnostics never expose video titles");
+    expect(parsed.diagnostics.find("HOME-NEXT") == std::string::npos,
+           "Home diagnostics never expose continuation tokens");
+    expect(parsed.diagnostics.find("i.ytimg.com") == std::string::npos,
+           "Home diagnostics never expose thumbnail URLs");
     if (parsed.page) {
         const auto& page = *parsed.page;
         expect(page.results.size() == 4,
@@ -254,6 +280,37 @@ int main() {
         expect(next.page->continuation == "HOME-PAGE-THREE",
                "Home continuation token remains opaque");
     }
+
+    const auto opaque_selected = parse_scoped_home_response(R"JSON({
+      "contents": {"twoColumnBrowseResultsRenderer": {"tabs": [
+        {"tabRenderer": {"selected": true, "content": {"richGridRenderer": {"contents": [
+{"mysteryHomeRenderer": {"contents": [
+  {"videoRenderer": {"videoId": "PRIVATE-OPAQUE-ID", "title": {"simpleText": "Private Opaque Title"}}}
+]}}
+        ]}}}}
+      ]}}
+    })JSON");
+    expect(opaque_selected.page.has_value(), "opaque selected Home wrapper yields an empty normalized page, not unsafe recursion");
+    if (opaque_selected.page) {
+        expect(opaque_selected.page->results.empty(), "opaque Home wrapper contributes zero results");
+    }
+    expect(opaque_selected.diagnostics.find("mysteryHomeRenderer") != std::string::npos,
+ "opaque Home family name is structurally reported");
+    expect(opaque_selected.diagnostics.find("PRIVATE-OPAQUE-ID") == std::string::npos,
+ "opaque Home diagnostics do not expose nested IDs");
+    expect(opaque_selected.diagnostics.find("Private Opaque Title") == std::string::npos,
+ "opaque Home diagnostics do not expose nested titles");
+    expect(opaque_selected.diagnostics.find("videoRenderer") == std::string::npos,
+ "diagnostic scanner does not descend through an unreviewed wrapper");
+
+    const auto single_column = parse_scoped_home_response(R"JSON({
+      "contents": {"singleColumnBrowseResultsRenderer": {"tabs": [
+        {"tabRenderer": {"selected": true, "content": {"sectionListRenderer": {"contents": []}}}}
+      ]}}
+    })JSON");
+    expect(single_column.page.has_value(), "single-column empty Home scope is recognized");
+    expect(single_column.diagnostics.find("singleColumn=1") != std::string::npos,
+ "Home diagnostics identify single-column browse layout");
 
     const auto unsupported = parse_scoped_home_response(R"JSON({
       "topbar": {"videoRenderer": {"videoId": "x", "title": {"simpleText": "x"}}}

@@ -15,6 +15,9 @@ struct GuestHomeResult {
     // Sanitized public-safe diagnostic. Raw response bodies, tokens, visitor
     // identifiers and request metadata must never escape through this field.
     std::string error;
+    // Bounded renderer/container-family summary from the scoped Home parser.
+    // Contains structural names/counts only; never response values.
+    std::string diagnostics;
 
     [[nodiscard]] explicit operator bool() const noexcept {
         return page.has_value();
