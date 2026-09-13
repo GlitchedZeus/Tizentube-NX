@@ -3,6 +3,8 @@
 #include "tizentube_nx/core/content_filter.hpp"
 #include "tizentube_nx/core/search_result.hpp"
 
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -37,15 +39,25 @@ struct RendererRecord {
     std::string renderer;
     ContentItem item;
     std::string channel_title;
-    std::string thumbnail_url;
-    std::string duration_text;
     std::string channel_id;
+
+    std::vector<ThumbnailCandidate> thumbnails;
+    // Legacy single-thumbnail slot retained while existing parser tests migrate.
+    std::string thumbnail_url;
+
+    std::string duration_text;
+    std::optional<std::uint64_t> duration_seconds;
     std::string view_count_text;
+    std::optional<std::uint64_t> view_count;
     std::string published_text;
     std::string subscriber_count_text;
+    std::optional<std::uint64_t> subscriber_count;
     std::string video_count_text;
+    std::optional<std::uint64_t> video_count;
     std::string accessibility_text;
+
     bool upcoming{false};
+    std::optional<std::uint64_t> scheduled_start_time_seconds;
 };
 
 struct BrowsePage {
