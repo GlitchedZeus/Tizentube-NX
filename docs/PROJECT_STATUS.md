@@ -36,7 +36,7 @@ This is release-blocking and does not rely on 90DNS:
 - Automatic cross-host redirects are forbidden; every redirect must be revalidated before another DNS lookup.
 - IP-literal destinations, userinfo authority tricks, non-HTTPS destinations and alternate ports are denied.
 - Host tests cover Nintendo roots/deep subdomains and deceptive authority forms.
-- Any future network stack (direct libnx SSL, curl, image loader, media resolver, auth, updater, SponsorBlock, DeArrow, etc.) must pass the same policy before DNS.
+- Any future network stack (direct libnx SSL, image loader, media resolver, auth, updater, SponsorBlock, DeArrow, etc.) must pass the same policy before DNS.
 
 See `docs/NETWORK_SAFETY.md`.
 
@@ -73,19 +73,6 @@ Host and devkitA64 Switch CI both pass.
 Checkpoint: `2edf3ab18c798e1e69e548e1b2623fd079a2c254`.
 Host and devkitA64 Switch CI both pass.
 
-### Switch HTTPS investigation
-
-A strict-verification curl transport was prototyped and builds successfully, but it is **not approved as the live/default path**.
-
-Important findings:
-
-- devkitPro `switch-curl` uses its custom libnx SSL backend and the console SSL service/trust infrastructure; a bundled mbedTLS CA path is not the correct default assumption.
-- devkitPro issue #436 (opened 2026-08-13) reports a hard crash in the current curl/libnx certificate-info path during routine HTTPS, even when the application did not request certificate info.
-- TizenTube NX issue #7 tracks this blocker.
-- Curl automatic redirect following has been disabled.
-- The curl prototype now applies the TizenTube NX outbound allowlist before curl can perform DNS resolution.
-- The preferred M2 live path is now a small direct libnx SSL-service HTTP transport with peer-CA + hostname verification, avoiding the buggy curl certificate-extraction layer.
-
 ### Guest session bootstrap parser
 
 - Bounded parser for YouTube's `sw.js_data` JSPB/XSSI response.
@@ -106,34 +93,72 @@ Host CI and the devkitA64 NRO build both pass.
 - Explicit Nintendo-family hard deny independent of 90DNS.
 - URL validation occurs before DNS/connect.
 - HTTP, alternate ports, IP literals, userinfo and malformed DNS names are rejected.
-- Automatic curl redirects are disabled so redirects cannot bypass the host policy.
+- Every native HTTP redirect is revalidated immediately and again before the next DNS lookup.
 - Dedicated host tests verify Nintendo and redirect/authority tricks are blocked locally.
 
-Network-safety checkpoint is on the current M2 branch and must remain green before live-network integration.
+Network-safety policy remains release-blocking.
+
+### Strict HTTP/1.1 codec
+
+- Host-tested HTTPS URL parser restricted to port 443.
+- GET/POST request serializer owns `Host`, `Connection`, `Accept-Encoding`, framing and POST `Content-Length`.
+- Caller CRLF/control-character header injection is rejected.
+- Response parser accepts bounded HTTP/1.0/1.1 responses, fixed-length, chunked and connection-close framing.
+- Ambiguous framing (duplicate `Content-Length`, duplicate `Transfer-Encoding`, or both TE + CL) fails closed.
+- Truncation, trailing bytes after declared framing, invalid chunks, oversized bodies and body-forbidden status responses fail closed.
+- Redirect `Location` is surfaced but never followed by the codec itself.
+
+Host CI passes with the HTTP/1.1 suite wired into CMake.
+
+### Native Switch HTTPS transport
+
+The approved M2 transport is now a direct libnx implementation using BSD sockets plus the console's local Horizon SSL service.
+
+Implemented and compile-verified:
+
+- Two application policy gates exist before remote contact: `perform()` validates the full URL before networking, and the only DNS helper checks the allowlisted hostname immediately before `getaddrinfo()`.
+- IPv4 TCP connect is bounded with a non-blocking connect/poll timeout and socket send/receive timeouts.
+- TLS is limited to TLS 1.2, plus TLS 1.3 on HOS 11.0.0+.
+- Peer-CA, hostname and certificate-date verification are explicitly enabled.
+- Hostname/SNI is set before handshake.
+- The libnx socket-to-SSL descriptor wrapper is used, with correct returned-descriptor ownership/close order.
+- Requests and raw/decoded responses are bounded.
+- GET redirects are bounded to three hops and each target is policy-validated before another DNS lookup.
+- POST redirects fail closed for the first milestone rather than changing method semantics implicitly.
+- The current `switch-curl` prototype remains source reference only and is filtered out of the Switch build.
+- Curl/mbedTLS/zlib link dependencies were removed from the NRO build path; the native transport links through libnx only.
+
+Native transport checkpoint: `9042b2ba376c10d5f51ada8487f4799187b625af`.
+Host tests and devkitA64 Switch build both pass at this checkpoint.
+
+This is a **compile/integration checkpoint**, not yet a claim that a live YouTube HTTPS request has succeeded on real hardware.
 
 ## Immediate next technical checkpoint
 
-1. Finish the direct libnx SSL HTTP/1.1 transport behind the default-deny destination policy.
-2. Support GET + POST, bounded response bodies and bounded redirects where each redirect target is revalidated before DNS.
-3. Execute the first live guest `sw.js_data` HTTPS request off the Borealis UI thread without logging visitor/session data.
-4. Parse live Search/Home results into renderer-neutral records.
-5. Run every parsed record through the renderer firewall before creating UI cards.
-6. Wire continuation paging after the first page is proven on real hardware.
+1. Add the first user-triggered guest bootstrap action without performing hidden networking at app startup.
+2. Execute `sw.js_data` on a worker thread so DNS/TCP/TLS/HTTP never block the Borealis UI loop.
+3. Marshal only non-sensitive success/error state back to the UI; do not log visitor/session data.
+4. Prove the native HTTPS handshake/bootstrap on real Atmosphere hardware.
+5. Parse live Search/Home results into renderer-neutral records.
+6. Run every parsed record through the renderer firewall before creating UI cards.
+7. Wire continuation paging only after first-page guest browsing is proven on real hardware.
 
 No account login, playback, SponsorBlock or DeArrow is claimed at this checkpoint.
 
 ## Validation
 
 - M1 is accepted on real Atmosphere hardware.
-- Host CMake tests are green through the guest-session parser checkpoint and the new network-policy suite is green on the current branch.
-- devkitA64 Switch build remains the required native gate for every networking change.
-- Live YouTube networking has **not** yet been wired into the UI or accepted on-device.
+- Host CMake tests are green through the strict HTTP/1.1/network-policy/session-bootstrap suites.
+- devkitA64 successfully compiles and links the direct libnx SSL transport into the NRO.
+- `switch-curl` is not linked into the NRO.
+- Live YouTube networking has **not** yet been accepted on-device.
 
 ## Known high-risk areas
 
 - **Console safety:** Nintendo network destinations must never be reachable through app-controlled networking. 90DNS is defense in depth, not the app's primary safeguard.
 - YouTube response/session shapes are private implementation details and may change. Keep parsing isolated, fail closed on unknown renderers, and cover known shapes with fixtures.
-- Switch TLS must stay certificate-verified. Do not work around transport bugs by disabling peer or hostname verification.
-- Current devkitPro switch-curl has an open certificate-info hard-crash report; do not make it the live/default browsing transport unless that risk is removed and retested.
+- Switch TLS must stay certificate-verified. Do not work around transport bugs by disabling peer, hostname or date verification.
+- Current devkitPro switch-curl has an open certificate-info hard-crash report; it remains excluded from the NRO live path unless that risk is removed and retested.
+- The first real-hardware libnx SSL request may expose service/timeout/firmware edge cases that CI cannot simulate; treat hardware validation as mandatory before declaring the transport accepted.
 - Account authentication remains a future risk. The product requirement is easy console-style login without cookie-file import. Before account-dependent UI, validate a sustainable TV/device authorization flow suitable for redistribution and avoid embedding third-party private credentials.
 - Playback is a separate M3 risk and is not implied by successful guest browsing.
