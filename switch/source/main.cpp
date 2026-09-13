@@ -93,6 +93,11 @@ private:
     bool storage_ready_;
     std::string query_;
 
+    // The socket environment is process-level and Borealis initializes it from
+    // userAppInit before main(). Keep our SSL reference/client at activity
+    // lifetime so button presses borrow one stable service environment instead
+    // of repeatedly initializing and tearing services down in each worker.
+    ttnx::switch_app::LibnxHttpClient network_client_;
     std::atomic_bool network_busy_{false};
     std::thread network_worker_;
     std::mutex network_mutex_;
@@ -179,13 +184,21 @@ private:
 
         try {
             network_worker_ = std::thread([this] {
-                ttnx::switch_app::LibnxHttpClient client;
+                auto& client = network_client_;
                 if (!client.ready()) {
+                    std::string summary = "Network init failed";
+                    if (client.initialization_failure() == ttnx::switch_app::NativeInitFailure::Socket) {
+                        summary = "Socket init failed";
+                    } else if (client.initialization_failure() ==
+                               ttnx::switch_app::NativeInitFailure::Ssl) {
+                        summary = "SSL init failed";
+                    }
                     publish_network_result(
-                        "Network init failed",
-                        client.initialization_error().empty()
-                            ? "The native Switch network services could not be initialized."
-                            : client.initialization_error());
+                        std::move(summary),
+                        client.service_status() + " | " +
+                            (client.initialization_error().empty()
+                                ? "The native Switch network services could not be initialized."
+                                : client.initialization_error()));
                     return;
                 }
 
@@ -195,11 +208,30 @@ private:
 
                 const auto http = client.perform(request);
                 if (!http.ok) {
+                    std::string summary = "HTTP failed";
+                    switch (http.failure_stage) {
+                        case ttnx::net::HttpFailureStage::Policy:
+                            summary = "Network policy blocked";
+                            break;
+                        case ttnx::net::HttpFailureStage::Tcp:
+                            summary = "TCP failed";
+                            break;
+                        case ttnx::net::HttpFailureStage::Tls:
+                            summary = "TLS failed";
+                            break;
+                        case ttnx::net::HttpFailureStage::Http:
+                            summary = "HTTP failed";
+                            break;
+                        case ttnx::net::HttpFailureStage::None:
+                            summary = "HTTPS failed";
+                            break;
+                    }
                     publish_network_result(
-                        "HTTPS failed",
-                        http.error.empty()
-                            ? "The verified YouTube HTTPS request failed."
-                            : http.error);
+                        std::move(summary),
+                        client.service_status() + " | " +
+                            (http.error.empty()
+                                ? "The verified YouTube HTTPS request failed."
+                                : http.error));
                     return;
                 }
 
@@ -211,9 +243,10 @@ private:
                 if (!parsed || !parsed.session || !parsed.session->usable()) {
                     publish_network_result(
                         "Bootstrap rejected",
-                        parsed.error.empty()
-                            ? "YouTube replied, but the guest bootstrap shape was not accepted."
-                            : parsed.error);
+                        client.service_status() + " | " +
+                            (parsed.error.empty()
+                                ? "YouTube replied, but the guest bootstrap shape was not accepted."
+                                : parsed.error));
                     return;
                 }
 
@@ -221,7 +254,8 @@ private:
                 // include them in status strings.
                 publish_network_result(
                     "Guest ready",
-                    "Verified HTTPS and the bounded YouTube guest bootstrap both succeeded.",
+                    client.service_status() +
+                        " | Verified HTTPS and the bounded YouTube guest bootstrap both succeeded.",
                     std::move(parsed.session));
             });
         } catch (...) {
@@ -426,7 +460,9 @@ int main(int, char**) {
     }
 
     // Do not let a network worker survive application shutdown. No session data
-    // is persisted; joining only guarantees clean socket/SSL service teardown.
+    // is persisted; joining guarantees the worker is done before ShellActivity's
+    // app-lifetime SSL reference is released. Borealis retains ownership of its
+    // pre-existing socket initialization through userAppExit().
     shell->shutdown_network();
     ttnx::record_boot_event("clean-exit");
     return EXIT_SUCCESS;
