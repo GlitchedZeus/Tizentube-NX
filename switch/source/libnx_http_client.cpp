@@ -219,10 +219,12 @@ net::HttpResult perform_single_request(
 
     const auto wire_request = net::build_http1_request(request, parsed_url);
     if (!wire_request) {
+        result.failure_stage = net::HttpFailureStage::Http;
         result.error = "Could not serialize the bounded HTTP/1.1 request.";
         return result;
     }
     if (wire_request->size() > kMaxRequestBytes) {
+        result.failure_stage = net::HttpFailureStage::Http;
         result.error = "HTTP request exceeds the bounded request limit.";
         return result;
     }
@@ -230,6 +232,7 @@ net::HttpResult perform_single_request(
     TlsConnection tls;
     tls.raw_fd = tcp_connect_allowed_host(parsed_url.host, timeout_ms);
     if (tls.raw_fd < 0) {
+        result.failure_stage = net::HttpFailureStage::Tcp;
         result.error = "TCP connection to the approved YouTube host failed.";
         return result;
     }
@@ -239,6 +242,7 @@ net::HttpResult perform_single_request(
 
     Result rc = sslCreateContext(&tls.context, tls_versions);
     if (R_FAILED(rc)) {
+        result.failure_stage = net::HttpFailureStage::Tls;
         result.error = result_error("sslCreateContext", rc);
         return result;
     }
@@ -246,6 +250,7 @@ net::HttpResult perform_single_request(
 
     rc = sslContextCreateConnection(&tls.context, &tls.connection);
     if (R_FAILED(rc)) {
+        result.failure_stage = net::HttpFailureStage::Tls;
         result.error = result_error("sslContextCreateConnection", rc);
         return result;
     }
@@ -257,6 +262,7 @@ net::HttpResult perform_single_request(
         &tls.connection,
         SslVerifyOption_PeerCa | SslVerifyOption_HostName | SslVerifyOption_DateCheck);
     if (R_FAILED(rc)) {
+        result.failure_stage = net::HttpFailureStage::Tls;
         result.error = result_error("sslConnectionSetVerifyOption", rc);
         return result;
     }
@@ -266,6 +272,7 @@ net::HttpResult perform_single_request(
         parsed_url.host.c_str(),
         static_cast<u32>(parsed_url.host.size()));
     if (R_FAILED(rc)) {
+        result.failure_stage = net::HttpFailureStage::Tls;
         result.error = result_error("sslConnectionSetHostName", rc);
         return result;
     }
@@ -277,6 +284,7 @@ net::HttpResult perform_single_request(
     // when present, is the descriptor we must close before the SSL connection.
     tls.raw_fd = -1;
     if (handed_off_fd < 0 && errno != ENOENT) {
+        result.failure_stage = net::HttpFailureStage::Tls;
         result.error = "socketSslConnectionSetSocketDescriptor failed.";
         return result;
     }
@@ -284,6 +292,7 @@ net::HttpResult perform_single_request(
 
     rc = sslConnectionSetIoMode(&tls.connection, SslIoMode_Blocking);
     if (R_FAILED(rc)) {
+        result.failure_stage = net::HttpFailureStage::Tls;
         result.error = result_error("sslConnectionSetIoMode", rc);
         return result;
     }
@@ -295,6 +304,7 @@ net::HttpResult perform_single_request(
             &tls.connection,
             static_cast<u32>(std::min<long>(timeout_ms, std::numeric_limits<u32>::max())));
         if (R_FAILED(rc)) {
+            result.failure_stage = net::HttpFailureStage::Tls;
             result.error = result_error("sslConnectionSetIoTimeout", rc);
             return result;
         }
@@ -309,18 +319,26 @@ net::HttpResult perform_single_request(
         nullptr,
         0);
     if (R_FAILED(rc)) {
+        result.failure_stage = net::HttpFailureStage::Tls;
         result.error = result_error("sslConnectionDoHandshake", rc);
         return result;
     }
 
-    if (!write_all(tls.connection, *wire_request, result.error)) return result;
+    if (!write_all(tls.connection, *wire_request, result.error)) {
+        result.failure_stage = net::HttpFailureStage::Tls;
+        return result;
+    }
 
     std::string raw_response;
     raw_response.reserve(64 * 1024);
-    if (!read_all(tls.connection, raw_response, result.error)) return result;
+    if (!read_all(tls.connection, raw_response, result.error)) {
+        result.failure_stage = net::HttpFailureStage::Tls;
+        return result;
+    }
 
     auto parsed_response = net::parse_http1_response(raw_response, kMaxResponseBodyBytes);
     if (!parsed_response) {
+        result.failure_stage = net::HttpFailureStage::Http;
         result.error = "HTTP/1.1 response rejected: " + parsed_response.error;
         return result;
     }
@@ -328,6 +346,7 @@ net::HttpResult perform_single_request(
     result.response = std::move(*parsed_response.response);
     result.ok = result.response.status_code >= 200 && result.response.status_code < 300;
     if (!result.ok) {
+        result.failure_stage = net::HttpFailureStage::Http;
         result.error = "HTTP request returned status " +
                        std::to_string(result.response.status_code) + ".";
     }
@@ -357,32 +376,88 @@ std::optional<std::string> redirect_url(
 }  // namespace
 
 LibnxHttpClient::LibnxHttpClient() {
-    Result rc = socketInitializeDefault();
-    if (R_FAILED(rc)) {
-        initialization_error_ = result_error("socketInitializeDefault", rc);
+    const Result socket_rc = socketInitializeDefault();
+    const Result already_initialized =
+        MAKERESULT(Module_Libnx, LibnxError_AlreadyInitialized);
+    const auto socket_init = net::classify_non_refcounted_service_init(
+        static_cast<std::uint32_t>(socket_rc),
+        static_cast<std::uint32_t>(already_initialized));
+    socket_ownership_ = socket_init.ownership;
+    if (!socket_init.usable()) {
+        initialization_failure_ = NativeInitFailure::Socket;
+        initialization_error_ = result_error("socketInitializeDefault", socket_rc);
         return;
     }
-    sockets_ready_ = true;
 
-    rc = sslInitialize(3);
-    if (R_FAILED(rc)) {
-        initialization_error_ = result_error("sslInitialize", rc);
-        socketExit();
-        sockets_ready_ = false;
+    // sslInitialize() is backed by libnx ServiceGuard. Successful calls acquire
+    // a reference even if ssl is already initialized elsewhere; each success
+    // therefore owns exactly one matching sslExit(). Unlike socket init, a
+    // non-zero AlreadyInitialized result is not treated as borrowable here.
+    const Result ssl_rc = sslInitialize(3);
+    const auto ssl_init = net::classify_refcounted_service_init(
+        static_cast<std::uint32_t>(ssl_rc));
+    ssl_ownership_ = ssl_init.ownership;
+    if (!ssl_init.usable()) {
+        initialization_failure_ = NativeInitFailure::Ssl;
+        initialization_error_ = result_error("sslInitialize", ssl_rc);
+        if (socket_init.cleanup_required()) {
+            socketExit();
+            socket_ownership_ = net::ServiceOwnership::Unavailable;
+        }
         return;
     }
-    ssl_ready_ = true;
+
     ready_ = true;
 }
 
 LibnxHttpClient::~LibnxHttpClient() {
-    if (ssl_ready_) sslExit();
-    if (sockets_ready_) socketExit();
+    if (ssl_ownership_ == net::ServiceOwnership::Owned) {
+        sslExit();
+        ssl_ownership_ = net::ServiceOwnership::Unavailable;
+    }
+    if (socket_ownership_ == net::ServiceOwnership::Owned) {
+        socketExit();
+        socket_ownership_ = net::ServiceOwnership::Unavailable;
+    }
+}
+
+std::string LibnxHttpClient::service_status() const {
+    std::string status = "Sockets: ";
+    switch (socket_ownership_) {
+        case net::ServiceOwnership::Owned:
+            status += "owned";
+            break;
+        case net::ServiceOwnership::Borrowed:
+            status += "existing";
+            break;
+        case net::ServiceOwnership::Unavailable:
+            status += "unavailable";
+            break;
+    }
+
+    status += " | SSL: ";
+    switch (ssl_ownership_) {
+        case net::ServiceOwnership::Owned:
+            status += "ready";
+            break;
+        case net::ServiceOwnership::Borrowed:
+            status += "existing";
+            break;
+        case net::ServiceOwnership::Unavailable:
+            status += "unavailable";
+            break;
+    }
+    return status;
 }
 
 net::HttpResult LibnxHttpClient::perform(const net::HttpRequest& request) {
     net::HttpResult result;
     if (!ready_) {
+        if (initialization_failure_ == NativeInitFailure::Ssl) {
+            result.failure_stage = net::HttpFailureStage::Tls;
+        } else if (initialization_failure_ == NativeInitFailure::Socket) {
+            result.failure_stage = net::HttpFailureStage::Tcp;
+        }
         result.error = initialization_error_.empty()
             ? "Native libnx HTTPS client is not initialized."
             : initialization_error_;
@@ -398,12 +473,14 @@ net::HttpResult LibnxHttpClient::perform(const net::HttpRequest& request) {
         // decision and Nintendo destinations are never authorized here.
         const auto allowed = net::parse_allowed_https_destination(current.url);
         if (!allowed) {
+            result.failure_stage = net::HttpFailureStage::Policy;
             result.error = "Outbound destination blocked by TizenTube NX network policy.";
             return result;
         }
 
         const auto parsed_url = net::parse_https_url(current.url);
         if (!parsed_url || parsed_url->host != allowed->host || parsed_url->port != allowed->port) {
+            result.failure_stage = net::HttpFailureStage::Policy;
             result.error = "HTTPS URL rejected by the strict transport parser.";
             return result;
         }
@@ -414,11 +491,13 @@ net::HttpResult LibnxHttpClient::perform(const net::HttpRequest& request) {
 
         if (current.method != net::HttpMethod::Get) {
             result.ok = false;
+            result.failure_stage = net::HttpFailureStage::Http;
             result.error = "Redirects for POST requests are rejected fail-closed.";
             return result;
         }
         if (redirect_index == kMaxRedirects) {
             result.ok = false;
+            result.failure_stage = net::HttpFailureStage::Http;
             result.error = "HTTPS redirect limit exceeded.";
             return result;
         }
@@ -426,6 +505,7 @@ net::HttpResult LibnxHttpClient::perform(const net::HttpRequest& request) {
         const auto next_url = redirect_url(result.response, *parsed_url);
         if (!next_url) {
             result.ok = false;
+            result.failure_stage = net::HttpFailureStage::Http;
             result.error = "HTTPS redirect was missing one safe absolute/root-relative Location.";
             return result;
         }
@@ -434,6 +514,7 @@ net::HttpResult LibnxHttpClient::perform(const net::HttpRequest& request) {
         // before the next DNS lookup, giving redirects two independent checks.
         if (!net::parse_allowed_https_destination(*next_url)) {
             result.ok = false;
+            result.failure_stage = net::HttpFailureStage::Policy;
             result.error = "HTTPS redirect blocked by TizenTube NX network policy.";
             return result;
         }
@@ -442,6 +523,7 @@ net::HttpResult LibnxHttpClient::perform(const net::HttpRequest& request) {
         current.body.clear();
     }
 
+    result.failure_stage = net::HttpFailureStage::Http;
     result.error = "Unexpected redirect state.";
     return result;
 }
