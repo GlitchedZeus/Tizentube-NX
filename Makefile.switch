@@ -70,8 +70,10 @@ CXXFLAGS	:= $(CFLAGS) -std=gnu++20 -include optional -O2 -Wno-volatile
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
-# switch-curl is statically linked; keep its TLS/zlib dependencies in link order.
-LIBS	:= -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -lz -lnx
+# Native networking uses libnx BSD sockets + the local Horizon ssl service.
+# switch-curl is deliberately excluded from the NRO because the current port has
+# a known certificate-info hard-crash path (tracked by project issue #7).
+LIBS	:= -lnx
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing
@@ -101,6 +103,9 @@ CPPFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
 # The legacy Borealis keyboard wrapper uses a removed libnx API. The shell
 # uses checked libnx swkbd calls directly, so do not compile the unused wrapper.
 CPPFILES := $(filter-out swkbd.cpp,$(CPPFILES))
+# Keep the curl prototype in-tree as a reference only; it is not linked into the
+# release binary. Native libnx_http_client.cpp is the approved M2 transport.
+CPPFILES := $(filter-out curl_http_client.cpp,$(CPPFILES))
 SFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
 GLSLFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.glsl)))
 BINFILES	:=	$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.*)))
