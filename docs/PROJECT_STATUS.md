@@ -178,17 +178,42 @@ No unsafe generic parser fallback was added for live Search.
 
 ## V1 profile/account direction
 
-V1 will use **local-first TizenTube profiles**, not Google/YouTube account authentication.
+V1 remains **local-first TizenTube profiles**.
 
-Users should be able to create a TizenTube profile directly on Switch and build local follows/subscriptions, playlists, Watch Later, favorites/likes, history/resume and settings.
+Users should be able to create a TizenTube profile directly on Switch and build local follows/subscriptions, playlists, Watch Later, favorites/likes, history/resume and settings without Google authentication.
 
-TizenTube NX must not request or store Google passwords, OAuth tokens, authenticated cookies or equivalent Google account credentials.
+V1 must not request or store Google OAuth authorization. It must never collect Google passwords, passkeys, 2FA recovery codes, authenticated browser/YouTube cookies or exported cookie files.
 
-A post-v1 optional YouTube→TizenTube migration feature is planned separately. It should use a Switch-displayed QR code with a short-code fallback to pair a phone to an ephemeral import session and copy only safely accessible public data plus user-supplied public/unlisted playlists into an existing local TizenTube profile.
+No profile/account implementation is part of the current M2 Search slice.
 
-See `docs/PROFILES_AND_IMPORT.md`.
+## Post-v1 optional YouTube OAuth linking
 
-No profile/import implementation is part of this M2 Search slice.
+The post-v1 account direction has been refined.
+
+TizenTube NX may optionally link a real YouTube account using Google's official limited-input/device-code OAuth flow. The Switch should display a QR code plus a human-readable fallback code/instruction, while the phone opens Google's real sign-in and consent UI.
+
+The design goal is that TizenTube NX never receives the Google password, passkey, 2FA recovery material or browser cookies.
+
+The first linked-account implementation should:
+
+- use the narrowest practical YouTube authorization;
+- strongly prefer read-only access;
+- initially sync one way: `YouTube -> TizenTube profile`;
+- keep short-lived access tokens in memory where practical;
+- optionally retain refresh authorization only when the user chooses `Keep me connected`;
+- perform a dedicated secure-storage review before persistent authorization ships;
+- never store persistent authorization as obvious plaintext on the SD card;
+- fully redact tokens/authorization headers from logs, UI, exports, backups and crash diagnostics;
+- preserve the local profile if authorization expires, is revoked or is lost;
+- show `Reconnect YouTube` rather than destroying imported/local data;
+- provide a distinct `Unlink YouTube` action that removes local authorization without deleting the TizenTube profile;
+- keep local TizenTube actions local unless a future write-capable feature receives a separate security review and explicit consent.
+
+A public/no-auth profile or playlist importer may remain as an optional fallback for users who do not want OAuth linking.
+
+See `docs/PROFILES_AND_IMPORT.md` and `docs/OAUTH_ACCOUNT_LINKING.md`.
+
+This OAuth work is post-v1 documentation only and must not widen the current M2 allowlist or enter the current implementation.
 
 ## Feature-reference policy
 
@@ -210,15 +235,19 @@ This remains release-blocking and independent of 90DNS:
 - every redirect is revalidated before another DNS lookup;
 - `switch-curl` remains excluded from the NRO;
 - no thumbnail/image CDN host was added;
-- no Google-authentication endpoint was added.
+- no Google-authentication endpoint is currently authorized.
 
-No host is authorized merely because YouTube returns a URL for it.
+No host is authorized merely because YouTube returns a URL for it. Future OAuth/API hosts require their own explicit outbound-policy review before DNS.
 
 ## Current activation gate
 
 The real-Switch guest bootstrap is accepted as `Guest ready`.
 
-The live Search implementation has passed host configure/build/full `ctest` and a devkitA64 NRO build at the first live-Search code checkpoint. It is **not** yet hardware accepted.
+Live Search is implemented, host-tested and devkitA64-built at code checkpoint:
+
+`5b46829ead0a94089696e1521cb101637e2bfb3e`
+
+It is **not** yet hardware accepted.
 
 The next physical-Switch gate is:
 
