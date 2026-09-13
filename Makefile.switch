@@ -106,6 +106,11 @@ CPPFILES := $(filter-out swkbd.cpp,$(CPPFILES))
 # Keep the curl prototype in-tree as a reference only; it is not linked into the
 # release binary. Native libnx_http_client.cpp is the approved M2 transport.
 CPPFILES := $(filter-out curl_http_client.cpp,$(CPPFILES))
+# The pinned Borealis ScrollingFrame stores scroll position as a percentage of
+# content height, which desynchronizes the viewport when Search appends rows.
+# stable_scrolling_frame.cpp backports an absolute-pixel implementation while
+# preserving the pinned Borealis public API.
+CPPFILES := $(filter-out scrolling_frame.cpp,$(CPPFILES))
 SFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
 GLSLFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.glsl)))
 BINFILES	:=	$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.*)))

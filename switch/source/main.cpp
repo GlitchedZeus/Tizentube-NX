@@ -31,6 +31,10 @@ constexpr const char* kGuestUserAgent =
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 constexpr std::size_t kMaxUiTitleChars = 180;
 constexpr std::size_t kMaxUiMetadataChars = 280;
+// Keep the temporary M2 text UI bounded on real hardware while the model may
+// retain many continuation pages. Final media UI can replace this with a
+// recycler/virtualized list without changing SearchModel semantics.
+constexpr std::size_t kMaxRenderedSearchResults = 40;
 
 std::string bounded_ui_text(std::string_view text, std::size_t max_chars) {
     if (text.size() <= max_chars) return std::string(text);
@@ -98,6 +102,10 @@ public:
     }
 
     void tick() {
+        // tick() runs after Borealis rendered/layouted the frame. A continuation
+        // completed during the previous tick can therefore safely re-center the
+        // still-focused Search control here using fresh Yoga coordinates.
+        apply_pending_search_scroll_reflow();
         pump_network_result();
         pump_search_result();
         update_frame_rate();
@@ -171,6 +179,8 @@ private:
     brls::Button* search_action_button_{nullptr};
     brls::Button* search_load_more_button_{nullptr};
     brls::Box* search_results_box_{nullptr};
+    brls::ScrollingFrame* search_scroll_{nullptr};
+    bool search_scroll_reflow_pending_{false};
 
     struct SearchDetailRow {
         std::string identity;
@@ -178,6 +188,35 @@ private:
         brls::Label* detail{nullptr};
     };
     std::vector<SearchDetailRow> search_detail_rows_;
+
+    void apply_pending_search_scroll_reflow() {
+        if (!search_scroll_reflow_pending_) return;
+        search_scroll_reflow_pending_ = false;
+        if (!search_scroll_ || !search_results_box_) return;
+
+        auto* focused = brls::Application::getCurrentFocus();
+        if (!focused) return;
+
+        bool search_result_focus = focused == search_load_more_button_;
+        if (!search_result_focus) {
+            for (const auto& row : search_detail_rows_) {
+                if (row.button == focused) {
+                    search_result_focus = true;
+                    break;
+                }
+            }
+        }
+        // A continuation may complete after B moved focus into the sidebar.
+        // Never use a sidebar coordinate to reposition the Search viewport.
+        if (!search_result_focus) return;
+
+        // Pinned ScrollingFrame has no public refresh method. Its public child
+        // focus callback is the supported path into the same centering logic.
+        // Our local pixel-offset backport makes this stable across content-size
+        // changes instead of reinterpreting a stale percentage against a new
+        // content height.
+        search_scroll_->onChildFocusGained(search_results_box_, focused);
+    }
 
     void refresh_footer() {
         if (!footer_) return;
@@ -251,6 +290,11 @@ private:
                     text += ". More results are available.";
                 } else {
                     text += '.';
+                }
+                if (search_model_.results().size() > kMaxRenderedSearchResults) {
+                    text += " Hardware view shows newest " +
+                            std::to_string(kMaxRenderedSearchResults) +
+                            " while all loaded results remain in the model.";
                 }
                 return text;
             }
@@ -365,13 +409,18 @@ private:
             search_load_more_button_->setCustomNavigationRoute(
                 brls::FocusDirection::UP, search_action_button_);
         }
-        // Full rebuilding is reserved for a genuinely new/reconstructed result
-        // page. Selection and continuation appends never delete existing rows.
+        // Keep the live Borealis view tree bounded during continuation stress.
+        // SearchModel remains append-only/deduped; only the temporary text UI is
+        // windowed to the newest results.
         search_detail_rows_.clear();
         while (!search_results_box_->getChildren().empty()) {
             search_results_box_->removeView(search_results_box_->getChildren().back());
         }
-        (void)append_search_results_from(0);
+        const auto result_count = search_model_.results().size();
+        const std::size_t start = result_count > kMaxRenderedSearchResults
+            ? result_count - kMaxRenderedSearchResults
+            : 0;
+        (void)append_search_results_from(start);
     }
 
     void refresh_search_load_more_control(bool focus_fallback_if_hiding = false) {
@@ -671,20 +720,27 @@ private:
         }
 
         if (applied_continuation) {
-            // SearchModel already deduped by stable identity. Append only rows
-            // that were not present before this continuation; never delete or
-            // replace the currently focused first-page result tree.
-            (void)append_search_results_from(previous_result_count);
+            // SearchModel already deduped by stable identity. Keep at most a
+            // bounded number of Borealis result Views alive on Switch. Small
+            // result sets still append in place; once the hardware UI budget is
+            // exceeded, rebuild only the newest window while the model retains
+            // every loaded result.
+            const std::size_t new_total = search_model_.results().size();
+            const std::size_t added = new_total >= previous_result_count
+                ? new_total - previous_result_count
+                : 0;
+            if (search_detail_rows_.size() + added > kMaxRenderedSearchResults) {
+                rebuild_search_results();
+            } else {
+                (void)append_search_results_from(previous_result_count);
+            }
             refresh_search_inline_details();
             refresh_search_page(false, search_model_.end_of_results());
 
-            // Real-hardware testing proved that force-focusing the first newly
-            // appended row can leave Borealis focus off-screen after the nested
-            // result box changes height. Keep the user's already-visible Load
-            // more focus instead. The explicit Up route is refreshed above and
-            // therefore enters the actual last appended result naturally. A
-            // terminal continuation still uses refresh_search_page()'s existing
-            // fallback before Load more is hidden.
+            // The focused control can move when the detached Search content is
+            // relaid out. Re-run ScrollingFrame centering after one rendered
+            // frame so it sees the new Yoga coordinates.
+            if (search_scroll_) search_scroll_reflow_pending_ = true;
         } else {
             refresh_search_page(true);
         }
@@ -878,6 +934,8 @@ private:
         search_action_button_ = nullptr;
         search_load_more_button_ = nullptr;
         search_results_box_ = nullptr;
+        search_scroll_ = nullptr;
+        search_scroll_reflow_pending_ = false;
         search_detail_rows_.clear();
         auto* scroll = new brls::ScrollingFrame();
         auto* content = new brls::Box(brls::Axis::COLUMN);
@@ -919,10 +977,14 @@ private:
             break;
         }
         case RootSection::Search: {
+            search_scroll_ = scroll;
             label(content, "Search", 34);
             label(content,
                   "Live guest Search is enabled with explicit Load more. Results stay text-only while thumbnail hosts remain blocked.",
                   20);
+            label(content,
+                  "M2 stability note: the Switch view tree keeps only the newest 40 loaded results visible while SearchModel retains the full loaded set.",
+                  18);
 
             auto* enter = button(content, "Enter search");
             enter->registerClickAction([this](brls::View*) {

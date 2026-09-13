@@ -124,6 +124,18 @@ This proves the new rows were appended correctly and focus had moved to the inte
 
 The next candidate removes that programmatic focus steal. After a successful non-terminal continuation, `Load more` remains the visible focused control; its refreshed custom Up route targets the actual current last result. Terminal continuation behavior keeps the existing last-result fallback before hiding `Load more`. No parser, request, network-policy or security behavior changes in this fix.
 
+### Second continuation-focus fix — hardware rejected; root cause narrowed
+
+Hardware-tested NRO head: `c55abd6ffc09e72385fff478fefff06fed8a0473`
+
+Physical Switch result: **REJECTED**. Keeping focus on the persistent `Load more` control did not fix the disappearing selector. Repeating `Load more` three times reproduced the same off-screen/blank-focus behavior. During further stress testing, roughly four to five continuation loads (about 60–80 visible results) also caused the app to exit unexpectedly, so repeated-pagination stability is now part of this gate rather than being treated as cosmetic focus polish.
+
+The second hardware result disproves the prior assumption that the main problem was only programmatically transferring focus to the first newly-added row. The deeper issue is the pinned Borealis scroll representation itself: its `ScrollingFrame` stores `scrollY` as a **0..1 fraction of content height**, while the detached content already has an absolute pixel translation applied. When Search grows the nested result box, content height changes but the stored fraction and applied translation no longer describe the same viewport. Focus coordinates and visible scrolling can therefore diverge even when focus never changes.
+
+A mature Switch Borealis fork used by StreamFin independently moved this logic to an **absolute pixel content offset** (`contentOffsetY`) and applies translation directly from that pixel offset. The next candidate backports that representation locally without upgrading the whole pinned framework, then explicitly re-runs centering after continuation layout. It also bounds the temporary text UI to the newest 40 live result rows while keeping all normalized loaded results in `SearchModel`, preventing unbounded Borealis/Yoga view growth during repeated-pagination stress.
+
+The unexpected exit is not yet attributed to a specific allocator, renderer, network or focus failure without a crash log. The bounded live view tree is therefore a defensive stability measure, not a claim that memory pressure was definitively the crash cause.
+
 ## Current physical gate — Search continuation focus polish
 
 The next candidate must preserve the already-proven continuation request/data path while fixing only the Borealis focus/scroll behavior:
