@@ -1,5 +1,6 @@
 #include "tizentube_nx/core/content_filter.hpp"
 #include "tizentube_nx/core/url.hpp"
+#include "tizentube_nx/ui/navigation.hpp"
 
 #include <cstdlib>
 #include <iostream>
@@ -53,6 +54,15 @@ int main() {
            "promoted content hidden by default");
     expect(!should_hide({ContentKind::Video, "id", "normal"}),
            "normal video remains visible");
+
+    using namespace ttnx::ui;
+    expect(kRootNavigation.size() == 5, "root navigation contains exactly five sections");
+    expect(root_navigation_contains("Home"), "Home root section exists");
+    expect(root_navigation_contains("Search"), "Search root section exists");
+    expect(root_navigation_contains("Subscriptions"), "Subscriptions root section exists");
+    expect(root_navigation_contains("Library"), "Library root section exists");
+    expect(root_navigation_contains("Settings"), "Settings root section exists");
+    expect(!root_navigation_contains("Shorts"), "Shorts can never become a root navigation section");
 
     if (failures == 0) {
         std::cout << "All TizenTube NX core tests passed.\n";
