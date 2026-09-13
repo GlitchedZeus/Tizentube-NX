@@ -62,15 +62,16 @@ ttnx::net::HttpResult failed(std::string message) {
 }
 
 std::string first_page(std::string id, std::string token = {}) {
+    const std::string item =
+        "{\"itemSectionRenderer\":{\"contents\":[{\"videoRenderer\":{\"videoId\":\"" +
+        id + "\",\"title\":{\"simpleText\":\"Result\"}}}]}}";
     std::string continuation;
     if (!token.empty()) {
         continuation = ", {\"continuationItemRenderer\":{\"continuationEndpoint\":{"
             "\"continuationCommand\":{\"token\":\"" + token + "\"}}}}";
     }
     return "{\"contents\":{\"twoColumnSearchResultsRenderer\":{\"primaryContents\":{"
-        "\"sectionListRenderer\":{\"contents\":[{\"itemSectionRenderer\":{\"contents\":["
-        "{\"videoRenderer\":{\"videoId\":\"" + id +
-        "\",\"title\":{\"simpleText\":\"Result\"}}}}]}" + continuation + "]}}}}}";
+        "\"sectionListRenderer\":{\"contents\":[" + item + continuation + "]}}}}}";
 }
 
 std::string empty_first_page(std::string token) {
