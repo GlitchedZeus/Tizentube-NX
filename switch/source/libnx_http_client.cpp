@@ -149,7 +149,10 @@ int tcp_connect_allowed_host(std::string_view host, long timeout_ms) {
     addrinfo hints{};
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
-    hints.ai_protocol = IPPROTO_TCP;
+    // Protocol 0 lets getaddrinfo choose the protocol for a SOCK_STREAM socket;
+    // on the Switch this resolves to TCP without depending on IPPROTO_TCP being
+    // exposed by the devkitA64 libc headers.
+    hints.ai_protocol = 0;
 
     addrinfo* results = nullptr;
     const std::string host_string(host);
@@ -286,7 +289,7 @@ net::HttpResult perform_single_request(
     }
 
     // On HOS 16+, tighten the SSL service's own I/O timeout in addition to the
-    // BSD socket timeouts. The service field uses milliseconds, like Poll().
+    // BSD socket timeouts.
     if (hosversionAtLeast(16, 0, 0)) {
         rc = sslConnectionSetIoTimeout(
             &tls.connection,
