@@ -52,12 +52,19 @@ GuestSearchResult execute_guest_search(
 
     auto parsed = parse_scoped_search_response(http_result.response.body, policy);
     if (!parsed || !parsed.page) {
+        // Classification may inspect the parser's internal diagnostic, but only
+        // the sanitized replacement below can leave this boundary. This lets a
+        // sensitive word such as "continuation" trigger redaction without
+        // destroying the coarse Unsupported-vs-Malformed distinction.
+        const auto code = parsed.error.empty()
+            ? core::SearchErrorCode::MalformedResponse
+            : core::classify_search_parse_error(parsed.error);
         const auto diagnostic = parsed.error.empty()
             ? std::string{"Guest Search response was rejected."}
             : net::safe_public_diagnostic(
                   parsed.error,
                   "Guest Search response was rejected.");
-        return fail(core::classify_search_parse_error(diagnostic), diagnostic);
+        return fail(code, diagnostic);
     }
 
     GuestSearchResult result;
