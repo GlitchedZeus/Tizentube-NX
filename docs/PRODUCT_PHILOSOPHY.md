@@ -74,12 +74,6 @@ NewPipe is a useful reference for building an independent, privacy-conscious You
 
 Use it as a technical/product research reference where applicable, while keeping TizenTube NX controller-first and native to Switch.
 
-## ReVanced is not a project philosophy reference
-
-TizenTube NX does not use ReVanced as a product-philosophy or design reference.
-
-Historical mentions may exist in old commits, but current planning and documentation should use the reference roles above: **YouTube, TizenTube, SponsorBlock, Morphe and NewPipe**.
-
 ## Shorts remain a hard rejection
 
 Shorts/reels are not a configurable preference. They do not belong in TizenTube NX.
