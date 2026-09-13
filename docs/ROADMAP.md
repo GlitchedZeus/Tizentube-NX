@@ -29,7 +29,7 @@
 - [x] Revalidate every redirect before a second DNS lookup
 - [x] Keep exact live allowlist at `www.youtube.com:443`
 - [x] Exclude `switch-curl` from the NRO
-- [ ] Require every future media/image/updater subsystem to use the same policy
+- [ ] Require every future media/image/auth/updater subsystem to use the same policy
 
 ### Networking foundation
 
@@ -150,8 +150,8 @@
 - [ ] Multiple local TizenTube profiles
 - [ ] Optional Switch-user-to-TizenTube-profile mapping
 - [ ] Profile backup/export/import appropriate for local data
-- [ ] No Google/YouTube account authentication required
-- [ ] Never accept/store Google passwords, OAuth tokens, authenticated cookies or equivalent account credentials
+- [ ] No Google/YouTube account authentication required for v1
+- [ ] Never accept/store Google passwords, browser cookies, exported cookie files or equivalent browser/account credentials
 
 See `docs/PROFILES_AND_IMPORT.md` for the profile/security contract.
 
@@ -170,30 +170,52 @@ See `docs/PROFILES_AND_IMPORT.md` for the profile/security contract.
 - [ ] Dock/undock handling
 - [ ] Applet vs title-takeover testing
 - [ ] Release audit: no network path bypasses outbound policy
-- [ ] Release audit: no Google account credentials accepted anywhere
+- [ ] Release audit: v1 contains no Google OAuth/account linking implementation
+- [ ] Release audit: no Google passwords/browser cookies/exported cookie files accepted anywhere
 - [ ] Release packaging
 
-## M7 — Post-v1 YouTube → TizenTube migration
+## M7 — Post-v1 optional YouTube linking and migration
 
-This is optional data import into an existing local TizenTube profile, not Google sign-in.
+Local TizenTube profiles remain canonical. Post-v1 linking is optional and must not be required to use the app.
 
-- [ ] Switch-displayed QR code to open a phone pairing/import page
-- [ ] Human-readable short-code fallback
-- [ ] Ephemeral, one-use, expiring pairing sessions
+### Official device OAuth linking
+
+- [ ] Switch displays QR code plus human-readable device-code fallback
+- [ ] Phone opens Google's official sign-in/consent UI
+- [ ] Never collect Google passwords, passkeys, 2FA recovery codes or browser cookies
+- [ ] Request the narrowest practical YouTube scope; prefer read-only access
+- [ ] Initial sync direction is `YouTube -> TizenTube profile`
+- [ ] Short-lived access token kept memory-only where practical
+- [ ] Optional `Keep me connected` mode using persistent refresh authorization
+- [ ] Dedicated secure-storage review before any refresh token is persisted
+- [ ] Never store persistent authorization as obvious plaintext on SD
+- [ ] `Reconnect YouTube` when authorization expires/revokes/invalidates
+- [ ] Local TizenTube profile continues working while disconnected
+- [ ] Clear `Unlink YouTube` action removes local authorization and attempts provider revocation when practical
+- [ ] Unlinking does not delete local profile data
+- [ ] Token/authorization values fully redacted from logs, UI, exports and crash diagnostics
+- [ ] All auth/API destinations reviewed through outbound policy before DNS
+
+### Library import/sync
+
+- [ ] Import/sync subscriptions where supported
+- [ ] Import/sync playlists where supported
+- [ ] Import/sync liked/favorite library data where supported
+- [ ] Import approved account/channel metadata needed for migration
+- [ ] Duplicate-safe merge into existing local profile
+- [ ] Preserve local-only follows/playlists/favorites/history
+- [ ] Explicit user control over what is imported/synced
+
+### Optional public/no-auth fallback
+
 - [ ] Public YouTube profile/channel metadata import
 - [ ] Public subscriptions import when the source profile exposes them
 - [ ] Public playlist import
 - [ ] User-supplied unlisted playlist import
-- [ ] Duplicate-safe merge/re-import into an existing local profile
-- [ ] Explicit Switch-side preview + confirmation before commit
 - [ ] Treat unlisted playlist URLs as secrets and redact them from diagnostics
-- [ ] Prefer end-to-end encrypted phone→relay→Switch import payloads
-- [ ] Temporary relay data deleted on completion/expiry
-- [ ] Pairing endpoint cannot control arbitrary Switch functions
-- [ ] No Google passwords/OAuth/authenticated cookies in the import path
 
-See `docs/PROFILES_AND_IMPORT.md` for the full post-v1 migration design.
+See `docs/PROFILES_AND_IMPORT.md` and `docs/OAUTH_ACCOUNT_LINKING.md` for the full post-v1 design.
 
 ## Current gate
 
-**Real-Switch guest bootstrap is accepted (`Guest ready`). Live Search, text-only normalized results, result selection and explicit continuation are now implemented and CI-built. The remaining gate is physical-Switch live Search acceptance while preserving the exact `www.youtube.com:443` allowlist and hard Shorts/ad firewall.**
+**Real-Switch guest bootstrap is accepted (`Guest ready`). Live Search, text-only normalized results, result selection and explicit continuation are now implemented and CI-built. The remaining gate is physical-Switch live Search acceptance while preserving the exact `www.youtube.com:443` allowlist and hard Shorts/ad firewall. Post-v1 OAuth work is documented only and must not be implemented during M2.**
