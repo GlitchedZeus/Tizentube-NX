@@ -26,6 +26,7 @@ The last pre-merge M1 native artifact was built from
 ## M2 implemented so far
 
 Branch: `feature/m2-guest-browsing`.
+Draft PR: #6 — `M2: guest browsing networking foundation`.
 
 ### Guest content boundary
 
@@ -50,7 +51,7 @@ Host and devkitA64 Switch CI both pass.
 - Home uses the standard `FEwhat_to_watch` browse ID.
 - Continuation requests preserve the opaque continuation token and do not resend the original query/browse ID.
 - JSON string escaping is covered by host tests.
-- Normal InnerTube requests do **not** embed a fixed third-party/private API key in source or URLs.
+- Normal InnerTube request builders do **not** embed a fixed third-party/private API key in source or URLs.
 
 Checkpoint: `2edf3ab18c798e1e69e548e1b2623fd079a2c254`.
 Host and devkitA64 Switch CI both pass.
@@ -69,11 +70,24 @@ Host and devkitA64 Switch CI both pass.
 Checkpoint: `fbf4f792aefb59c0fcd322c9d62a55b062e0f84f`.
 Host CI and the devkitA64 NRO build both pass.
 
+### Guest session bootstrap parser
+
+- Bounded parser for YouTube's `sw.js_data` JSPB/XSSI response.
+- Requires the expected XSSI prefix and current guest bootstrap array shape; unexpected shapes fail closed.
+- Extracts only the data required for anonymous guest requests: WEB client version, visitor data, locale/region and timezone.
+- Caller locale/timezone/user-agent overrides are supported without logging or persisting visitor/session values.
+- JSON strings are decoded safely, including escapes and Unicode surrogate pairs.
+- Input is capped at 4 MiB and nesting at 128 levels.
+- Malformed, truncated, oversized and wrong-type fixtures are covered by host tests.
+
+Checkpoint: `ba3d807ef4e417c4fb10fb7b6cb3569a1d2d5185`.
+Host CI and the devkitA64 NRO build both pass.
+
 ## Immediate next technical checkpoint
 
 1. Add a pinned trusted CA bundle to RomFS and document how it is refreshed.
-2. Parse YouTube `sw.js_data` into the guest session model without logging visitor/session data.
-3. Execute the first live guest HTTPS request off the Borealis UI thread.
+2. Execute the first live guest HTTPS session-bootstrap request without logging visitor/session data.
+3. Run live network work off the Borealis UI thread.
 4. Parse live Search/Home results into renderer-neutral records.
 5. Run every parsed record through the renderer firewall before creating UI cards.
 6. Wire continuation paging after the first page is proven on real hardware.
@@ -82,10 +96,10 @@ No account login, playback, SponsorBlock or DeArrow is claimed at this checkpoin
 
 ## Validation
 
-- Host CMake tests are green through `fbf4f792aefb59c0fcd322c9d62a55b062e0f84f`.
-- devkitA64 Switch build is green through `fbf4f792aefb59c0fcd322c9d62a55b062e0f84f`.
+- Host CMake tests are green through `ba3d807ef4e417c4fb10fb7b6cb3569a1d2d5185`.
+- devkitA64 Switch build is green through `ba3d807ef4e417c4fb10fb7b6cb3569a1d2d5185`.
 - M1 is accepted on real Atmosphere hardware.
-- The M2 networking code has compiled into an NRO, but live YouTube networking has **not** yet been wired into the UI or accepted on-device.
+- The M2 networking/parser code compiles into an NRO, but live YouTube networking has **not** yet been wired into the UI or accepted on-device.
 
 ## Known high-risk areas
 
