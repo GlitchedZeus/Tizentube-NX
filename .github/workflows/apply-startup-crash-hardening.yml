@@ -1,5 +1,6 @@
 name: apply-startup-crash-hardening
 
+# One-shot workflow used only to apply the startup-crash recovery patch.
 on:
   push:
     branches:
