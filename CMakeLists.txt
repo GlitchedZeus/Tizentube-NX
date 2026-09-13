@@ -9,6 +9,7 @@ add_library(tizentube_nx_core
     src/core/url.cpp
     src/core/content_filter.cpp
     src/core/search_result.cpp
+    src/core/search_presentation.cpp
     src/core/search_model.cpp
     src/core/guest_browse.cpp
     src/core/guest_api.cpp
@@ -42,6 +43,10 @@ if(TTNX_BUILD_TESTS)
     target_link_libraries(tizentube_nx_search_result_tests PRIVATE tizentube_nx_core)
     add_test(NAME search_result COMMAND tizentube_nx_search_result_tests)
 
+    add_executable(tizentube_nx_search_presentation_tests tests/search_presentation_tests.cpp)
+    target_link_libraries(tizentube_nx_search_presentation_tests PRIVATE tizentube_nx_core)
+    add_test(NAME search_presentation COMMAND tizentube_nx_search_presentation_tests)
+
     add_executable(tizentube_nx_search_model_tests tests/search_model_tests.cpp)
     target_link_libraries(tizentube_nx_search_model_tests PRIVATE tizentube_nx_core)
     add_test(NAME search_model COMMAND tizentube_nx_search_model_tests)
@@ -66,6 +71,10 @@ if(TTNX_BUILD_TESTS)
     add_executable(tizentube_nx_search_response_tests tests/search_response_tests.cpp)
     target_link_libraries(tizentube_nx_search_response_tests PRIVATE tizentube_nx_core)
     add_test(NAME search_response COMMAND tizentube_nx_search_response_tests)
+
+    add_executable(tizentube_nx_search_metadata_tests tests/search_metadata_tests.cpp)
+    target_link_libraries(tizentube_nx_search_metadata_tests PRIVATE tizentube_nx_core)
+    add_test(NAME search_metadata COMMAND tizentube_nx_search_metadata_tests)
 
     add_executable(tizentube_nx_search_robustness_tests tests/search_robustness_tests.cpp)
     target_link_libraries(tizentube_nx_search_robustness_tests PRIVATE tizentube_nx_core)
