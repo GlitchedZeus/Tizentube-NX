@@ -1,26 +1,19 @@
 #pragma once
 
-#include "tizentube_nx/core/guest_browse.hpp"
+#if !defined(TTNX_INTERNAL_SEARCH_PARSER) && !defined(__SWITCH__)
+#error "browse_response.hpp is an internal renderer-payload parser API; use search_response.hpp / parse_scoped_search_response() instead."
+#endif
 
-#include <optional>
-#include <string>
+#include "tizentube_nx/youtube/search_parse_result.hpp"
+
 #include <string_view>
 
 namespace ttnx::youtube {
 
-struct BrowseResponseParseResult {
-    std::optional<core::BrowsePage> page;
-    std::string error;
-
-    [[nodiscard]] explicit operator bool() const noexcept {
-        return page.has_value();
-    }
-};
-
-// Parses a YouTube InnerTube Search response into the renderer-neutral guest
-// model, then applies the hard renderer firewall before returning anything that
-// can reach UI code. The parser is bounded and fail-closed on malformed JSON.
-// Unknown renderer/container shapes are ignored rather than guessed into cards.
+// INTERNAL ONLY: parses an already-scoped Search renderer payload. It performs
+// bounded traversal + renderer firewalling, but it does NOT establish the full
+// HTTP response Search boundary. Network-facing code must call
+// parse_scoped_search_response() instead.
 [[nodiscard]] BrowseResponseParseResult parse_search_response(
     std::string_view response_body,
     const core::FilterPolicy& policy = {});

@@ -24,6 +24,9 @@ add_library(tizentube_nx_core
 )
 target_include_directories(tizentube_nx_core PUBLIC include)
 target_compile_options(tizentube_nx_core PRIVATE -Wall -Wextra -Wpedantic)
+# Only core parser implementation files may see the unscoped renderer-payload
+# parser declaration. Application/network callers must use the scoped facade.
+target_compile_definitions(tizentube_nx_core PRIVATE TTNX_INTERNAL_SEARCH_PARSER=1)
 
 add_executable(tizentube_nx_host src/host/main.cpp)
 target_link_libraries(tizentube_nx_host PRIVATE tizentube_nx_core)
@@ -56,6 +59,7 @@ if(TTNX_BUILD_TESTS)
     add_test(NAME http1 COMMAND tizentube_nx_http1_tests)
 
     add_executable(tizentube_nx_browse_response_tests tests/browse_response_tests.cpp)
+    target_compile_definitions(tizentube_nx_browse_response_tests PRIVATE TTNX_INTERNAL_SEARCH_PARSER=1)
     target_link_libraries(tizentube_nx_browse_response_tests PRIVATE tizentube_nx_core)
     add_test(NAME browse_response COMMAND tizentube_nx_browse_response_tests)
 
