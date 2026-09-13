@@ -8,6 +8,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_library(tizentube_nx_core
     src/core/url.cpp
     src/core/content_filter.cpp
+    src/core/search_result.cpp
     src/core/guest_browse.cpp
     src/core/guest_api.cpp
     src/core/session_bootstrap.cpp
@@ -30,6 +31,10 @@ if(TTNX_BUILD_TESTS)
     add_executable(tizentube_nx_core_tests tests/core_tests.cpp)
     target_link_libraries(tizentube_nx_core_tests PRIVATE tizentube_nx_core)
     add_test(NAME core COMMAND tizentube_nx_core_tests)
+
+    add_executable(tizentube_nx_search_result_tests tests/search_result_tests.cpp)
+    target_link_libraries(tizentube_nx_search_result_tests PRIVATE tizentube_nx_core)
+    add_test(NAME search_result COMMAND tizentube_nx_search_result_tests)
 
     add_executable(tizentube_nx_network_policy_tests tests/network_policy_tests.cpp)
     target_link_libraries(tizentube_nx_network_policy_tests PRIVATE tizentube_nx_core)

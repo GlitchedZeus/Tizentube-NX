@@ -1,6 +1,7 @@
 #pragma once
 
 #include "tizentube_nx/core/content_filter.hpp"
+#include "tizentube_nx/core/search_result.hpp"
 
 #include <string>
 #include <string_view>
@@ -29,18 +30,30 @@ struct GuestRequest {
     }
 };
 
+// Parser/firewall record. It contains no raw JSON, but it still carries the
+// renderer name needed to enforce the no-Shorts/no-ad trust boundary. UI code
+// should consume BrowsePage::results instead.
 struct RendererRecord {
-    // Leaf renderer name from the transport/parser boundary. Container
-    // renderers should be unwrapped before they reach this model.
     std::string renderer;
     ContentItem item;
     std::string channel_title;
     std::string thumbnail_url;
     std::string duration_text;
+    std::string channel_id;
+    std::string view_count_text;
+    std::string published_text;
+    std::string subscriber_count_text;
+    std::string video_count_text;
+    std::string accessibility_text;
+    bool upcoming{false};
 };
 
 struct BrowsePage {
+    // Internal sanitized records retained while the parser test suite exercises
+    // renderer-firewall behavior. Future UI/controller code must use results.
     std::vector<RendererRecord> items;
+    // Renderer-agnostic normalized data intended for UI/controller consumers.
+    std::vector<BrowseResult> results;
     std::string continuation;
 
     [[nodiscard]] bool has_more() const noexcept {

@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cctype>
 #include <initializer_list>
+#include <optional>
+#include <unordered_set>
 #include <utility>
 
 namespace ttnx::core {
@@ -21,6 +23,44 @@ bool contains_any(std::string_view value, std::initializer_list<std::string_view
         if (value.find(needle) != std::string_view::npos) return true;
     }
     return false;
+}
+
+std::optional<BrowseResult> normalize_renderer_record(const RendererRecord& record) {
+    BrowseResult result;
+    switch (record.item.kind) {
+        case ContentKind::Video:
+            result.kind = BrowseResultKind::Video;
+            break;
+        case ContentKind::Live:
+            result.kind = BrowseResultKind::Video;
+            result.live = true;
+            break;
+        case ContentKind::Channel:
+            result.kind = BrowseResultKind::Channel;
+            break;
+        case ContentKind::Playlist:
+            result.kind = BrowseResultKind::Playlist;
+            break;
+        case ContentKind::Short:
+        case ContentKind::Unknown:
+            return std::nullopt;
+    }
+
+    if (record.item.id.empty() || record.item.title.empty()) return std::nullopt;
+
+    result.id = record.item.id;
+    result.title = record.item.title;
+    result.channel_name = record.channel_title;
+    result.channel_id = record.channel_id;
+    result.thumbnail_url = record.thumbnail_url;
+    result.duration_text = record.duration_text;
+    result.view_count_text = record.view_count_text;
+    result.published_text = record.published_text;
+    result.subscriber_count_text = record.subscriber_count_text;
+    result.video_count_text = record.video_count_text;
+    result.accessibility_text = record.accessibility_text;
+    result.upcoming = record.upcoming;
+    return result;
 }
 
 }  // namespace
@@ -88,15 +128,26 @@ BrowsePage sanitize_guest_page(
     const FilterPolicy& policy) {
     BrowsePage page;
     page.items.reserve(records.size());
+    page.results.reserve(records.size());
     page.continuation = std::move(continuation);
 
+    std::unordered_set<std::string> seen;
+    seen.reserve(records.size());
+
     for (auto& record : records) {
-        if (renderer_disposition(record, policy) == RendererDisposition::Allow) {
-            if (record.item.kind == ContentKind::Unknown) {
-                record.item.kind = classify_renderer(record.renderer);
-            }
-            page.items.push_back(std::move(record));
+        if (renderer_disposition(record, policy) != RendererDisposition::Allow) continue;
+        if (record.item.kind == ContentKind::Unknown) {
+            record.item.kind = classify_renderer(record.renderer);
         }
+
+        auto normalized = normalize_renderer_record(record);
+        if (!normalized) continue;
+
+        const auto identity = browse_result_identity(*normalized);
+        if (identity.empty() || !seen.insert(identity).second) continue;
+
+        page.results.push_back(std::move(*normalized));
+        page.items.push_back(std::move(record));
     }
 
     return page;
