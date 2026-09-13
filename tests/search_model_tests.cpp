@@ -54,6 +54,14 @@ int main() {
     expect(model.select("video:VIDEO000002"), "selection uses stable normalized identity");
     expect(model.selected_identity() == "video:VIDEO000002", "selected identity is retained");
     expect(!model.select("video:DOESNOTEXIST"), "selection rejects unknown identity");
+    const auto count_before_clear = model.results().size();
+    model.clear_selection();
+    expect(model.selected_identity().empty(),
+           "inline selection can be cleared for second-A collapse");
+    expect(model.results().size() == count_before_clear,
+           "clearing inline selection never mutates Search results");
+    expect(model.select("video:VIDEO000002"),
+           "same result can be selected again after detail collapse");
 
     expect(model.begin_load_more(gen_a), "ready page can enter loading-more state");
     expect(model.state() == SearchViewState::LoadingMore, "loading-more state is explicit");

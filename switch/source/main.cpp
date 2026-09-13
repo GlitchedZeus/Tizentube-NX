@@ -98,6 +98,10 @@ public:
     }
 
     void tick() {
+        // Apply a continuation-focus request one frame after rows are
+        // attached so Yoga has current coordinates before ScrollingFrame
+        // recenters the selected result.
+        apply_pending_search_focus();
         pump_network_result();
         pump_search_result();
         update_frame_rate();
@@ -178,6 +182,7 @@ private:
         brls::Label* detail{nullptr};
     };
     std::vector<SearchDetailRow> search_detail_rows_;
+    std::string pending_search_focus_identity_;
 
     void refresh_footer() {
         if (!footer_) return;
@@ -278,10 +283,47 @@ private:
         }
     }
 
-    void append_search_result_row(const ttnx::core::BrowseResult& result) {
-        if (!search_results_box_) return;
+    void refresh_search_load_more_navigation() {
+        if (!search_load_more_button_) return;
+
+        // Pinned Borealis traverses into a sibling Box via getDefaultFocus().
+        // Because search_results_box_ is the nested sibling before Load more,
+        // Up otherwise resolves to result 1. Route that edge to the actual
+        // last result. With no results, Search is the stable predecessor.
+        brls::View* up_target = search_action_button_;
+        if (!search_detail_rows_.empty() && search_detail_rows_.back().button) {
+            up_target = search_detail_rows_.back().button;
+        }
+        if (up_target) {
+            search_load_more_button_->setCustomNavigationRoute(
+                brls::FocusDirection::UP, up_target);
+        }
+    }
+
+    void apply_pending_search_focus() {
+        if (pending_search_focus_identity_.empty()) return;
+
+        // A continuation may finish after the user leaves Search. Never
+        // steal focus back from another tab or retain page-owned pointers.
+        if (!search_results_box_) {
+            pending_search_focus_identity_.clear();
+            return;
+        }
+
+        const std::string wanted = pending_search_focus_identity_;
+        pending_search_focus_identity_.clear();
+        for (const auto& row : search_detail_rows_) {
+            if (row.identity == wanted && row.button) {
+                brls::Application::giveFocus(row.button);
+                return;
+            }
+        }
+    }
+
+    brls::Button* append_search_result_row(const ttnx::core::BrowseResult& result) {
+        if (!search_results_box_) return nullptr;
         const auto identity = ttnx::core::browse_result_identity(result);
-        if (identity.empty()) return;
+        if (identity.empty()) return nullptr;
 
         std::string title = "[" + ttnx::core::search_result_kind_label(result.kind) + "] ";
         title += result.title.empty() ? "Untitled result" : result.title;
@@ -290,8 +332,13 @@ private:
             bounded_ui_text(title, kMaxUiTitleChars));
         select->setHeight(72);
         select->registerClickAction([this, identity](brls::View*) {
-            if (!search_model_.select(identity)) return true;
-            // Selection never deletes or replaces the focused row.
+            if (search_model_.selected_identity() == identity) {
+                search_model_.clear_selection();
+            } else if (!search_model_.select(identity)) {
+                return true;
+            }
+            // A toggles only the existing inline detail. The focused row
+            // stays alive and is never replaced or force-refocused.
             refresh_search_inline_details();
             return true;
         });
@@ -315,19 +362,35 @@ private:
                 18);
             metadata_label->setMarginBottom(14);
         }
+        return select;
     }
 
-    void append_search_results_from(std::size_t start_index) {
-        if (!search_results_box_) return;
+    std::string append_search_results_from(std::size_t start_index) {
+        if (!search_results_box_) return {};
         const auto& results = search_model_.results();
-        if (start_index > results.size()) return;
+        if (start_index > results.size()) return {};
+
+        std::string first_added_identity;
         for (std::size_t i = start_index; i < results.size(); ++i) {
-            append_search_result_row(results[i]);
+            const auto identity = ttnx::core::browse_result_identity(results[i]);
+            auto* row = append_search_result_row(results[i]);
+            if (row && first_added_identity.empty()) first_added_identity = identity;
         }
+        refresh_search_load_more_navigation();
+        return first_added_identity;
     }
 
     void rebuild_search_results() {
         if (!search_results_box_) return;
+
+        // A genuine full rebuild can delete old rows. Point Load more at
+        // a page-stable control first so its custom route cannot retain a
+        // result pointer that is about to be destroyed.
+        if (search_load_more_button_ && search_action_button_) {
+            search_load_more_button_->setCustomNavigationRoute(
+                brls::FocusDirection::UP, search_action_button_);
+        }
+        pending_search_focus_identity_.clear();
 
         // Full rebuilding is reserved for a genuinely new/reconstructed result
         // page. Selection and continuation appends never delete existing rows.
@@ -335,12 +398,13 @@ private:
         while (!search_results_box_->getChildren().empty()) {
             search_results_box_->removeView(search_results_box_->getChildren().back());
         }
-        append_search_results_from(0);
+        (void)append_search_results_from(0);
     }
 
     void refresh_search_load_more_control(bool focus_fallback_if_hiding = false) {
         if (!search_load_more_button_) return;
 
+        refresh_search_load_more_navigation();
         const auto state = search_model_.state();
         const bool retry_continuation =
             state == ttnx::core::SearchViewState::Error &&
@@ -637,9 +701,18 @@ private:
             // SearchModel already deduped by stable identity. Append only rows
             // that were not present before this continuation; never delete or
             // replace the currently focused first-page result tree.
-            append_search_results_from(previous_result_count);
+            const auto first_new_identity =
+                append_search_results_from(previous_result_count);
             refresh_search_inline_details();
             refresh_search_page(false, search_model_.end_of_results());
+
+            // Appending rows above an already-focused Load more button moves
+            // its layout position without another focus-gained event. Defer
+            // focus to the first newly-added row until the next frame so the
+            // selector remains visible and the next page begins naturally.
+            if (!first_new_identity.empty()) {
+                pending_search_focus_identity_ = first_new_identity;
+            }
         } else {
             refresh_search_page(true);
         }
@@ -834,6 +907,7 @@ private:
         search_load_more_button_ = nullptr;
         search_results_box_ = nullptr;
         search_detail_rows_.clear();
+        pending_search_focus_identity_.clear();
         auto* scroll = new brls::ScrollingFrame();
         auto* content = new brls::Box(brls::Axis::COLUMN);
         content->setPadding(32, 36, 32, 36);
