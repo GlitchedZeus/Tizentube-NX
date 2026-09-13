@@ -1,0 +1,60 @@
+name: crash-symbolicate
+
+on:
+  push:
+    branches:
+      - debug/symbolicate-search-crash-5b46829
+  workflow_dispatch:
+
+jobs:
+  reproduce-symbols:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Rebuild exact Search code with pinned devkitA64
+        run: |
+          docker run --rm \
+            -v "$PWD:/work" \
+            -w /work \
+            devkitpro/devkita64@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282 \
+            bash -lc '
+              set -euo pipefail
+              make -f Makefile.switch clean
+              make -f Makefile.switch -j2
+              ELF="$(find . -name tizentube_nx.elf -print -quit)"
+              MAP="$(find . -name tizentube_nx.map -print -quit)"
+              test -n "$ELF"
+              test -n "$MAP"
+              A2L=/opt/devkitpro/devkitA64/bin/aarch64-none-elf-addr2line
+              NM=/opt/devkitpro/devkitA64/bin/aarch64-none-elf-nm
+              OBJDUMP=/opt/devkitpro/devkitA64/bin/aarch64-none-elf-objdump
+              ADDRS="0x89568 0x57B10 0x1352C 0x3BD3C 0x17698 0x54188 0x1671C 0x54BF0 0x54E98 0x57324 0x57AD8 0x1B23C 0x5E1D0 0x89EE8"
+              {
+                echo "source_checkpoint=5b46829ead0a94089696e1521cb101637e2bfb3e"
+                echo "build_commit=$(git rev-parse HEAD)"
+                echo "elf=$ELF"
+                echo "map=$MAP"
+                sha256sum "$ELF" "$MAP" tizentube_nx.nro
+                echo
+                echo "=== addr2line ==="
+                "$A2L" -a -f -C -i -e "$ELF" $ADDRS
+              } > crash-symbolication.txt
+              "$NM" -n -C "$ELF" > crash-symbols.txt
+              "$OBJDUMP" -d -C -l "$ELF" > crash-disassembly.txt
+              cp "$ELF" crash-repro.elf
+              cp "$MAP" crash-repro.map
+            '
+      - name: Upload crash symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: search-crash-symbols-5b46829
+          path: |
+            crash-repro.elf
+            crash-repro.map
+            crash-symbolication.txt
+            crash-symbols.txt
+            crash-disassembly.txt
+            tizentube_nx.nro
+          if-no-files-found: error
