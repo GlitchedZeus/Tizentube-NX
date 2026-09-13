@@ -42,21 +42,29 @@
 - [x] User-triggered off-UI-thread guest bootstrap probe
 - [ ] First verified real-Switch guest bootstrap result
 
-### Search parsing and data model
+### Search parsing and normalized data
 
 - [x] Scoped Search primary/continuation boundary
 - [x] Legacy `videoRenderer`
 - [x] Modern `lockupViewModel`
-- [x] Channel and playlist results
+- [x] Legacy + modern channel results
+- [x] Legacy + modern playlist results
 - [x] Legacy + modern continuation items
 - [x] Renderer firewall for Shorts/reels, ads/promoted, shopping and unsupported renderers
 - [x] Opaque blocked subtrees
 - [x] Renderer-agnostic Video / Channel / Playlist result model
 - [x] Stable type-qualified result identity
 - [x] Deterministic post-firewall dedupe
-- [x] Presentation metadata bounds/sanitization
+- [x] Bounded optional video metadata normalization
+- [x] Bounded optional channel metadata normalization
+- [x] Bounded optional playlist metadata normalization
+- [x] Conservative exact count parsing with localized/abbreviated text fallback
+- [x] Live / upcoming / scheduled-time normalized state
+- [x] Bounded thumbnail candidate model with dimensions
+- [x] Deterministic best-first thumbnail preference and output cap
 - [x] Hostile/odd Search fixture corpus
 - [x] Deterministic mutation/property-style parser corpus
+- [x] Numeric-overflow / malformed-grouping / conflicting-optional-value tests
 - [x] Guard low-level unscoped parser as an internal API
 
 ### URLs / local routing
@@ -69,7 +77,7 @@
 - [x] Reject duplicate/conflicting `v` values and malformed/oversized inputs
 - [x] Reject Shorts/reel URLs rather than converting them into normal videos
 
-### Search execution / privacy / UI preparation
+### Search execution / privacy / offline UI preparation
 
 - [x] Stateless transport-neutral Search executor
 - [x] First-page and continuation fake-HTTP tests
@@ -81,11 +89,27 @@
 - [x] Bound/minimize reviewed WEB/v1 request contract
 - [x] Tests proving analytics/ad/tracking-style JSON fields are absent
 - [x] Sensitive diagnostic replacement + length bounds
-- [x] Offline Search model with loading/empty/error/loading-more states
+- [x] UI-safe Search error taxonomy separate from technical diagnostics
+- [x] Offline Search model with loading/ready/empty/error/loading-more states
+- [x] End-of-results and continuation-availability state
+- [x] Retryable continuation/network failure state
 - [x] Stable selection identity + stale-generation rejection
+- [x] Pure duration/live/upcoming/view/upload-age/count display helpers
 - [ ] Enable live Search POST in Switch UI — **blocked pending real-Switch bootstrap result**
 - [ ] Render normalized Search results as Borealis cards
 - [ ] Live continuation paging on Switch
+
+### Future feature seams — not active in M2
+
+- [x] Keep normalized data/presentation boundaries independent of future player/metadata services
+- [x] Preserve hard no-Shorts invariant regardless of reference implementation behavior
+- [ ] SponsorBlock adapter
+- [ ] Alternative/DeArrow-style title/thumbnail adapter
+- [ ] Return YouTube Dislike adapter
+- [ ] Playback-quality preferences
+- [ ] Original-audio preference
+- [ ] Player cleanup controls
+- [ ] Review/allowlist every third-party destination before DNS
 
 ### Remaining guest surfaces
 
@@ -111,10 +135,12 @@
 - [ ] Token/session persistence + refresh/recovery/sign-out
 - [ ] Subscriptions/likes/playlists/history as supported by chosen backend
 
-## M5 — TizenTube/ReVanced features
+## M5 — TizenTube/ReVanced feature integrations
 
 - [ ] SponsorBlock
-- [ ] DeArrow titles/thumbnails
+- [ ] DeArrow/alternative titles/thumbnails
+- [ ] Return YouTube Dislike
+- [ ] Clean share actions from normalized identifiers
 - [ ] Third-party API destinations reviewed through outbound policy
 - [ ] Additional non-Shorts feed filters
 
