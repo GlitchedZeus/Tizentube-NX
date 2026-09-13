@@ -30,7 +30,7 @@ On real Atmosphère hardware, the project has already passed these gates:
 
 The continuation data path works, but its **focus/scroll UX is still under hardware review**. The current M2 gate is making pagination navigation feel correct after results are appended.
 
-For exact accepted/rejected hardware checkpoints, see [`docs/HARDWARE_GATES.md`](docs/HARDWARE_GATES.md).
+For exact accepted/rejected hardware checkpoints, see the active-branch [`HARDWARE_GATES.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/HARDWARE_GATES.md).
 
 ## Project rules
 
@@ -62,7 +62,7 @@ Current M2 policy:
 
 The app does not rely on 90DNS for these protections.
 
-More detail: [`docs/NETWORK_SAFETY.md`](docs/NETWORK_SAFETY.md) and [`docs/NATIVE_NETWORK_LIFETIME.md`](docs/NATIVE_NETWORK_LIFETIME.md).
+More detail: [`NETWORK_SAFETY.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/NETWORK_SAFETY.md) and [`NATIVE_NETWORK_LIFETIME.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/NATIVE_NETWORK_LIFETIME.md).
 
 ## Roadmap
 
@@ -77,7 +77,7 @@ More detail: [`docs/NETWORK_SAFETY.md`](docs/NETWORK_SAFETY.md) and [`docs/NATIV
 | **M6 — Daily-driver polish / v1** | ⏳ Planned | Stability, caching/retry, dock/undock, applet/title-takeover testing, release packaging |
 | **M7 — Optional post-v1 YouTube linking** | ⏳ Planned | Official limited-input/device OAuth and controlled import/sync into local profiles |
 
-The detailed checklist lives in [`docs/ROADMAP.md`](docs/ROADMAP.md).
+The detailed checklist lives in the active-branch [`docs/ROADMAP.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/ROADMAP.md).
 
 ### Current M2 focus
 
@@ -127,7 +127,7 @@ controller-first result UI
 
 The UI never parses raw YouTube renderer JSON directly.
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md) for the deeper implementation notes.
+See the active-branch [`ARCHITECTURE.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/ARCHITECTURE.md) and [`PROJECT_STATUS.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/PROJECT_STATUS.md) for deeper implementation notes.
 
 ## Building on a PC
 
@@ -159,15 +159,17 @@ See [`docs/THIRD_PARTY.md`](docs/THIRD_PARTY.md) for dependency attribution.
 
 ## Useful project docs
 
-- [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md) — current implementation status and active gate
-- [`docs/HARDWARE_GATES.md`](docs/HARDWARE_GATES.md) — what has actually passed or failed on a physical Switch
-- [`docs/ROADMAP.md`](docs/ROADMAP.md) — full milestone checklist
-- [`docs/SCOPE.md`](docs/SCOPE.md) — project scope and product boundaries
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — code architecture
-- [`docs/NETWORK_SAFETY.md`](docs/NETWORK_SAFETY.md) — outbound-network policy
-- [`docs/PROFILES_AND_IMPORT.md`](docs/PROFILES_AND_IMPORT.md) — local-first profile direction
-- [`docs/OAUTH_ACCOUNT_LINKING.md`](docs/OAUTH_ACCOUNT_LINKING.md) — post-v1 optional account-linking design
-- [`docs/MORPHE_REFERENCE.md`](docs/MORPHE_REFERENCE.md) — future feature/behavior reference policy
+The newest development documentation currently lives on `feature/m2-guest-browsing`:
+
+- [`PROJECT_STATUS.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/PROJECT_STATUS.md) — current implementation status and active gate
+- [`HARDWARE_GATES.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/HARDWARE_GATES.md) — what has actually passed or failed on a physical Switch
+- [`ROADMAP.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/ROADMAP.md) — full milestone checklist
+- [`SCOPE.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/SCOPE.md) — project scope and product boundaries
+- [`ARCHITECTURE.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/ARCHITECTURE.md) — code architecture
+- [`NETWORK_SAFETY.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/NETWORK_SAFETY.md) — outbound-network policy
+- [`PROFILES_AND_IMPORT.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/PROFILES_AND_IMPORT.md) — local-first profile direction
+- [`OAUTH_ACCOUNT_LINKING.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/OAUTH_ACCOUNT_LINKING.md) — post-v1 optional account-linking design
+- [`MORPHE_REFERENCE.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/MORPHE_REFERENCE.md) — future feature/behavior reference policy
 
 ## Contributing / development
 
