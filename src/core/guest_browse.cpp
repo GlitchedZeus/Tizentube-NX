@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdint>
 #include <initializer_list>
 #include <optional>
 #include <unordered_set>
@@ -16,6 +17,7 @@ constexpr std::size_t kMaxChannelTextBytes = 256;
 constexpr std::size_t kMaxMetadataTextBytes = 256;
 constexpr std::size_t kMaxAccessibilityBytes = 1024;
 constexpr std::size_t kMaxThumbnailUrlBytes = 2048;
+constexpr std::size_t kMaxThumbnailCandidates = 8;
 
 std::string lowercase(std::string_view value) {
     std::string out(value);
@@ -65,6 +67,40 @@ bool valid_duration_text(std::string_view value) {
     return saw_digit;
 }
 
+std::vector<ThumbnailCandidate> normalize_thumbnails(const RendererRecord& record) {
+    std::vector<ThumbnailCandidate> candidates;
+    candidates.reserve(std::min<std::size_t>(
+        record.thumbnails.size() + (record.thumbnail_url.empty() ? 0U : 1U),
+        kMaxThumbnailCandidates));
+
+    std::unordered_set<std::string> seen;
+    seen.reserve(kMaxThumbnailCandidates);
+
+    auto add = [&](const ThumbnailCandidate& candidate) {
+        if (candidates.size() >= kMaxThumbnailCandidates) return;
+        if (!safe_https_reference(candidate.url)) return;
+        if (!seen.insert(candidate.url).second) return;
+        candidates.push_back(candidate);
+    };
+
+    for (const auto& candidate : record.thumbnails) add(candidate);
+    if (!record.thumbnail_url.empty()) {
+        add(ThumbnailCandidate{record.thumbnail_url, 0, 0});
+    }
+
+    std::sort(candidates.begin(), candidates.end(), [](const auto& left, const auto& right) {
+        const std::uint64_t left_area =
+            static_cast<std::uint64_t>(left.width) * static_cast<std::uint64_t>(left.height);
+        const std::uint64_t right_area =
+            static_cast<std::uint64_t>(right.width) * static_cast<std::uint64_t>(right.height);
+        if (left_area != right_area) return left_area > right_area;
+        if (left.width != right.width) return left.width > right.width;
+        if (left.height != right.height) return left.height > right.height;
+        return left.url < right.url;
+    });
+    return candidates;
+}
+
 std::optional<BrowseResult> normalize_renderer_record(const RendererRecord& record) {
     BrowseResult result;
     switch (record.item.kind) {
@@ -95,18 +131,31 @@ std::optional<BrowseResult> normalize_renderer_record(const RendererRecord& reco
     result.title = record.item.title;
     result.channel_name = bounded_text(record.channel_title, kMaxChannelTextBytes);
     result.channel_id = bounded_text(record.channel_id, kMaxResultIdBytes);
-    result.thumbnail_url = safe_https_reference(record.thumbnail_url)
-        ? record.thumbnail_url
-        : std::string{};
+
+    result.thumbnails = normalize_thumbnails(record);
+    if (!result.thumbnails.empty()) result.thumbnail_url = result.thumbnails.front().url;
+
     result.duration_text = valid_duration_text(record.duration_text)
         ? record.duration_text
         : std::string{};
+    result.duration_seconds = result.duration_text.empty()
+        ? std::nullopt
+        : record.duration_seconds;
+
     result.view_count_text = bounded_text(record.view_count_text, kMaxMetadataTextBytes);
+    result.view_count = record.view_count;
     result.published_text = bounded_text(record.published_text, kMaxMetadataTextBytes);
-    result.subscriber_count_text = bounded_text(record.subscriber_count_text, kMaxMetadataTextBytes);
+    result.subscriber_count_text = bounded_text(
+        record.subscriber_count_text, kMaxMetadataTextBytes);
+    result.subscriber_count = record.subscriber_count;
     result.video_count_text = bounded_text(record.video_count_text, kMaxMetadataTextBytes);
+    result.video_count = record.video_count;
     result.accessibility_text = bounded_text(record.accessibility_text, kMaxAccessibilityBytes);
+
     result.upcoming = record.upcoming;
+    result.scheduled_start_time_seconds = record.upcoming
+        ? record.scheduled_start_time_seconds
+        : std::nullopt;
     return result;
 }
 
