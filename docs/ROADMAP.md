@@ -28,7 +28,7 @@
 - [x] Strict-TLS Switch libcurl transport
 - [x] Host + devkitA64 CI for the networking foundation
 - [ ] Pin trusted CA bundle in RomFS and document refresh procedure
-- [ ] Parse bootstrap response into a guest session
+- [x] Parse bootstrap response into a guest session
 - [ ] First live verified HTTPS request on Switch
 - [ ] Move live networking off the Borealis UI thread
 
