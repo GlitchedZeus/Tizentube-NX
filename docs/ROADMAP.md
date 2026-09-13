@@ -7,7 +7,7 @@
 - [x] Canonical clean YouTube share URL generator
 - [x] Hard Shorts content filter invariant
 - [x] Minimal libnx boot skeleton
-- [ ] Build the first `.nro` in a devkitPro environment and test on Atmosphere hardware
+- [x] Build the first `.nro` in a devkitPro environment and test on Atmosphere hardware
 
 ## M1 — Switch application shell
 
