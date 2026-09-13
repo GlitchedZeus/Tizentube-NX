@@ -8,8 +8,9 @@
 namespace ttnx::youtube {
 namespace {
 
-GuestSearchResult fail(std::string error) {
+GuestSearchResult fail(core::SearchErrorCode code, std::string error) {
     GuestSearchResult result;
+    result.error_code = code;
     result.error = std::move(error);
     return result;
 }
@@ -22,31 +23,41 @@ GuestSearchResult execute_guest_search(
     const core::GuestRequest& request,
     const core::FilterPolicy& policy) {
     if (request.surface != core::BrowseSurface::Search || !core::valid_guest_request(request)) {
-        return fail("Guest Search request is invalid.");
+        return fail(core::SearchErrorCode::UnsupportedResponse, "Guest Search request is invalid.");
     }
-    if (!session.usable()) return fail("Guest session is not usable.");
+    if (!session.usable()) {
+        return fail(core::SearchErrorCode::UnsupportedResponse, "Guest session is not usable.");
+    }
 
     const auto http_request = make_search_request(
         session,
         request.value,
         request.continuation);
-    if (!http_request) return fail("Could not build guest Search request.");
+    if (!http_request) {
+        return fail(core::SearchErrorCode::UnsupportedResponse,
+                    "Could not build guest Search request.");
+    }
 
     const auto http_result = http.perform(*http_request);
     if (!http_result.ok) {
-        return fail(net::safe_public_diagnostic(
+        const auto safe = net::safe_public_diagnostic(
             http_result.error,
-            "Guest Search HTTP request failed."));
+            "Guest Search HTTP request failed.");
+        return fail(core::classify_search_transport_error(safe), safe);
     }
     if (http_result.response.status_code < 200 || http_result.response.status_code >= 300) {
-        return fail("Guest Search returned a non-success HTTP status.");
+        return fail(core::SearchErrorCode::HttpFailure,
+                    "Guest Search returned a non-success HTTP status.");
     }
 
     auto parsed = parse_scoped_search_response(http_result.response.body, policy);
     if (!parsed || !parsed.page) {
-        return fail(parsed.error.empty()
-            ? "Guest Search response was rejected."
-            : parsed.error);
+        const auto diagnostic = parsed.error.empty()
+            ? std::string{"Guest Search response was rejected."}
+            : net::safe_public_diagnostic(
+                  parsed.error,
+                  "Guest Search response was rejected.");
+        return fail(core::classify_search_parse_error(diagnostic), diagnostic);
     }
 
     GuestSearchResult result;
