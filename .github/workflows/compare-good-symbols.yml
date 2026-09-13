@@ -1,0 +1,52 @@
+name: compare-good-symbols
+
+on:
+  push:
+    branches:
+      - debug/rebuild-good-96dbf0
+  workflow_dispatch:
+
+jobs:
+  build-good:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Rebuild accepted checkpoint with pinned devkitA64
+        run: |
+          docker run --rm \
+            -v "$PWD:/work" \
+            -w /work \
+            devkitpro/devkita64@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282 \
+            bash -lc '
+              set -euo pipefail
+              make -f Makefile.switch clean
+              make -f Makefile.switch -j2
+              ELF="$(find . -name tizentube_nx.elf -print -quit)"
+              MAP="$(find . -name tizentube_nx.map -print -quit)"
+              SIZE=/opt/devkitpro/devkitA64/bin/aarch64-none-elf-size
+              READELF=/opt/devkitpro/devkitA64/bin/aarch64-none-elf-readelf
+              test -n "$ELF"
+              test -n "$MAP"
+              {
+                echo "source_checkpoint=96dbf0be46d7fddb38a5510d9269d267e74fcce2"
+                sha256sum "$ELF" "$MAP" tizentube_nx.nro
+                echo "=== size ==="
+                "$SIZE" -A "$ELF"
+                echo "=== sections ==="
+                "$READELF" -S -W "$ELF"
+              } > good-build-layout.txt
+              cp "$ELF" good-repro.elf
+              cp "$MAP" good-repro.map
+            '
+      - name: Upload accepted-checkpoint symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: accepted-96dbf0-symbols
+          path: |
+            good-repro.elf
+            good-repro.map
+            good-build-layout.txt
+            tizentube_nx.nro
+          if-no-files-found: error
