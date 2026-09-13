@@ -10,3 +10,8 @@ are retained. The app icon SVG/JPEG is original project artwork.
 
 Initialize dependencies with `git submodule update --init --recursive`.
 Shaders compile from the pinned source and are packaged inside NRO RomFS.
+
+The pinned renderer omits `<optional>`; the Switch C++ build explicitly preincludes
+that standard header. CI pins the observed devkitA64 image digest. The shell
+supplies its own footer, frame counter and tap handling because those features
+are incomplete in this Borealis revision.

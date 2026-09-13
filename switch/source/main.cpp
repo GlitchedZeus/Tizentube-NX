@@ -2,6 +2,7 @@
 #include <switch.h>
 #include <cstdlib>
 #include <cmath>
+#include <chrono>
 #include <string>
 #include "app_storage.hpp"
 #include "tizentube_nx/ui/navigation.hpp"
@@ -30,6 +31,13 @@ public:
     brls::View* createContentView() override {
         auto* frame = new brls::TabFrame();
         frame->setTitle("TizenTube NX");
+        // This pinned framework has a placeholder footer. Supply real hints
+        // and our own FPS label rather than its unimplemented FPS API.
+        auto* footer = dynamic_cast<brls::Box*>(frame->getChildren().back());
+        while (!footer->getChildren().empty()) footer->removeView(footer->getChildren().back());
+        label(footer, "A Open    B Sections    + Exit", 20)->setMarginBottom(0);
+        footer_ = label(footer, "M1 preview | Guest", 20);
+        footer_->setMarginBottom(0);
         frame->getView("brls/tab_frame/sidebar")->setWidth(300);
         for (const auto& item : ttnx::ui::kRootNavigation) {
             frame->addTab(std::string(item.label), [this, section = item.section] {
@@ -38,7 +46,21 @@ public:
         }
         return frame;
     }
+    void update_frame_rate() {
+        ++frames_;
+        const auto now = std::chrono::steady_clock::now();
+        const double elapsed = std::chrono::duration<double>(now - sampled_).count();
+        if (elapsed < 1.0) return;
+        footer_->setText(settings_.show_fps
+            ? "M1 preview | " + std::to_string(static_cast<int>(frames_ / elapsed + 0.5)) + " FPS"
+            : "M1 preview | Guest");
+        sampled_ = now;
+        frames_ = 0;
+    }
 private:
+    brls::Label* footer_ = nullptr;
+    std::chrono::steady_clock::time_point sampled_ = std::chrono::steady_clock::now();
+    unsigned frames_ = 0;
     ttnx::core::Settings settings_;
     bool storage_ready_;
     std::string query_;
@@ -115,7 +137,7 @@ private:
                 : "SD storage unavailable. Changes last for this session.", 20);
             fps->registerClickAction([this, fps, saved](brls::View*) {
                 settings_.show_fps = !settings_.show_fps;
-                brls::Application::setDisplayFramerate(settings_.show_fps);
+
                 fps->setText(settings_.show_fps ? "Show frame rate: On" : "Show frame rate: Off");
                 saved->setText(ttnx::save_settings(settings_) ? "Display preference saved."
                     : "Could not save. This change lasts for this session.");
@@ -179,13 +201,11 @@ int main(int, char**) {
     }
     brls::Application::createWindow("TizenTube NX");
     brls::Application::setGlobalQuit(true);
-    brls::Application::setDisplayFramerate(settings.show_fps);
-    brls::Application::setCommonFooter("M1 preview  |  Guest");
     auto* shell = new ShellActivity(settings, storage_ready);
     brls::Application::pushActivity(shell);
     hidInitializeTouchScreen();
     ttnx::record_boot_event("interface-ready");
-    while (brls::Application::mainLoop()) { handle_touch(shell); }
+    while (brls::Application::mainLoop()) { handle_touch(shell); shell->update_frame_rate(); }
     ttnx::record_boot_event("clean-exit");
     return EXIT_SUCCESS;
 }
