@@ -20,15 +20,29 @@
 
 ## M2 — YouTube guest browsing
 
+### Console/network safety
+
+- [x] Default-deny outbound host policy
+- [x] Explicit Nintendo-domain hard deny independent of 90DNS
+- [x] Enforce host policy before DNS/connect
+- [x] Block HTTP, alternate ports, IP literals and userinfo authority tricks
+- [x] Disable autonomous curl redirects
+- [x] Host tests for Nintendo roots, deep subdomains and deceptive URL forms
+- [ ] Require every future redirect target to pass policy before a second DNS lookup
+- [ ] Require every future network subsystem (media/images/auth/updater/etc.) to use the same policy
+
 ### Networking foundation
 
 - [x] Transport-neutral HTTP request/response/client contract
 - [x] Search/Browse/Home InnerTube request builders
 - [x] Dynamic guest session bootstrap request (`sw.js_data`)
-- [x] Strict-TLS Switch libcurl transport
+- [x] Prototype strict-verification Switch libcurl transport
+- [x] Identify current devkitPro switch-curl cert-info crash risk and block it from becoming default live transport
 - [x] Host + devkitA64 CI for the networking foundation
-- [ ] Pin trusted CA bundle in RomFS and document refresh procedure
 - [x] Parse bootstrap response into a guest session
+- [ ] Direct libnx SSL-service HTTP/1.1 transport
+- [ ] GET + POST with bounded bodies
+- [ ] Verified peer-CA + hostname checks using Switch SSL service
 - [ ] First live verified HTTPS request on Switch
 - [ ] Move live networking off the Borealis UI thread
 
@@ -50,6 +64,7 @@
 
 - [ ] Video metadata/stream resolver
 - [ ] mpv + FFmpeg Switch pipeline
+- [ ] Apply outbound host policy to every media/CDN destination before DNS
 - [ ] 720p handheld / 1080p docked defaults
 - [ ] Quality selector
 - [ ] Captions
@@ -60,6 +75,7 @@
 ## M4 — Easy account login
 
 - [ ] Validate compliant TV/device-code authorization strategy
+- [ ] Apply outbound host policy to every auth destination before DNS
 - [ ] QR/code sign-in view
 - [ ] Token/session persistence
 - [ ] Refresh/recovery/sign-out
@@ -73,6 +89,7 @@
 - [ ] SponsorBlock categories + auto-skip/skip-button modes
 - [ ] DeArrow titles
 - [ ] DeArrow thumbnails
+- [ ] Apply outbound host policy to all third-party API destinations before DNS
 - [ ] Ad/promotion suppression hardening
 - [ ] Hide end-screen clutter
 - [ ] Optional additional feed filters
@@ -85,4 +102,5 @@
 - [ ] Dock/undock handling
 - [ ] Applet vs title-takeover testing
 - [ ] Multiple Switch profiles/account mapping (research + implementation)
+- [ ] Release audit: no network code path can bypass the outbound policy
 - [ ] Release packaging
