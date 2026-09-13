@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -15,6 +16,13 @@ namespace {
 constexpr std::size_t kMaxSearchResponseBytes = 8 * 1024 * 1024;
 constexpr std::size_t kMaxJsonNodes = 200000;
 constexpr std::size_t kMaxRendererRecords = 1000;
+constexpr std::size_t kMaxObjectMembers = 1024;
+constexpr std::size_t kMaxArrayElements = 4096;
+constexpr std::size_t kMaxDecodedStringBytes = 4096;
+constexpr std::size_t kMaxExtractedTextBytes = 2048;
+constexpr std::size_t kMaxTextRuns = 64;
+constexpr std::size_t kMaxRawThumbnailCandidates = 16;
+constexpr std::size_t kMaxThumbnailUrlBytes = 2048;
 constexpr unsigned kMaxJsonDepth = 128;
 
 bool is_ws(char c) {
@@ -69,6 +77,10 @@ std::optional<std::uint32_t> read_u16_escape(std::string_view input, std::size_t
     return value;
 }
 
+bool decoded_within_limit(const std::string* decoded) {
+    return !decoded || decoded->size() <= kMaxDecodedStringBytes;
+}
+
 bool parse_string_at(std::string_view input, std::size_t& pos, std::string* decoded) {
     if (pos >= input.size() || input[pos] != '"') return false;
     ++pos;
@@ -80,6 +92,7 @@ bool parse_string_at(std::string_view input, std::size_t& pos, std::string* deco
         if (c < 0x20) return false;
         if (c != '\\') {
             if (decoded) decoded->push_back(static_cast<char>(c));
+            if (!decoded_within_limit(decoded)) return false;
             continue;
         }
 
@@ -115,6 +128,7 @@ bool parse_string_at(std::string_view input, std::size_t& pos, std::string* deco
             default:
                 return false;
         }
+        if (!decoded_within_limit(decoded)) return false;
     }
     return false;
 }
@@ -234,6 +248,7 @@ std::optional<std::vector<ObjectMember>> object_members(std::string_view object_
     if (pos < object_json.size() && object_json[pos] == '}') return members;
 
     while (pos < object_json.size()) {
+        if (members.size() >= kMaxObjectMembers) return std::nullopt;
         std::string key;
         if (!parse_string_at(object_json, pos, &key)) return std::nullopt;
         skip_ws(object_json, pos);
@@ -247,8 +262,9 @@ std::optional<std::vector<ObjectMember>> object_members(std::string_view object_
         if (object_json[pos] == '}') {
             ++pos;
             skip_ws(object_json, pos);
-            return pos == object_json.size() ? std::optional<std::vector<ObjectMember>>(std::move(members))
-                                             : std::nullopt;
+            return pos == object_json.size()
+                ? std::optional<std::vector<ObjectMember>>(std::move(members))
+                : std::nullopt;
         }
         if (object_json[pos++] != ',') return std::nullopt;
         skip_ws(object_json, pos);
@@ -266,6 +282,7 @@ std::optional<std::vector<std::string_view>> array_elements(std::string_view arr
     if (pos < array_json.size() && array_json[pos] == ']') return elements;
 
     while (pos < array_json.size()) {
+        if (elements.size() >= kMaxArrayElements) return std::nullopt;
         const auto value_start = pos;
         if (!skip_value_at(array_json, pos, 0)) return std::nullopt;
         elements.push_back(array_json.substr(value_start, pos - value_start));
@@ -274,8 +291,9 @@ std::optional<std::vector<std::string_view>> array_elements(std::string_view arr
         if (array_json[pos] == ']') {
             ++pos;
             skip_ws(array_json, pos);
-            return pos == array_json.size() ? std::optional<std::vector<std::string_view>>(std::move(elements))
-                                            : std::nullopt;
+            return pos == array_json.size()
+                ? std::optional<std::vector<std::string_view>>(std::move(elements))
+                : std::nullopt;
         }
         if (array_json[pos++] != ',') return std::nullopt;
         skip_ws(array_json, pos);
@@ -328,25 +346,64 @@ std::optional<std::string> string_field(std::string_view object_json, std::strin
     return value ? decode_json_string(*value) : std::nullopt;
 }
 
+std::optional<std::uint64_t> parse_unsigned_json_integer(std::string_view value) {
+    std::size_t pos = 0;
+    skip_ws(value, pos);
+    if (pos >= value.size()) return std::nullopt;
+
+    std::uint64_t result = 0;
+    std::size_t digits = 0;
+    while (pos < value.size() && std::isdigit(static_cast<unsigned char>(value[pos]))) {
+        const auto digit = static_cast<unsigned>(value[pos] - '0');
+        if (result > (std::numeric_limits<std::uint64_t>::max() - digit) / 10) {
+            return std::nullopt;
+        }
+        result = result * 10 + digit;
+        ++digits;
+        ++pos;
+    }
+    skip_ws(value, pos);
+    return digits > 0 && pos == value.size() ? std::optional<std::uint64_t>(result)
+                                             : std::nullopt;
+}
+
+std::optional<std::uint64_t> unsigned_field(std::string_view object_json, std::string_view key) {
+    const auto value = object_field(object_json, key);
+    if (!value) return std::nullopt;
+    if (const auto number = parse_unsigned_json_integer(*value)) return number;
+    const auto text = decode_json_string(*value);
+    return text ? parse_unsigned_json_integer(*text) : std::nullopt;
+}
+
+std::string bounded_text_node(std::string value) {
+    return value.size() <= kMaxExtractedTextBytes ? std::move(value) : std::string{};
+}
+
 std::string text_node(std::string_view value) {
-    if (const auto direct = decode_json_string(value)) return *direct;
+    if (const auto direct = decode_json_string(value)) return bounded_text_node(*direct);
 
     if (const auto simple = object_field(value, "simpleText")) {
-        if (const auto decoded = decode_json_string(*simple)) return *decoded;
+        if (const auto decoded = decode_json_string(*simple)) return bounded_text_node(*decoded);
     }
     if (const auto content = object_field(value, "content")) {
-        if (const auto decoded = decode_json_string(*content)) return *decoded;
+        if (const auto decoded = decode_json_string(*content)) return bounded_text_node(*decoded);
     }
 
     const auto runs = object_field(value, "runs");
     if (!runs) return {};
     const auto elements = array_elements(*runs);
-    if (!elements) return {};
+    if (!elements || elements->size() > kMaxTextRuns) return {};
 
     std::string combined;
     for (const auto element : *elements) {
         const auto text = string_field(element, "text");
-        if (text) combined += *text;
+        if (!text) continue;
+        if (combined.size() > kMaxExtractedTextBytes - std::min(
+                kMaxExtractedTextBytes, text->size())) {
+            return {};
+        }
+        combined += *text;
+        if (combined.size() > kMaxExtractedTextBytes) return {};
     }
     return combined;
 }
@@ -354,36 +411,6 @@ std::string text_node(std::string_view value) {
 std::string text_field(std::string_view object_json, std::string_view key) {
     const auto value = object_field(object_json, key);
     return value ? text_node(*value) : std::string{};
-}
-
-std::string thumbnail_from_sources(std::string_view sources_json) {
-    const auto elements = array_elements(sources_json);
-    if (!elements) return {};
-    std::string best;
-    for (const auto element : *elements) {
-        if (const auto url = string_field(element, "url"); url && !url->empty()) best = *url;
-    }
-    return best;
-}
-
-std::string classic_thumbnail(std::string_view renderer) {
-    const auto thumbs = nested_field(renderer, {"thumbnail", "thumbnails"});
-    return thumbs ? thumbnail_from_sources(*thumbs) : std::string{};
-}
-
-std::string lockup_thumbnail(std::string_view renderer) {
-    const auto sources = nested_field(renderer, {"contentImage", "thumbnailViewModel", "image", "sources"});
-    return sources ? thumbnail_from_sources(*sources) : std::string{};
-}
-
-std::string first_nonempty_text(
-    std::string_view object_json,
-    std::initializer_list<std::string_view> fields) {
-    for (const auto field : fields) {
-        const auto text = text_field(object_json, field);
-        if (!text.empty()) return text;
-    }
-    return {};
 }
 
 std::string lowercase(std::string_view value) {
@@ -401,9 +428,228 @@ bool contains_any(std::string_view value, std::initializer_list<std::string_view
     return false;
 }
 
+bool safe_thumbnail_url(std::string_view url) {
+    if (url.empty() || url.size() > kMaxThumbnailUrlBytes || !url.starts_with("https://")) {
+        return false;
+    }
+    for (const unsigned char c : url) {
+        if (c <= 0x20 || c == 0x7f) return false;
+    }
+    return true;
+}
+
+void append_thumbnail_sources(
+    std::vector<core::ThumbnailCandidate>& output,
+    std::string_view sources_json) {
+    const auto elements = array_elements(sources_json);
+    if (!elements) return;
+
+    for (const auto element : *elements) {
+        if (output.size() >= kMaxRawThumbnailCandidates) return;
+        const auto url = string_field(element, "url");
+        if (!url || !safe_thumbnail_url(*url)) continue;
+
+        std::uint32_t width = 0;
+        std::uint32_t height = 0;
+        if (const auto parsed = unsigned_field(element, "width");
+            parsed && *parsed <= std::numeric_limits<std::uint32_t>::max()) {
+            width = static_cast<std::uint32_t>(*parsed);
+        }
+        if (const auto parsed = unsigned_field(element, "height");
+            parsed && *parsed <= std::numeric_limits<std::uint32_t>::max()) {
+            height = static_cast<std::uint32_t>(*parsed);
+        }
+        output.push_back({*url, width, height});
+    }
+}
+
+void append_sources_path(
+    std::vector<core::ThumbnailCandidate>& output,
+    std::string_view renderer,
+    std::initializer_list<std::string_view> path) {
+    if (const auto sources = nested_field(renderer, path)) {
+        append_thumbnail_sources(output, *sources);
+    }
+}
+
+std::vector<core::ThumbnailCandidate> classic_thumbnails(std::string_view renderer) {
+    std::vector<core::ThumbnailCandidate> output;
+    output.reserve(4);
+    append_sources_path(output, renderer, {"thumbnail", "thumbnails"});
+    append_sources_path(output, renderer,
+        {"thumbnailRenderer", "playlistVideoThumbnailRenderer", "thumbnail", "thumbnails"});
+    return output;
+}
+
+std::vector<core::ThumbnailCandidate> lockup_thumbnails(std::string_view renderer) {
+    std::vector<core::ThumbnailCandidate> output;
+    output.reserve(4);
+    append_sources_path(output, renderer,
+        {"contentImage", "thumbnailViewModel", "image", "sources"});
+    append_sources_path(output, renderer,
+        {"contentImage", "decoratedAvatarViewModel", "avatar", "avatarViewModel", "image", "sources"});
+    append_sources_path(output, renderer,
+        {"contentImage", "collectionThumbnailViewModel", "primaryThumbnail",
+         "thumbnailViewModel", "image", "sources"});
+    return output;
+}
+
+std::string preferred_legacy_thumbnail(const std::vector<core::ThumbnailCandidate>& candidates) {
+    return candidates.empty() ? std::string{} : candidates.back().url;
+}
+
+std::string first_nonempty_text(
+    std::string_view object_json,
+    std::initializer_list<std::string_view> fields) {
+    for (const auto field : fields) {
+        const auto text = text_field(object_json, field);
+        if (!text.empty()) return text;
+    }
+    return {};
+}
+
+std::optional<std::string> unique_browse_id_from_text_node(std::string_view text_json) {
+    std::optional<std::string> found;
+    auto merge = [&](const std::optional<std::string>& candidate) {
+        if (!candidate || candidate->empty()) return true;
+        if (!found) {
+            found = *candidate;
+            return true;
+        }
+        return *found == *candidate;
+    };
+
+    if (const auto runs = object_field(text_json, "runs")) {
+        const auto elements = array_elements(*runs);
+        if (elements && elements->size() <= kMaxTextRuns) {
+            for (const auto run : *elements) {
+                const auto endpoint = nested_field(run, {"navigationEndpoint", "browseEndpoint"});
+                if (endpoint && !merge(string_field(*endpoint, "browseId"))) return std::nullopt;
+            }
+        }
+    }
+
+    if (const auto command_runs = object_field(text_json, "commandRuns")) {
+        const auto elements = array_elements(*command_runs);
+        if (elements && elements->size() <= kMaxTextRuns) {
+            for (const auto run : *elements) {
+                const auto endpoint = nested_field(
+                    run, {"onTap", "innertubeCommand", "browseEndpoint"});
+                if (endpoint && !merge(string_field(*endpoint, "browseId"))) return std::nullopt;
+            }
+        }
+    }
+    return found;
+}
+
+std::string first_nonempty_browse_id(
+    std::string_view renderer,
+    std::initializer_list<std::string_view> fields) {
+    std::optional<std::string> found;
+    for (const auto field_name : fields) {
+        const auto field = object_field(renderer, field_name);
+        if (!field) continue;
+        const auto candidate = unique_browse_id_from_text_node(*field);
+        if (!candidate || candidate->empty()) continue;
+        if (found && *found != *candidate) return {};
+        found = *candidate;
+    }
+    return found.value_or("");
+}
+
+std::string accessibility_label(std::string_view value) {
+    for (const auto path : {
+            std::initializer_list<std::string_view>{"accessibility", "accessibilityData", "label"},
+            std::initializer_list<std::string_view>{"accessibilityData", "label"}}) {
+        if (const auto label = nested_field(value, path)) {
+            if (const auto decoded = decode_json_string(*label)) return bounded_text_node(*decoded);
+        }
+    }
+    if (const auto accessibility_text = object_field(value, "accessibilityText")) {
+        return text_node(*accessibility_text);
+    }
+    return {};
+}
+
+std::optional<std::uint64_t> parse_duration_seconds(std::string_view text) {
+    if (text.empty() || text.size() > 32) return std::nullopt;
+    std::uint64_t total = 0;
+    std::uint64_t part = 0;
+    unsigned components = 1;
+    bool have_digit = false;
+
+    for (const char c : text) {
+        if (c == ':') {
+            if (!have_digit || components >= 3 || part >= 60 && components > 1) return std::nullopt;
+            if (total > (std::numeric_limits<std::uint64_t>::max() - part) / 60) {
+                return std::nullopt;
+            }
+            total = total * 60 + part;
+            part = 0;
+            have_digit = false;
+            ++components;
+            continue;
+        }
+        if (c < '0' || c > '9') return std::nullopt;
+        const auto digit = static_cast<unsigned>(c - '0');
+        if (part > (std::numeric_limits<std::uint64_t>::max() - digit) / 10) {
+            return std::nullopt;
+        }
+        part = part * 10 + digit;
+        have_digit = true;
+    }
+    if (!have_digit || (components > 1 && part >= 60)) return std::nullopt;
+    if (total > (std::numeric_limits<std::uint64_t>::max() - part) / 60) {
+        return std::nullopt;
+    }
+    return total * 60 + part;
+}
+
+std::optional<std::uint64_t> parse_exact_count_text(std::string_view text) {
+    while (!text.empty() && is_ws(text.front())) text.remove_prefix(1);
+    while (!text.empty() && is_ws(text.back())) text.remove_suffix(1);
+    if (text.empty() || text.size() > 64) return std::nullopt;
+
+    const auto space = text.find(' ');
+    const auto number = space == std::string_view::npos ? text : text.substr(0, space);
+    const auto suffix = space == std::string_view::npos ? std::string_view{} : text.substr(space + 1);
+    if (!suffix.empty()) {
+        const auto lower = lowercase(suffix);
+        if (lower != "view" && lower != "views" && lower != "video" &&
+            lower != "videos" && lower != "subscriber" && lower != "subscribers") {
+            return std::nullopt;
+        }
+    }
+
+    std::uint64_t value = 0;
+    std::size_t group_digits = 0;
+    std::size_t group_index = 0;
+    bool saw_comma = false;
+    for (const char c : number) {
+        if (c == ',') {
+            if (group_digits == 0) return std::nullopt;
+            if ((group_index == 0 && group_digits > 3) || (group_index > 0 && group_digits != 3)) {
+                return std::nullopt;
+            }
+            saw_comma = true;
+            ++group_index;
+            group_digits = 0;
+            continue;
+        }
+        if (c < '0' || c > '9') return std::nullopt;
+        const auto digit = static_cast<unsigned>(c - '0');
+        if (value > (std::numeric_limits<std::uint64_t>::max() - digit) / 10) {
+            return std::nullopt;
+        }
+        value = value * 10 + digit;
+        ++group_digits;
+    }
+    if (group_digits == 0) return std::nullopt;
+    if (saw_comma && group_index > 0 && group_digits != 3) return std::nullopt;
+    return value;
+}
+
 bool looks_like_short(std::string_view renderer) {
-    // Fail-safe markers observed across legacy and modern YouTube renderers.
-    // A false positive only hides an item; it can never surface a Short.
     return contains_any(renderer, {
         "\"reelWatchEndpoint\"",
         "\"shortsLockupViewModel\"",
@@ -422,6 +668,15 @@ bool looks_live(std::string_view renderer) {
     });
 }
 
+bool looks_upcoming(std::string_view renderer) {
+    return contains_any(renderer, {
+        "\"upcomingEventData\"",
+        "BADGE_STYLE_TYPE_UPCOMING",
+        "THUMBNAIL_OVERLAY_STYLE_UPCOMING",
+        "THUMBNAIL_OVERLAY_BADGE_STYLE_UPCOMING",
+    });
+}
+
 bool looks_promoted(std::string_view renderer) {
     return contains_any(renderer, {
         "\"promotedBadgeRenderer\"",
@@ -437,6 +692,127 @@ bool looks_shopping(std::string_view renderer) {
         "\"productListRenderer\"",
         "\"merchandiseShelfRenderer\"",
     });
+}
+
+std::optional<std::uint64_t> unique_unsigned_field_recursive(
+    std::string_view value,
+    std::string_view wanted,
+    unsigned depth = 0) {
+    if (depth > 12) return std::nullopt;
+    std::size_t pos = 0;
+    skip_ws(value, pos);
+    if (pos >= value.size()) return std::nullopt;
+
+    std::optional<std::uint64_t> found;
+    auto merge = [&](const std::optional<std::uint64_t>& candidate) {
+        if (!candidate) return true;
+        if (!found) {
+            found = *candidate;
+            return true;
+        }
+        return *found == *candidate;
+    };
+
+    if (value[pos] == '{') {
+        const auto members = object_members(value);
+        if (!members) return std::nullopt;
+        for (const auto& member : *members) {
+            if (member.key == wanted) {
+                std::optional<std::uint64_t> candidate = parse_unsigned_json_integer(member.value);
+                if (!candidate) {
+                    if (const auto decoded = decode_json_string(member.value)) {
+                        candidate = parse_unsigned_json_integer(*decoded);
+                    }
+                }
+                if (!merge(candidate)) return std::nullopt;
+            }
+        }
+        for (const auto& member : *members) {
+            const auto candidate = unique_unsigned_field_recursive(member.value, wanted, depth + 1);
+            if (candidate && !merge(candidate)) return std::nullopt;
+        }
+    } else if (value[pos] == '[') {
+        const auto elements = array_elements(value);
+        if (!elements) return std::nullopt;
+        for (const auto element : *elements) {
+            const auto candidate = unique_unsigned_field_recursive(element, wanted, depth + 1);
+            if (candidate && !merge(candidate)) return std::nullopt;
+        }
+    }
+    return found;
+}
+
+struct LockupPart {
+    std::string text;
+    std::string browse_id;
+    std::string accessibility;
+};
+
+std::optional<LockupPart> lockup_part(
+    std::string_view renderer,
+    std::size_t row_index,
+    std::size_t part_index) {
+    const auto metadata = nested_field(renderer, {
+        "metadata", "lockupMetadataViewModel", "metadata", "contentMetadataViewModel"});
+    if (!metadata) return std::nullopt;
+    const auto rows = object_field(*metadata, "metadataRows");
+    if (!rows) return std::nullopt;
+    const auto row = array_element_at(*rows, row_index);
+    if (!row) return std::nullopt;
+    const auto parts = object_field(*row, "metadataParts");
+    if (!parts) return std::nullopt;
+    const auto part = array_element_at(*parts, part_index);
+    if (!part) return std::nullopt;
+    const auto text = object_field(*part, "text");
+    if (!text) return std::nullopt;
+
+    LockupPart result;
+    result.text = text_node(*text);
+    result.browse_id = unique_browse_id_from_text_node(*text).value_or("");
+    result.accessibility = accessibility_label(*text);
+    return result;
+}
+
+std::string lockup_accessibility(std::string_view renderer) {
+    if (const auto title = nested_field(renderer, {"metadata", "lockupMetadataViewModel", "title"})) {
+        const auto label = accessibility_label(*title);
+        if (!label.empty()) return label;
+    }
+    if (const auto image = nested_field(renderer, {"contentImage", "thumbnailViewModel"})) {
+        const auto label = accessibility_label(*image);
+        if (!label.empty()) return label;
+    }
+    return {};
+}
+
+std::string find_duration_text_recursive(std::string_view value, unsigned depth = 0) {
+    if (depth > 10) return {};
+    std::size_t pos = 0;
+    skip_ws(value, pos);
+    if (pos >= value.size()) return {};
+
+    if (value[pos] == '{') {
+        const auto members = object_members(value);
+        if (!members) return {};
+        for (const auto& member : *members) {
+            if (member.key == "text" || member.key == "content" || member.key == "label") {
+                const auto candidate = text_node(member.value);
+                if (parse_duration_seconds(candidate)) return candidate;
+            }
+        }
+        for (const auto& member : *members) {
+            const auto candidate = find_duration_text_recursive(member.value, depth + 1);
+            if (!candidate.empty()) return candidate;
+        }
+    } else if (value[pos] == '[') {
+        const auto elements = array_elements(value);
+        if (!elements) return {};
+        for (const auto element : *elements) {
+            const auto candidate = find_duration_text_recursive(element, depth + 1);
+            if (!candidate.empty()) return candidate;
+        }
+    }
+    return {};
 }
 
 std::optional<core::RendererRecord> parse_video_renderer(std::string_view renderer) {
@@ -459,10 +835,24 @@ std::optional<core::RendererRecord> parse_video_renderer(std::string_view render
         : (looks_live(renderer) ? core::ContentKind::Live : core::ContentKind::Video);
     record.item.promoted = looks_promoted(renderer);
     record.item.shopping = looks_shopping(renderer);
+
     record.channel_title = first_nonempty_text(
         renderer, {"longBylineText", "ownerText", "shortBylineText"});
-    record.thumbnail_url = classic_thumbnail(renderer);
+    record.channel_id = first_nonempty_browse_id(
+        renderer, {"longBylineText", "ownerText", "shortBylineText"});
+
+    record.thumbnails = classic_thumbnails(renderer);
+    record.thumbnail_url = preferred_legacy_thumbnail(record.thumbnails);
     record.duration_text = text_field(renderer, "lengthText");
+    record.duration_seconds = parse_duration_seconds(record.duration_text);
+    record.view_count_text = first_nonempty_text(renderer, {"viewCountText", "shortViewCountText"});
+    record.view_count = parse_exact_count_text(record.view_count_text);
+    record.published_text = text_field(renderer, "publishedTimeText");
+    record.accessibility_text = accessibility_label(*title);
+    record.upcoming = looks_upcoming(renderer);
+    if (record.upcoming) {
+        record.scheduled_start_time_seconds = unique_unsigned_field_recursive(renderer, "startTime");
+    }
     return record;
 }
 
@@ -476,7 +866,14 @@ std::optional<core::RendererRecord> parse_channel_renderer(std::string_view rend
     record.item.kind = core::ContentKind::Channel;
     record.item.id = *id;
     record.item.title = text_node(*title);
-    record.thumbnail_url = classic_thumbnail(renderer);
+    record.channel_id = *id;
+    record.thumbnails = classic_thumbnails(renderer);
+    record.thumbnail_url = preferred_legacy_thumbnail(record.thumbnails);
+    record.subscriber_count_text = text_field(renderer, "subscriberCountText");
+    record.subscriber_count = parse_exact_count_text(record.subscriber_count_text);
+    record.video_count_text = text_field(renderer, "videoCountText");
+    record.video_count = parse_exact_count_text(record.video_count_text);
+    record.accessibility_text = accessibility_label(*title);
     return record;
 }
 
@@ -498,24 +895,13 @@ std::optional<core::RendererRecord> parse_playlist_renderer(
     record.item.id = *id;
     record.item.title = text_node(*title);
     record.channel_title = first_nonempty_text(renderer, {"longBylineText", "shortBylineText"});
-    record.thumbnail_url = classic_thumbnail(renderer);
+    record.channel_id = first_nonempty_browse_id(renderer, {"longBylineText", "shortBylineText"});
+    record.thumbnails = classic_thumbnails(renderer);
+    record.thumbnail_url = preferred_legacy_thumbnail(record.thumbnails);
+    record.video_count_text = text_field(renderer, "videoCountText");
+    record.video_count = parse_exact_count_text(record.video_count_text);
+    record.accessibility_text = accessibility_label(*title);
     return record;
-}
-
-std::string lockup_channel_title(std::string_view renderer) {
-    const auto metadata = nested_field(renderer, {"metadata", "lockupMetadataViewModel", "metadata",
-                                                   "contentMetadataViewModel"});
-    if (!metadata) return {};
-    const auto rows = object_field(*metadata, "metadataRows");
-    if (!rows) return {};
-    const auto first_row = array_element_at(*rows, 0);
-    if (!first_row) return {};
-    const auto parts = object_field(*first_row, "metadataParts");
-    if (!parts) return {};
-    const auto first_part = array_element_at(*parts, 0);
-    if (!first_part) return {};
-    const auto text = object_field(*first_part, "text");
-    return text ? text_node(*text) : std::string{};
 }
 
 std::optional<core::RendererRecord> parse_lockup_renderer(
@@ -534,6 +920,8 @@ std::optional<core::RendererRecord> parse_lockup_renderer(
         record.item.kind = looks_live(renderer) ? core::ContentKind::Live : core::ContentKind::Video;
     } else if (content_type && *content_type == "LOCKUP_CONTENT_TYPE_PLAYLIST") {
         record.item.kind = core::ContentKind::Playlist;
+    } else if (content_type && *content_type == "LOCKUP_CONTENT_TYPE_CHANNEL") {
+        record.item.kind = core::ContentKind::Channel;
     } else if (content_type && *content_type == "LOCKUP_CONTENT_TYPE_SHORT") {
         record.item.kind = core::ContentKind::Short;
     } else {
@@ -543,17 +931,64 @@ std::optional<core::RendererRecord> parse_lockup_renderer(
     if (const auto title = nested_field(renderer, {"metadata", "lockupMetadataViewModel", "title"})) {
         record.item.title = text_node(*title);
     }
-    record.channel_title = lockup_channel_title(renderer);
-    record.thumbnail_url = lockup_thumbnail(renderer);
+
+    record.thumbnails = lockup_thumbnails(renderer);
+    record.thumbnail_url = preferred_legacy_thumbnail(record.thumbnails);
+    record.accessibility_text = lockup_accessibility(renderer);
     record.item.promoted = looks_promoted(renderer);
     record.item.shopping = looks_shopping(renderer);
+    record.upcoming = looks_upcoming(renderer);
+    if (record.upcoming) {
+        record.scheduled_start_time_seconds = unique_unsigned_field_recursive(renderer, "startTime");
+    }
+
+    const auto row0_part0 = lockup_part(renderer, 0, 0);
+    const auto row0_part1 = lockup_part(renderer, 0, 1);
+    const auto row0_part2 = lockup_part(renderer, 0, 2);
+    const auto row1_part0 = lockup_part(renderer, 1, 0);
+    const auto row1_part1 = lockup_part(renderer, 1, 1);
+
+    if (record.item.kind == core::ContentKind::Video || record.item.kind == core::ContentKind::Live) {
+        if (row0_part0) {
+            record.channel_title = row0_part0->text;
+            record.channel_id = row0_part0->browse_id;
+        }
+        record.view_count_text = row1_part0 && !row1_part0->text.empty()
+            ? row1_part0->text
+            : (row0_part1 ? row0_part1->text : std::string{});
+        record.view_count = parse_exact_count_text(record.view_count_text);
+        record.published_text = row1_part1 && !row1_part1->text.empty()
+            ? row1_part1->text
+            : (row0_part2 ? row0_part2->text : std::string{});
+
+        if (const auto content_image = object_field(renderer, "contentImage")) {
+            record.duration_text = find_duration_text_recursive(*content_image);
+            record.duration_seconds = parse_duration_seconds(record.duration_text);
+        }
+    } else if (record.item.kind == core::ContentKind::Playlist) {
+        if (row0_part0) {
+            record.channel_title = row0_part0->text;
+            record.channel_id = row0_part0->browse_id;
+        }
+        record.video_count_text = row1_part0 && !row1_part0->text.empty()
+            ? row1_part0->text
+            : (row0_part1 ? row0_part1->text : std::string{});
+        record.video_count = parse_exact_count_text(record.video_count_text);
+    } else if (record.item.kind == core::ContentKind::Channel) {
+        record.channel_id = record.item.id;
+        record.subscriber_count_text = row0_part0 ? row0_part0->text : std::string{};
+        record.subscriber_count = parse_exact_count_text(record.subscriber_count_text);
+        record.video_count_text = row1_part0 ? row1_part0->text : std::string{};
+        record.video_count = parse_exact_count_text(record.video_count_text);
+    }
 
     // Do not create a usable normal card without a stable content id and title.
     // Blocked/unknown records may still be returned internally so the renderer
     // firewall gets the final say and tests cover the hard invariants.
     if ((record.item.kind == core::ContentKind::Video ||
          record.item.kind == core::ContentKind::Live ||
-         record.item.kind == core::ContentKind::Playlist) &&
+         record.item.kind == core::ContentKind::Playlist ||
+         record.item.kind == core::ContentKind::Channel) &&
         (record.item.id.empty() || record.item.title.empty())) {
         record.item.kind = core::ContentKind::Unknown;
     }
