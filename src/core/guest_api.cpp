@@ -11,6 +11,34 @@ constexpr std::string_view kYouTubeOrigin = "https://www.youtube.com";
 constexpr std::string_view kInnertubeBase = "https://www.youtube.com/youtubei/";
 constexpr std::string_view kHomeBrowseId = "FEwhat_to_watch";
 
+constexpr std::size_t kMaxQueryBytes = 512;
+constexpr std::size_t kMaxContinuationBytes = 64 * 1024;
+constexpr std::size_t kMaxBrowseIdBytes = 256;
+constexpr std::size_t kMaxClientVersionBytes = 128;
+constexpr std::size_t kMaxVisitorDataBytes = 4096;
+constexpr std::size_t kMaxLocaleBytes = 32;
+constexpr std::size_t kMaxTimezoneBytes = 128;
+constexpr std::size_t kMaxUserAgentBytes = 512;
+
+bool bounded(std::string_view value, std::size_t max_bytes) {
+    return !value.empty() && value.size() <= max_bytes;
+}
+
+bool bounded_guest_session(const GuestSession& session) {
+    // M2 intentionally supports the one guest WEB/v1 contract we have tested.
+    // Do not let remote/session text mutate the endpoint path or grow request
+    // fields without an explicit protocol review.
+    return session.usable() && session.api_version == "v1" &&
+           session.client_name == "WEB" &&
+           bounded(session.client_version, kMaxClientVersionBytes) &&
+           bounded(session.visitor_data, kMaxVisitorDataBytes) &&
+           bounded(session.language, kMaxLocaleBytes) &&
+           bounded(session.region, kMaxLocaleBytes) &&
+           bounded(session.timezone, kMaxTimezoneBytes) &&
+           (session.user_agent.empty() || session.user_agent.size() <= kMaxUserAgentBytes) &&
+           session.client_name_id.size() <= 16;
+}
+
 std::string json_escape(std::string_view input) {
     std::string out;
     out.reserve(input.size() + 8);
@@ -38,6 +66,10 @@ std::string json_escape(std::string_view input) {
 }
 
 std::string context_json(const GuestSession& session) {
+    // Minimal known-good WEB guest context. Localization/timezone fields are
+    // retained because YouTube uses them to shape textual Search results; their
+    // exact private-protocol necessity is undocumented. No analytics/ad/client
+    // telemetry fields are copied from the official web client.
     std::string out = "{\"client\":{";
     out += "\"clientName\":\"" + json_escape(session.client_name) + "\",";
     out += "\"clientVersion\":\"" + json_escape(session.client_version) + "\",";
@@ -45,9 +77,6 @@ std::string context_json(const GuestSession& session) {
     out += "\"gl\":\"" + json_escape(session.region) + "\",";
     out += "\"visitorData\":\"" + json_escape(session.visitor_data) + "\",";
     out += "\"timeZone\":\"" + json_escape(session.timezone) + "\"";
-    if (!session.user_agent.empty()) {
-        out += ",\"userAgent\":\"" + json_escape(session.user_agent) + "\"";
-    }
     out += "}}";
     return out;
 }
@@ -77,9 +106,7 @@ net::HttpRequest innertube_post(
     }
 
     request.body = "{\"context\":" + context_json(session);
-    if (!payload_fields.empty()) {
-        request.body += "," + payload_fields;
-    }
+    if (!payload_fields.empty()) request.body += "," + payload_fields;
     request.body += "}";
     return request;
 }
@@ -103,14 +130,10 @@ net::HttpRequest make_session_bootstrap_request(
         {"Accept", "*/*"},
         {"Referer", std::string(kYouTubeOrigin) + "/sw.js"},
     };
-    if (!user_agent.empty()) {
-        request.headers.push_back({"User-Agent", std::string(user_agent)});
-    }
+    if (!user_agent.empty()) request.headers.push_back({"User-Agent", std::string(user_agent)});
 
     std::string cookie = "PREF=tz=";
-    for (const char c : timezone) {
-        cookie.push_back(c == '/' ? '.' : c);
-    }
+    for (const char c : timezone) cookie.push_back(c == '/' ? '.' : c);
     cookie += ";";
     if (!visitor_cookie_id.empty()) {
         cookie += "VISITOR_INFO1_LIVE=" + std::string(visitor_cookie_id) + ";";
@@ -123,8 +146,12 @@ std::optional<net::HttpRequest> make_search_request(
     const GuestSession& session,
     std::string_view query,
     std::string_view continuation) {
-    if (!session.usable()) return std::nullopt;
-    if (continuation.empty() && query.empty()) return std::nullopt;
+    if (!bounded_guest_session(session)) return std::nullopt;
+    if (continuation.empty()) {
+        if (!bounded(query, kMaxQueryBytes)) return std::nullopt;
+    } else if (continuation.size() > kMaxContinuationBytes) {
+        return std::nullopt;
+    }
 
     const auto fields = continuation.empty()
         ? json_string_field("query", query)
@@ -136,8 +163,12 @@ std::optional<net::HttpRequest> make_browse_request(
     const GuestSession& session,
     std::string_view browse_id,
     std::string_view continuation) {
-    if (!session.usable()) return std::nullopt;
-    if (continuation.empty() && browse_id.empty()) return std::nullopt;
+    if (!bounded_guest_session(session)) return std::nullopt;
+    if (continuation.empty()) {
+        if (!bounded(browse_id, kMaxBrowseIdBytes)) return std::nullopt;
+    } else if (continuation.size() > kMaxContinuationBytes) {
+        return std::nullopt;
+    }
 
     const auto fields = continuation.empty()
         ? json_string_field("browseId", browse_id)

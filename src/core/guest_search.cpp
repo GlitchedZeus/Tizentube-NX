@@ -1,5 +1,6 @@
 #include "tizentube_nx/youtube/guest_search.hpp"
 
+#include "tizentube_nx/net/diagnostics.hpp"
 #include "tizentube_nx/youtube/search_response.hpp"
 
 #include <utility>
@@ -33,9 +34,9 @@ GuestSearchResult execute_guest_search(
 
     const auto http_result = http.perform(*http_request);
     if (!http_result.ok) {
-        return fail(http_result.error.empty()
-            ? "Guest Search HTTP request failed."
-            : http_result.error);
+        return fail(net::safe_public_diagnostic(
+            http_result.error,
+            "Guest Search HTTP request failed."));
     }
     if (http_result.response.status_code < 200 || http_result.response.status_code >= 300) {
         return fail("Guest Search returned a non-success HTTP status.");
