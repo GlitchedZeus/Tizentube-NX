@@ -1,0 +1,261 @@
+name: apply-search-reactivation
+
+on:
+  push:
+    branches:
+      - feature/m2-guest-browsing
+    paths:
+      - .github/workflows/apply-search-reactivation.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/m2-guest-browsing
+          fetch-depth: 0
+
+      - name: Re-enable first-page Search on accepted startup shell
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected 1 match, found {count}")
+              return text.replace(old, new, 1)
+
+          def sub_once(text, pattern, repl, label):
+              out, count = re.subn(pattern, repl, text, count=1, flags=re.S)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected 1 match, found {count}")
+              return out
+
+          path = Path('switch/source/main.cpp')
+          text = path.read_text()
+
+          text = sub_once(
+              text,
+              r'class ShellActivity;\n\n// TabFrame keeps only one tab alive.*?enum class SearchWorkerKind \{\n    FirstPage,\n    Continuation,\n\};\n\n',
+              '',
+              'remove tracked-page and worker-kind scaffolding')
+
+          text = replace_once(
+              text,
+              '''    ~ShellActivity() override {\n        shutdown_network();\n        if (active_page_) active_page_->detach_owner();\n    }\n''',
+              '''    ~ShellActivity() override {\n        shutdown_network();\n    }\n''',
+              'simple destructor')
+
+          text = replace_once(
+              text,
+              '''    void tick() {\n        pump_network_result();\n        // Live Search is quarantined for the startup-only hardware gate.\n        // No Search worker completion is pumped until startup is accepted.\n        update_frame_rate();\n    }\n''',
+              '''    void tick() {\n        pump_network_result();\n        pump_search_result();\n        update_frame_rate();\n    }\n''',
+              'reactivate search completion pump')
+
+          text = sub_once(
+              text,
+              r'\n    void on_section_page_destroyed\(.*?\n    \}\n\nprivate:',
+              '\n\nprivate:',
+              'remove tracked page destruction callback')
+
+          text = replace_once(
+              text,
+              '    SearchWorkerKind pending_search_kind_{SearchWorkerKind::FirstPage};\n',
+              '',
+              'remove pending worker kind')
+
+          text = replace_once(
+              text,
+              '''    // Only the active TabFrame page exists. TrackedSectionPage clears these\n    // pointers synchronously on tab destruction, so UI refresh never touches a\n    // view that Borealis has already freed.\n    TrackedSectionPage* active_page_{nullptr};\n''',
+              '''    // These pointers are UI-thread-only conveniences for the currently visible\n    // plain ScrollingFrame. create_page() clears every page pointer before the\n    // replacement page is built. Workers never capture or dereference them.\n''',
+              'accepted page ownership comment')
+
+          text = replace_once(
+              text,
+              '    brls::Button* search_load_more_button_{nullptr};\n',
+              '',
+              'remove load-more view pointer')
+
+          text = replace_once(
+              text,
+              '                    text += ". More results are available.";\n',
+              '                    text += ". More results are available; Load more is disabled for this hardware gate.";\n',
+              'ready continuation status')
+
+          text = replace_once(
+              text,
+              '''            case ttnx::core::SearchViewState::Empty:\n                return search_model_.can_load_more()\n                    ? "No results on this page. More results are available."\n                    : "No results found.";\n''',
+              '''            case ttnx::core::SearchViewState::Empty:\n                return search_model_.can_load_more()\n                    ? "No results on this page. Load more is disabled for this hardware gate."\n                    : "No results found.";\n''',
+              'empty continuation status')
+
+          text = sub_once(
+              text,
+              r'\n        if \(search_load_more_button_\) \{.*?\n        \}\n\n        if \(rebuild_results\)',
+              '\n\n        if (rebuild_results)',
+              'remove load-more presentation')
+
+          text = replace_once(
+              text,
+              '''    void publish_search_result(\n        std::uint64_t generation,\n        SearchWorkerKind kind,\n        ttnx::youtube::GuestSearchResult result) noexcept {\n''',
+              '''    void publish_search_result(\n        std::uint64_t generation,\n        ttnx::youtube::GuestSearchResult result) noexcept {\n''',
+              'first-page publication signature')
+
+          text = replace_once(
+              text,
+              '            pending_search_kind_ = kind;\n',
+              '',
+              'remove pending kind publish')
+
+          text = replace_once(
+              text,
+              '''        SearchWorkerKind kind = SearchWorkerKind::FirstPage;\n        bool have_result = false;\n''',
+              '''        bool have_result = false;\n''',
+              'remove pumped kind')
+
+          text = replace_once(
+              text,
+              '                kind = pending_search_kind_;\n',
+              '',
+              'remove pumped kind assignment')
+
+          text = replace_once(
+              text,
+              '''            if (result.page) {\n                applied = kind == SearchWorkerKind::Continuation\n                    ? search_model_.apply_continuation(generation, *result.page)\n                    : search_model_.apply_first_page(generation, *result.page);\n            } else {\n''',
+              '''            if (result.page) {\n                applied = search_model_.apply_first_page(generation, *result.page);\n            } else {\n''',
+              'first-page apply only')
+
+          text = replace_once(
+              text,
+              '''    void launch_search_worker(\n        std::uint64_t generation,\n        SearchWorkerKind kind,\n        std::string query) {\n''',
+              '''    void launch_search_worker(\n        std::uint64_t generation,\n        std::string query) {\n''',
+              'first-page worker signature')
+
+          text = replace_once(
+              text,
+              '[this, generation, kind, query = std::move(query), session] {',
+              '[this, generation, query = std::move(query), session] {',
+              'first-page worker capture')
+
+          text = replace_once(
+              text,
+              '''                            auto result = kind == SearchWorkerKind::Continuation\n                                ? search_flow_.next(network_client_, session)\n                                : search_flow_.begin(network_client_, session, query);\n''',
+              '''                            auto result = search_flow_.begin(network_client_, session, query);\n''',
+              'disable continuation network execution')
+
+          text = replace_once(
+              text,
+              '''                        [&] {\n                            if (kind == SearchWorkerKind::FirstPage) search_flow_.reset();\n                        });\n''',
+              '''                        [&] {\n                            search_flow_.reset();\n                        });\n''',
+              'first-page failure cleanup')
+
+          text = replace_once(
+              text,
+              '''                    publish_search_result(\n                        generation, kind, std::move(protected_result.result));\n''',
+              '''                    publish_search_result(\n                        generation, std::move(protected_result.result));\n''',
+              'first-page publication call')
+
+          text = replace_once(
+              text,
+              '        launch_search_worker(generation, SearchWorkerKind::FirstPage, query_);\n',
+              '        launch_search_worker(generation, query_);\n',
+              'first-page start call')
+
+          text = sub_once(
+              text,
+              r'\n    void start_load_more\(\) \{.*?\n    \}\n\n    void retry_search_request\(\) \{',
+              '\n\n    void retry_search_request() {',
+              'remove load-more action')
+
+          text = sub_once(
+              text,
+              r'''        const auto generation = search_model_\.generation\(\);\n        if \(!search_model_\.begin_retry\(generation\)\) return;\n        const bool continuation =\n            search_model_\.state\(\) == ttnx::core::SearchViewState::LoadingMore;\n        refresh_search_page\(false\);\n        launch_search_worker\(\n            generation,\n            continuation \? SearchWorkerKind::Continuation : SearchWorkerKind::FirstPage,\n            continuation \? std::string\{\} : search_model_\.query\(\)\);''',
+              '''        const auto generation = search_model_.generation();\n        if (!search_model_.begin_retry(generation)) return;\n        refresh_search_page(false);\n        launch_search_worker(generation, search_model_.query());''',
+              'first-page retry only')
+
+          text = replace_once(
+              text,
+              '        search_load_more_button_ = nullptr;\n',
+              '',
+              'remove load-more pointer clearing')
+
+          old_search = '''        case RootSection::Search: {\n            label(content, "Search", 34);\n            label(content,\n                  "Startup recovery build: live Search is temporarily quarantined.",\n                  20);\n            label(content,\n                  "This page performs no network request. Startup must be accepted on hardware before Search is re-enabled.",\n                  20);\n            label(content,\n                  "The Search parser, firewall and worker hardening remain in the codebase for the next gated slice.",\n                  18);\n            ttnx::record_boot_event("boot-11-search-created");\n            break;\n        }\n'''
+          new_search = '''        case RootSection::Search: {\n            label(content, "Search", 34);\n            label(content,\n                  "First-page live guest Search is enabled. Results stay text-only while thumbnail hosts remain blocked.",\n                  20);\n\n            auto* enter = button(content, "Enter search");\n            enter->registerClickAction([this](brls::View*) {\n                open_search_keyboard();\n                return true;\n            });\n\n            search_query_label_ = label(content, "Query: none", 20);\n            search_action_button_ = button(content, "Search");\n            search_action_button_->registerClickAction([this](brls::View*) {\n                const bool retry_first_page =\n                    search_model_.state() == ttnx::core::SearchViewState::Error &&\n                    search_model_.retryable_failure() &&\n                    search_model_.error_code() != ttnx::core::SearchErrorCode::ContinuationFailure;\n                if (retry_first_page) retry_search_request();\n                else start_search();\n                return true;\n            });\n\n            search_status_label_ = label(content, "", 20);\n            search_results_box_ = new brls::Box(brls::Axis::COLUMN);\n            search_results_box_->setMarginBottom(8);\n            content->addView(search_results_box_);\n\n            search_selection_label_ = label(\n                content,\n                "Select a result to inspect its normalized identity. Playback is not enabled yet.",\n                18);\n            label(content,\n                  "Load more is disabled for this hardware gate. No Shorts, ads, promoted or shopping renderers may reach this list.",\n                  18);\n            refresh_search_page(true);\n            ttnx::record_boot_event("boot-11-search-created");\n            break;\n        }\n'''
+          text = replace_once(text, old_search, new_search, 'reactivate Search page')
+
+          text = sub_once(
+              text,
+              r'\nTrackedSectionPage::~TrackedSectionPage\(\) \{.*?\n\}\n',
+              '\n',
+              'remove tracked page destructor')
+
+          path.write_text(text)
+
+          # Project status: make the accepted recovery and first-page gate authoritative.
+          path = Path('docs/PROJECT_STATUS.md')
+          text = path.read_text()
+          text = replace_once(
+              text,
+              'The real-Switch guest bootstrap gate is accepted. Live Search is now implemented and CI-built; physical live-Search acceptance is the current hardware gate.',
+              'The real-Switch guest bootstrap and startup-recovery gates are accepted. First-page live Search is being re-enabled incrementally on the accepted plain-page shell; physical live-Search acceptance remains pending.',
+              'status phase')
+          text = replace_once(
+              text,
+              '''Borealis `TabFrame` destroys inactive tab pages. The Search page therefore uses a tracked page wrapper that unregisters its UI pointers synchronously during tab destruction. Workers never capture Borealis page/result view pointers, so leaving Search while a request is in flight does not leave a worker with stale UI references.\n''',
+              '''Borealis `TabFrame` destroys inactive tab pages. After the startup recovery, the Switch shell deliberately keeps the physically accepted plain `brls::ScrollingFrame` ownership model. `create_page()` clears UI-only pointers before constructing the replacement page, workers publish only model data, and Search UI refresh happens only on the main thread. Leaving Search while a request is in flight therefore does not give the worker any Borealis view pointer; reopening Search reconstructs the page from current `SearchModel` state.\n''',
+              'status page ownership')
+          text = replace_once(
+              text,
+              '''Search uses an explicit `Load more` action rather than infinite scrolling.\n\nContinuation continues through the same `GuestSearchFlow`, scoped parser and renderer firewall. The existing flow prevents cross-query token reuse and repeated-token loops; continuation requests do not resend the original query. `SearchModel` deduplicates appended results by stable type-qualified identity.\n\nA continuation failure retains existing first-page results and exposes the safe retry state. Terminal pages expose end-of-results.\n''',
+              '''The continuation core remains host-tested, but the first Search-reactivation hardware gate intentionally exposes **first-page Search only**. No `Load more` action is shown in this build.\n\nThe existing continuation flow, token ownership, repeated-token loop prevention, dedupe and retry behavior remain in core code/tests for a later hardware-gated slice. Disabling the UI action reduces page-lifetime and worker-state complexity while first-page Search is validated on the physical Switch.\n''',
+              'status continuation gate')
+          text = sub_once(
+              text,
+              r'## Current activation gate\n.*?\n\n## Physical startup crash investigation',
+              '''## Current activation gate\n\nThe real-Switch guest bootstrap remains accepted as `Guest ready`.\n\nThe startup-recovery NRO at checkpoint `dbe1de9e0aa278999479dd3eac7a04d37b005b58` has now also been physically tested on the Atmosphère Switch and **booted without crashing**. Treat startup recovery as hardware accepted.\n\nThe original pre-first-frame `std::abort (0xFFE)` root cause remains **UNKNOWN**. Do not attribute it to Search networking, `bad_alloc`, or the worker hardening without new evidence.\n\nThe current gate is incremental first-page live Search reactivation on the accepted plain `ScrollingFrame` shell. The build must keep startup boot markers, no remote thumbnails, no `Load more`, and the exact `www.youtube.com:443` allowlist.\n\nLive Search remains **not hardware accepted** until the new NRO passes the next physical Search test.\n\n## Physical startup crash investigation''',
+              'replace authoritative activation gate')
+          text = replace_once(
+              text,
+              '- Next hardware gate is startup only: launch, idle 30 seconds, navigate all tabs without Guest/Search networking, exit, and relaunch once.',
+              '- The startup-recovery NRO was subsequently tested on the real Atmosphère Switch and booted without crashing. Startup recovery is therefore **PHYSICALLY ACCEPTED** at `dbe1de9e0aa278999479dd3eac7a04d37b005b58`.\n- Next hardware gate is first-page Search only: preserve the accepted startup shell, manually establish the memory-only guest session, enter a query, verify keyboard close does not search, explicitly press Search, navigate/select normalized results, leave/re-enter Search, exit, and relaunch. `Load more` remains disabled for this gate.',
+              'record physical recovery pass')
+          path.write_text(text)
+
+          path = Path('docs/ROADMAP.md')
+          text = path.read_text()
+          text = replace_once(
+              text,
+              '- [x] Keep remote thumbnail fetching disabled pending separate host review\n- [ ] Real-hardware live Search acceptance',
+              '- [x] Keep remote thumbnail fetching disabled pending separate host review\n- [x] Real-Switch startup-recovery shell accepted after pre-first-frame crash\n- [x] Re-enable first-page Search on the accepted plain `ScrollingFrame` ownership model\n- [x] Keep `Load more` UI disabled for the first Search-reactivation hardware gate\n- [ ] Real-hardware first-page live Search acceptance',
+              'roadmap reactivation steps')
+          text = replace_once(
+              text,
+              '**Real-Switch guest bootstrap is accepted (`Guest ready`). Live Search, text-only normalized results, result selection and explicit continuation are now implemented and CI-built. The remaining gate is physical-Switch live Search acceptance while preserving the exact `www.youtube.com:443` allowlist and hard Shorts/ad firewall. Post-v1 OAuth work is documented only and must not be implemented during M2.**',
+              '**Real-Switch guest bootstrap is accepted (`Guest ready`) and the startup-recovery shell has now physically booted without crashing. The current gate is first-page live Search reactivation on the accepted plain `ScrollingFrame` shell. Text-only normalized results and result selection are enabled; `Load more` is intentionally disabled until a later hardware slice. Preserve the exact `www.youtube.com:443` allowlist and hard Shorts/ad firewall. Post-v1 OAuth work remains documentation only during M2.**',
+              'roadmap current gate')
+          path.write_text(text)
+
+          path = Path('docs/NATIVE_NETWORK_LIFETIME.md')
+          text = path.read_text()
+          text = replace_once(
+              text,
+              'The exact M2 outbound allowlist remains `www.youtube.com:443`. Nintendo endpoints remain denied before DNS. `switch-curl` remains excluded. Live Search remains disabled until the explicit guest bootstrap reaches `Guest ready` on physical hardware.',
+              'The exact M2 outbound allowlist remains `www.youtube.com:443`. Nintendo endpoints remain denied before DNS. `switch-curl` remains excluded. Guest bootstrap is physically accepted, and first-page live Search may reuse only the resulting memory-only guest session after an explicit user action; no hidden Search or bootstrap request runs at startup.',
+              'network lifetime current state')
+          path.write_text(text)
+          PY
+
+      - name: Commit reactivation slice
+        run: |
+          git config user.name "GlitchedZeus"
+          git config user.email "user91746@protonmail.com"
+          git add switch/source/main.cpp docs/PROJECT_STATUS.md docs/ROADMAP.md docs/NATIVE_NETWORK_LIFETIME.md
+          git diff --cached --check
+          git commit -m "switch: re-enable first-page live Search"
+          git push origin HEAD:feature/m2-guest-browsing
