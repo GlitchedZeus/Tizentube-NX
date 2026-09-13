@@ -64,6 +64,10 @@ if(TTNX_BUILD_TESTS)
     target_link_libraries(tizentube_nx_network_policy_tests PRIVATE tizentube_nx_core)
     add_test(NAME network_policy COMMAND tizentube_nx_network_policy_tests)
 
+    add_executable(tizentube_nx_service_init_tests tests/service_init_tests.cpp)
+    target_link_libraries(tizentube_nx_service_init_tests PRIVATE tizentube_nx_core)
+    add_test(NAME service_init COMMAND tizentube_nx_service_init_tests)
+
     add_executable(tizentube_nx_http1_tests tests/http1_tests.cpp)
     target_link_libraries(tizentube_nx_http1_tests PRIVATE tizentube_nx_core)
     add_test(NAME http1 COMMAND tizentube_nx_http1_tests)
