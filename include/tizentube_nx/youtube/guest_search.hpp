@@ -1,6 +1,7 @@
 #pragma once
 
 #include "tizentube_nx/core/guest_browse.hpp"
+#include "tizentube_nx/core/search_error.hpp"
 #include "tizentube_nx/net/http.hpp"
 #include "tizentube_nx/youtube/guest_api.hpp"
 
@@ -11,6 +12,9 @@ namespace ttnx::youtube {
 
 struct GuestSearchResult {
     std::optional<core::BrowsePage> page;
+    core::SearchErrorCode error_code{core::SearchErrorCode::None};
+    // Technical diagnostic for logs/tests only. It must already be sanitized by
+    // the producer; future UI code should use error_code + search_error_message().
     std::string error;
 
     [[nodiscard]] explicit operator bool() const noexcept {
