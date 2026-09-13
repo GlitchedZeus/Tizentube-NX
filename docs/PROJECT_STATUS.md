@@ -136,13 +136,15 @@ Selecting a result proves normalized routing without starting playback.
 
 Hardware testing of checkpoint `a5fb638abd6e41d82490a460f41ea096b11d1ea5` exposed a presentation-only issue: the original detail label lived after the entire results box, so its normalized ID/URL was usually off-screen unless a result near the bottom of the first page was selected.
 
-The follow-up UI opens a dedicated Borealis result-detail activity when A is pressed. It displays normalized title/type/ID and, when the stable ID is valid, a locally generated canonical clean URL immediately, with B returning to Search:
+The first follow-up attempted a dedicated Borealis result-detail activity at clean checkpoint `5e566c0a4a8c2b5c040686bcc95a305c675cc4ce`. Physical hardware rejected that presentation: pressing A produced a black blank pushed activity, while the correct normalized detail content became visible only for a fraction of a second during the B/pop transition. The underlying result data remained correct; this was a presentation/navigation failure.
+
+The replacement keeps result details inside the already-stable Search `ScrollingFrame`. Pressing A selects the normalized result, returns from the button callback, and schedules a one-frame-deferred list rebuild. On the next UI tick, the selected result's normalized type/title/ID and locally generated clean canonical URL are inserted directly below that result, and controller focus is restored to the same card:
 
 - Video: `https://www.youtube.com/watch?v=VIDEO_ID`
 - Channel: canonical stable `/channel/CHANNEL_ID` URL
 - Playlist: canonical `playlist?list=PLAYLIST_ID` URL
 
-The detail activity consumes only the already-normalized in-memory result and performs no additional network request. No source tracking parameters are preserved.
+The one-frame defer is deliberate: it avoids removing/deleting the focused Borealis button while that button's own A callback is executing. The inline detail uses only the already-normalized in-memory result and performs no additional network request. No source tracking parameters are preserved.
 
 ### Continuation / Load more
 
@@ -247,7 +249,9 @@ The startup-recovery NRO at checkpoint `dbe1de9e0aa278999479dd3eac7a04d37b005b58
 
 First-page live Search is now also **PHYSICALLY ACCEPTED** at checkpoint `a5fb638abd6e41d82490a460f41ea096b11d1ea5`. On the real Atmosphère Switch, the query `nintendo switch homebrew` returned 15 normalized live results, the UI reported that more results were available, controller navigation worked, and selecting a normal video produced its normalized video ID plus clean canonical `https://www.youtube.com/watch?v=...` URL. User-supplied screenshots show both the live result list and the selected-video detail.
 
-The hardware test also found one presentation-only defect: the selection detail label was positioned after the whole first-page result list, making it difficult to see for non-bottom results. The next UI checkpoint replaces that list-bottom label with a dedicated result-detail activity opened by A and closed with B. This does not alter the accepted Search POST/parser/session/network path.
+The hardware test also found one presentation-only defect: the selection detail label was positioned after the whole first-page result list, making it difficult to see for non-bottom results. A dedicated result-detail activity was then tested at `5e566c0a4a8c2b5c040686bcc95a305c675cc4ce` and failed its physical UI gate: the pushed activity stayed black until B was pressed, when the correct detail screen flashed briefly during the pop transition. That checkpoint is **NOT accepted** as a result-detail UI.
+
+The next UI-only checkpoint therefore removes the separate Activity path and expands the selected normalized result inline within the existing hardware-stable Search page. This does not alter the accepted Search POST/parser/session/network path.
 
 The original pre-first-frame `std::abort (0xFFE)` root cause remains **UNKNOWN**. Do not retroactively attribute it to Search networking, `bad_alloc`, or the worker hardening without new evidence.
 

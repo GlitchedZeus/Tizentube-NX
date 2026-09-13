@@ -55,48 +55,6 @@ brls::Button* button(brls::Box* box, const std::string& text) {
     return view;
 }
 
-class SearchResultActivity : public brls::Activity {
-public:
-    explicit SearchResultActivity(ttnx::core::BrowseResult result)
-        : result_(std::move(result)) {}
-
-    brls::View* createContentView() override {
-        auto* frame = new brls::AppletFrame();
-        frame->setTitle("Search result");
-
-        auto* scroll = new brls::ScrollingFrame();
-        auto* content = new brls::Box(brls::Axis::COLUMN);
-        content->setPadding(32, 36, 32, 36);
-        scroll->setContentView(content);
-        frame->setContentView(scroll);
-
-        const auto kind = ttnx::core::search_result_kind_label(result_.kind);
-        const auto title = result_.title.empty() ? std::string("Untitled result") : result_.title;
-        label(content, "[" + kind + "] " + bounded_ui_text(title, kMaxUiTitleChars), 30);
-
-        const auto metadata = ttnx::core::search_result_metadata_display(result_);
-        if (!metadata.empty()) {
-            label(content, bounded_ui_text(metadata, kMaxUiMetadataChars), 20);
-        }
-
-        label(content, ttnx::core::search_result_selection_display(result_), 20);
-        label(content,
-              "This screen uses only the normalized Search result already in memory. No extra network request is made.",
-              18);
-
-        auto close = [](brls::View*) {
-            brls::Application::popActivity();
-            return true;
-        };
-        button(content, "Back to Search")->registerClickAction(close);
-        content->registerAction("Back", brls::BUTTON_B, close);
-        return frame;
-    }
-
-private:
-    ttnx::core::BrowseResult result_;
-};
-
 class ShellActivity : public brls::Activity {
 public:
     ShellActivity(
@@ -141,6 +99,13 @@ public:
     void tick() {
         pump_network_result();
         pump_search_result();
+        if (search_selection_rebuild_pending_) {
+            // The A-button callback has returned before tick() runs.
+            // Rebuild here instead of deleting the focused result
+            // button while its own click callback is executing.
+            search_selection_rebuild_pending_ = false;
+            rebuild_search_results();
+        }
         update_frame_rate();
     }
 
@@ -209,6 +174,7 @@ private:
     brls::Label* search_status_label_{nullptr};
     brls::Button* search_action_button_{nullptr};
     brls::Box* search_results_box_{nullptr};
+    bool search_selection_rebuild_pending_{false};
 
     void refresh_footer() {
         if (!footer_) return;
@@ -299,20 +265,14 @@ private:
         return "Search state unavailable.";
     }
 
-    const ttnx::core::BrowseResult* selected_search_result() const {
-        const auto& identity = search_model_.selected_identity();
-        if (identity.empty()) return nullptr;
-        for (const auto& result : search_model_.results()) {
-            if (ttnx::core::browse_result_identity(result) == identity) return &result;
-        }
-        return nullptr;
-    }
-
     void rebuild_search_results() {
         if (!search_results_box_) return;
         while (!search_results_box_->getChildren().empty()) {
             search_results_box_->removeView(search_results_box_->getChildren().back());
         }
+
+        const auto selected_identity = search_model_.selected_identity();
+        brls::Button* selected_button = nullptr;
 
         for (const auto& result : search_model_.results()) {
             const auto identity = ttnx::core::browse_result_identity(result);
@@ -324,13 +284,23 @@ private:
                 search_results_box_,
                 bounded_ui_text(title, kMaxUiTitleChars));
             select->setHeight(72);
+            const bool is_selected = identity == selected_identity;
+            if (is_selected) selected_button = select;
             select->registerClickAction([this, identity](brls::View*) {
                 if (!search_model_.select(identity)) return true;
-                if (const auto* selected = selected_search_result()) {
-                    brls::Application::pushActivity(new SearchResultActivity(*selected));
-                }
+                // Defer the destructive list rebuild until the next
+                // ShellActivity::tick(), after this callback returns.
+                search_selection_rebuild_pending_ = true;
                 return true;
             });
+
+            if (is_selected) {
+                auto* detail_label = label(
+                    search_results_box_,
+                    ttnx::core::search_result_selection_display(result),
+                    18);
+                detail_label->setMarginBottom(14);
+            }
 
             const auto metadata = ttnx::core::search_result_metadata_display(result);
             if (!metadata.empty()) {
@@ -341,6 +311,11 @@ private:
                 metadata_label->setMarginBottom(14);
             }
         }
+
+        // Restore controller focus to the same normalized result.
+        // Borealis will keep the focused card in the scroll viewport,
+        // with the selected detail block immediately beneath it.
+        if (selected_button) brls::Application::giveFocus(selected_button);
     }
 
     void refresh_search_page(bool rebuild_results) {
@@ -767,7 +742,7 @@ private:
 
             search_status_label_ = label(content, "", 20);
             label(content,
-                  "Press A on any result to open its normalized ID and clean canonical URL.",
+                  "Press A on any result to show its normalized ID and clean canonical URL directly below that result.",
                   18);
             search_results_box_ = new brls::Box(brls::Axis::COLUMN);
             search_results_box_->setMarginBottom(8);

@@ -110,8 +110,10 @@
 - [x] Re-enable first-page Search on the accepted plain `ScrollingFrame` ownership model
 - [x] Keep `Load more` UI disabled for the first Search-reactivation hardware gate
 - [x] Real-hardware first-page live Search acceptance
-- [x] Replace the list-bottom selection detail with a dedicated A-open/B-back result-detail activity
-- [ ] Real-hardware result-detail activity acceptance
+- [x] Attempt dedicated A-open/B-back result-detail activity
+- [x] Hardware-reject the dedicated result-detail activity after black-screen/pop-transition failure
+- [x] Replace it with a one-frame-deferred inline selected-result detail block on the stable Search page
+- [ ] Real-hardware inline result-detail acceptance
 - [ ] Re-enable continuation / `Load more` as a separate hardware-gated slice
 
 ### Future feature seams — not active in M2
