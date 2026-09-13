@@ -1,0 +1,536 @@
+name: Apply Home diagnostics
+
+on:
+  push:
+    branches:
+      - feature/m2-guest-browsing
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.head_commit.message == 'chore: stage Home diagnostics patch'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/m2-guest-browsing
+          fetch-depth: 0
+      - name: Apply diagnostics patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              if old not in text:
+                  raise SystemExit(f'pattern not found in {path}: {old[:100]!r}')
+              if text.count(old) != 1:
+                  raise SystemExit(f'pattern not unique in {path}: {text.count(old)}')
+              p.write_text(text.replace(old, new, 1))
+
+          # Public parser result carries only a bounded structural summary.
+          replace_once(
+              'include/tizentube_nx/youtube/home_response.hpp',
+              'struct HomeResponseParseResult {\n    std::optional<core::HomePage> page;\n    std::string error;\n',
+              'struct HomeResponseParseResult {\n    std::optional<core::HomePage> page;\n    std::string error;\n    // Privacy-safe, bounded structural diagnostics only. This must never contain\n    // response values such as titles, IDs, tokens, visitor data or URLs.\n    std::string diagnostics;\n')
+
+          replace_once(
+              'include/tizentube_nx/youtube/guest_home.hpp',
+              '    // Sanitized public-safe diagnostic. Raw response bodies, tokens, visitor\n    // identifiers and request metadata must never escape through this field.\n    std::string error;\n',
+              '    // Sanitized public-safe diagnostic. Raw response bodies, tokens, visitor\n    // identifiers and request metadata must never escape through this field.\n    std::string error;\n    // Bounded renderer/container-family summary from the scoped Home parser.\n    // Contains structural names/counts only; never response values.\n    std::string diagnostics;\n')
+
+          # Add structural diagnostic collector without changing Home normalization traversal.
+          p = Path('src/core/home_response.cpp')
+          text = p.read_text()
+          old = 'constexpr std::size_t kMaxSectionTitleBytes = 256;\nconstexpr unsigned kMaxScopeDepth = 128;\n'
+          new = '''constexpr std::size_t kMaxSectionTitleBytes = 256;\nconstexpr unsigned kMaxScopeDepth = 128;\nconstexpr std::size_t kMaxDiagnosticFamilies = 16;\nconstexpr std::size_t kMaxDiagnosticFamilyBytes = 64;\nconstexpr std::size_t kMaxDiagnosticSummaryBytes = 1600;\nconstexpr unsigned kMaxDiagnosticDepth = 32;\n'''
+          if old not in text:
+              raise SystemExit('home_response constants anchor missing')
+          text = text.replace(old, new, 1)
+
+          anchor = '''std::optional<std::string_view> recognized_tab_contents(std::string_view tab_renderer) {\n    const auto content = field(tab_renderer, "content");\n    if (!content) return std::nullopt;\n    if (const auto rich_grid = field(*content, "richGridRenderer")) {\n        return field(*rich_grid, "contents");\n    }\n    if (const auto section_list = field(*content, "sectionListRenderer")) {\n        return field(*section_list, "contents");\n    }\n    return std::nullopt;\n}\n\n'''
+          diagnostics_code = r'''std::optional<std::string_view> recognized_tab_contents(std::string_view tab_renderer) {
+    const auto content = field(tab_renderer, "content");
+    if (!content) return std::nullopt;
+    if (const auto rich_grid = field(*content, "richGridRenderer")) {
+        return field(*rich_grid, "contents");
+    }
+    if (const auto section_list = field(*content, "sectionListRenderer")) {
+        return field(*section_list, "contents");
+    }
+    return std::nullopt;
+}
+
+bool has_suffix(std::string_view value, std::string_view suffix) {
+    return value.size() >= suffix.size() &&
+           value.substr(value.size() - suffix.size()) == suffix;
+}
+
+bool diagnostic_family_name(std::string_view name) {
+    if (name.empty() || name.size() > kMaxDiagnosticFamilyBytes) return false;
+    if (!(has_suffix(name, "Renderer") || has_suffix(name, "ViewModel") ||
+          has_suffix(name, "View"))) {
+        return false;
+    }
+    for (const unsigned char c : name) {
+        if (!(std::isalnum(c) || c == '_')) return false;
+    }
+    return true;
+}
+
+std::string ascii_lower(std::string_view value) {
+    std::string out;
+    out.reserve(value.size());
+    for (const unsigned char c : value) {
+        out.push_back(static_cast<char>(std::tolower(c)));
+    }
+    return out;
+}
+
+bool reviewed_diagnostic_wrapper(std::string_view name) {
+    for (const auto reviewed : {
+             std::string_view{"richGridRenderer"},
+             std::string_view{"sectionListRenderer"},
+             std::string_view{"richItemRenderer"},
+             std::string_view{"richSectionRenderer"},
+             std::string_view{"richShelfRenderer"},
+             std::string_view{"shelfRenderer"},
+             std::string_view{"itemSectionRenderer"},
+             std::string_view{"itemSectionHeaderRenderer"},
+             std::string_view{"horizontalListRenderer"},
+             std::string_view{"expandedShelfContentsRenderer"}}) {
+        if (name == reviewed) return true;
+    }
+    return false;
+}
+
+bool reviewed_diagnostic_leaf(std::string_view name) {
+    for (const auto reviewed : {
+             std::string_view{"videoRenderer"},
+             std::string_view{"channelRenderer"},
+             std::string_view{"playlistRenderer"},
+             std::string_view{"radioRenderer"},
+             std::string_view{"lockupViewModel"},
+             std::string_view{"continuationItemRenderer"},
+             std::string_view{"continuationItemViewModel"},
+             std::string_view{"continuationItemView"}}) {
+        if (name == reviewed) return true;
+    }
+    return false;
+}
+
+bool diagnostic_structural_key(std::string_view key) {
+    for (const auto structural : {
+             std::string_view{"content"},
+             std::string_view{"contents"},
+             std::string_view{"items"},
+             std::string_view{"header"},
+             std::string_view{"footer"},
+             std::string_view{"continuationItems"}}) {
+        if (key == structural) return true;
+    }
+    return false;
+}
+
+struct DiagnosticFamilyCount {
+    std::string name;
+    std::size_t count{0};
+};
+
+struct HomeDiagnosticsBuilder {
+    bool two_column{false};
+    bool single_column{false};
+    std::size_t tab_count{0};
+    std::size_t selected_tab_count{0};
+    std::size_t shorts_reels{0};
+    std::size_t ads_promoted{0};
+    std::size_t shopping_product{0};
+    std::size_t premium_promo{0};
+    std::size_t continuation_renderers{0};
+    std::size_t opaque_wrappers{0};
+    std::size_t truncated_families{0};
+    std::vector<DiagnosticFamilyCount> families;
+    std::vector<std::string> opaque_family_names;
+
+    bool observe_family(std::string_view name) {
+        if (!diagnostic_family_name(name)) return false;
+        bool found = false;
+        for (auto& family : families) {
+            if (family.name == name) {
+                ++family.count;
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            if (families.size() < kMaxDiagnosticFamilies) {
+                families.push_back({std::string(name), 1});
+            } else {
+                ++truncated_families;
+            }
+        }
+
+        const auto lower = ascii_lower(name);
+        bool blocked = false;
+        if (lower.find("reel") != std::string::npos ||
+            lower.find("short") != std::string::npos) {
+            ++shorts_reels;
+            blocked = true;
+        }
+        if (lower.rfind("ad", 0) == 0 ||
+            lower.find("promoted") != std::string::npos ||
+            lower.find("sponsored") != std::string::npos) {
+            ++ads_promoted;
+            blocked = true;
+        }
+        if (lower.find("shopping") != std::string::npos ||
+            lower.find("product") != std::string::npos ||
+            lower.find("merch") != std::string::npos) {
+            ++shopping_product;
+            blocked = true;
+        }
+        if (lower.find("premium") != std::string::npos ||
+            lower.find("promo") != std::string::npos ||
+            lower.find("upsell") != std::string::npos ||
+            lower.find("mealbar") != std::string::npos) {
+            ++premium_promo;
+            blocked = true;
+        }
+        if (lower.rfind("continuationitem", 0) == 0) {
+            ++continuation_renderers;
+        }
+        return blocked;
+    }
+
+    void note_opaque(std::string_view name) {
+        ++opaque_wrappers;
+        if (!diagnostic_family_name(name)) return;
+        for (const auto& existing : opaque_family_names) {
+            if (existing == name) return;
+        }
+        if (opaque_family_names.size() < kMaxDiagnosticFamilies) {
+            opaque_family_names.emplace_back(name);
+        }
+    }
+
+    std::string summary() const {
+        std::string out;
+        auto append = [&out](std::string_view value) {
+            if (out.size() >= kMaxDiagnosticSummaryBytes) return;
+            const auto room = kMaxDiagnosticSummaryBytes - out.size();
+            out.append(value.substr(0, room));
+        };
+        append("Home diag: twoColumn=");
+        append(two_column ? "1" : "0");
+        append(" singleColumn=");
+        append(single_column ? "1" : "0");
+        append(" tabs=");
+        append(std::to_string(tab_count));
+        append(" selected=");
+        append(std::to_string(selected_tab_count));
+        append(" | families=");
+        if (families.empty()) {
+            append("(none)");
+        } else {
+            for (std::size_t i = 0; i < families.size(); ++i) {
+                if (i) append(",");
+                append(families[i].name);
+                append(":");
+                append(std::to_string(families[i].count));
+            }
+        }
+        if (truncated_families) {
+            append(",+truncated:");
+            append(std::to_string(truncated_families));
+        }
+        append(" | blocked shorts/reels=");
+        append(std::to_string(shorts_reels));
+        append(" ads/promoted=");
+        append(std::to_string(ads_promoted));
+        append(" shopping/product=");
+        append(std::to_string(shopping_product));
+        append(" premium/promo=");
+        append(std::to_string(premium_promo));
+        append(" continuationRenderers=");
+        append(std::to_string(continuation_renderers));
+        append(" opaque=");
+        append(std::to_string(opaque_wrappers));
+        if (!opaque_family_names.empty()) {
+            append(" | opaqueFamilies=");
+            for (std::size_t i = 0; i < opaque_family_names.size(); ++i) {
+                if (i) append(",");
+                append(opaque_family_names[i]);
+            }
+        }
+        return out;
+    }
+};
+
+void scan_home_structure(
+    std::string_view value,
+    HomeDiagnosticsBuilder& diagnostics,
+    unsigned depth = 0) {
+    if (depth > kMaxDiagnosticDepth) return;
+    std::size_t pos = 0;
+    skip_ws(value, pos);
+    if (pos >= value.size()) return;
+
+    if (value[pos] == '[') {
+        const auto items = array_elements(value);
+        if (!items) return;
+        for (const auto item : *items) {
+            scan_home_structure(item, diagnostics, depth + 1);
+        }
+        return;
+    }
+    if (value[pos] != '{') return;
+
+    const auto members = object_members(value);
+    if (!members) return;
+    for (const auto& member : *members) {
+        if (diagnostic_family_name(member.key)) {
+            const bool blocked = diagnostics.observe_family(member.key);
+            if (blocked) {
+                diagnostics.note_opaque(member.key);
+                continue;
+            }
+            if (reviewed_diagnostic_wrapper(member.key)) {
+                scan_home_structure(member.value, diagnostics, depth + 1);
+                continue;
+            }
+            if (reviewed_diagnostic_leaf(member.key)) {
+                continue;
+            }
+            diagnostics.note_opaque(member.key);
+            continue;
+        }
+        if (diagnostic_structural_key(member.key)) {
+            scan_home_structure(member.value, diagnostics, depth + 1);
+        }
+    }
+}
+
+HomeDiagnosticsBuilder build_home_diagnostics(std::string_view response_body) {
+    HomeDiagnosticsBuilder diagnostics;
+    const auto two = path(response_body, {"contents", "twoColumnBrowseResultsRenderer", "tabs"});
+    const auto one = path(response_body, {"contents", "singleColumnBrowseResultsRenderer", "tabs"});
+    diagnostics.two_column = two.has_value();
+    diagnostics.single_column = one.has_value();
+
+    const auto tabs_json = two ? two : one;
+    if (tabs_json) {
+        if (const auto tabs = array_elements(*tabs_json)) {
+            diagnostics.tab_count = tabs->size();
+            std::optional<std::string_view> fallback_content;
+            for (const auto tab : *tabs) {
+                const auto renderer = field(tab, "tabRenderer");
+                if (!renderer) continue;
+                const auto content = field(*renderer, "content");
+                if (content && !fallback_content) fallback_content = *content;
+                if (!tab_selected(*renderer)) continue;
+                ++diagnostics.selected_tab_count;
+                if (content) scan_home_structure(*content, diagnostics);
+            }
+            if (diagnostics.selected_tab_count == 0 && fallback_content) {
+                scan_home_structure(*fallback_content, diagnostics);
+            }
+        }
+    }
+
+    for (const auto response_key : {
+             std::string_view{"onResponseReceivedActions"},
+             std::string_view{"onResponseReceivedCommands"},
+             std::string_view{"onResponseReceivedEndpoints"}}) {
+        const auto updates_json = field(response_body, response_key);
+        if (!updates_json) continue;
+        const auto updates = array_elements(*updates_json);
+        if (!updates) continue;
+        for (const auto update : *updates) {
+            for (const auto action_key : {
+                     std::string_view{"appendContinuationItemsAction"},
+                     std::string_view{"reloadContinuationItemsCommand"}}) {
+                const auto action = field(update, action_key);
+                if (!action) continue;
+                const auto items = field(*action, "continuationItems");
+                if (items) scan_home_structure(*items, diagnostics);
+            }
+        }
+    }
+    return diagnostics;
+}
+
+'''
+          if anchor not in text:
+              raise SystemExit('recognized_tab_contents anchor missing')
+          text = text.replace(anchor, diagnostics_code, 1)
+
+          # Allow fail() to carry an already-sanitized structural summary.
+          text = text.replace(
+              'HomeResponseParseResult fail(std::string error) {\n    HomeResponseParseResult result;\n    result.error = std::move(error);\n    return result;\n}\n',
+              'HomeResponseParseResult fail(std::string error, std::string diagnostics = {}) {\n    HomeResponseParseResult result;\n    result.error = std::move(error);\n    result.diagnostics = std::move(diagnostics);\n    return result;\n}\n',
+              1)
+
+          # Compute diagnostics only after the whole response passed bounded JSON validation.
+          old_parse = '''    if (!validate_document(response_body)) {\n        return fail("Home response is malformed or exceeds scope parser limits.");\n    }\n\n    core::HomePage home;\n'''
+          new_parse = '''    if (!validate_document(response_body)) {\n        return fail("Home response is malformed or exceeds scope parser limits.");\n    }\n\n    const std::string diagnostics = build_home_diagnostics(response_body).summary();\n\n    core::HomePage home;\n'''
+          if old_parse not in text:
+              raise SystemExit('parse diagnostic insertion anchor missing')
+          text = text.replace(old_parse, new_parse, 1)
+
+          # Keep diagnostics on all post-validation failures and successful pages.
+          text = text.replace(
+              '        return fail(error.empty() ? "Home primary scope could not be read safely." : std::move(error));',
+              '        return fail(error.empty() ? "Home primary scope could not be read safely." : std::move(error), diagnostics);',
+              1)
+          text = text.replace(
+              '        return fail(error.empty() ? "Home continuation scope could not be read safely." : std::move(error));',
+              '        return fail(error.empty() ? "Home continuation scope could not be read safely." : std::move(error), diagnostics);',
+              1)
+          text = text.replace(
+              '        return fail("Home response did not contain a recognized Home browse payload.");',
+              '        return fail("Home response did not contain a recognized Home browse payload.", diagnostics);',
+              1)
+          text = text.replace(
+              '    HomeResponseParseResult result;\n    result.page = std::move(home);\n    return result;\n',
+              '    HomeResponseParseResult result;\n    result.page = std::move(home);\n    result.diagnostics = diagnostics;\n    return result;\n',
+              1)
+          p.write_text(text)
+
+          # Propagate parser structural diagnostics through the guest executor.
+          p = Path('src/core/guest_home.cpp')
+          text = p.read_text()
+          old = '''    auto parsed = parse_scoped_home_response(http_result.response.body, policy);\n    if (!parsed || !parsed.page) {\n        return fail(parsed.error.empty()\n            ? std::string{"Guest Home response was rejected."}\n            : net::safe_public_diagnostic(\n                  parsed.error,\n                  "Guest Home response was rejected."));\n    }\n\n    GuestHomeResult result;\n    result.page = std::move(parsed.page);\n    return result;\n'''
+          new = '''    auto parsed = parse_scoped_home_response(http_result.response.body, policy);\n    if (!parsed || !parsed.page) {\n        auto result = fail(parsed.error.empty()\n            ? std::string{"Guest Home response was rejected."}\n            : net::safe_public_diagnostic(\n                  parsed.error,\n                  "Guest Home response was rejected."));\n        result.diagnostics = std::move(parsed.diagnostics);\n        return result;\n    }\n\n    GuestHomeResult result;\n    result.page = std::move(parsed.page);\n    result.diagnostics = std::move(parsed.diagnostics);\n    return result;\n'''
+          if old not in text:
+              raise SystemExit('guest_home propagation anchor missing')
+          p.write_text(text.replace(old, new, 1))
+
+          # Surface the bounded summary only when Home is empty/error, and keep it on UI thread.
+          p = Path('switch/source/main.cpp')
+          text = p.read_text()
+          old = '''    ttnx::core::HomeModel home_model_;\n    std::atomic_bool home_busy_{false};\n'''
+          new = '''    ttnx::core::HomeModel home_model_;\n    std::string home_diagnostics_;\n    std::atomic_bool home_busy_{false};\n'''
+          if old not in text:
+              raise SystemExit('main home member anchor missing')
+          text = text.replace(old, new, 1)
+
+          old = '''            case ttnx::core::HomeViewState::Empty:\n                return "YouTube Home returned no supported normal results.";\n            case ttnx::core::HomeViewState::Error:\n                return home_model_.error().empty()\n                    ? "Home could not be loaded safely."\n                    : home_model_.error();\n'''
+          new = '''            case ttnx::core::HomeViewState::Empty: {\n                std::string text = "YouTube Home returned no supported normal results.";\n                if (!home_diagnostics_.empty()) text += "\\n" + home_diagnostics_;\n                return text;\n            }\n            case ttnx::core::HomeViewState::Error: {\n                std::string text = home_model_.error().empty()\n                    ? "Home could not be loaded safely."\n                    : home_model_.error();\n                if (!home_diagnostics_.empty()) text += "\\n" + home_diagnostics_;\n                return text;\n            }\n'''
+          if old not in text:
+              raise SystemExit('main Home status anchor missing')
+          text = text.replace(old, new, 1)
+
+          old = '''        bool applied = false;\n        if (have_result && result.page) {\n            applied = home_model_.apply_page(generation, std::move(*result.page));\n'''
+          new = '''        if (have_result) {\n            home_diagnostics_ = std::move(result.diagnostics);\n        } else {\n            home_diagnostics_.clear();\n        }\n\n        bool applied = false;\n        if (have_result && result.page) {\n            applied = home_model_.apply_page(generation, std::move(*result.page));\n'''
+          if old not in text:
+              raise SystemExit('main Home pump anchor missing')
+          text = text.replace(old, new, 1)
+
+          old = '''        const auto generation = home_model_.begin_load();\n        home_busy_.store(true);\n'''
+          new = '''        const auto generation = home_model_.begin_load();\n        home_diagnostics_.clear();\n        home_busy_.store(true);\n'''
+          if old not in text:
+              raise SystemExit('main Home start anchor missing')
+          text = text.replace(old, new, 1)
+          p.write_text(text)
+
+          # Strengthen scoped Home diagnostics/privacy tests.
+          p = Path('tests/home_response_tests.cpp')
+          text = p.read_text()
+          anchor = '''    const auto parsed = parse_scoped_home_response(home_fixture());\n    expect(parsed.page.has_value(), "recognized selected Home tab parses");\n'''
+          replacement = '''    const auto parsed = parse_scoped_home_response(home_fixture());\n    expect(parsed.page.has_value(), "recognized selected Home tab parses");\n    expect(parsed.diagnostics.find("twoColumn=1") != std::string::npos,\n           "Home diagnostics identify two-column browse layout");\n    expect(parsed.diagnostics.find("tabs=2") != std::string::npos,\n           "Home diagnostics count browse tabs");\n    expect(parsed.diagnostics.find("selected=1") != std::string::npos,\n           "Home diagnostics count selected tabs");\n    expect(parsed.diagnostics.find("richGridRenderer:") != std::string::npos,\n           "Home diagnostics report richGridRenderer structurally");\n    expect(parsed.diagnostics.find("richItemRenderer:") != std::string::npos,\n           "Home diagnostics report richItemRenderer structurally");\n    expect(parsed.diagnostics.find("reelShelfRenderer:") != std::string::npos,\n           "Home diagnostics report blocked reel structural family");\n    expect(parsed.diagnostics.find("adSlotRenderer:") != std::string::npos,\n           "Home diagnostics report blocked ad structural family");\n    expect(parsed.diagnostics.find("productRenderer:") != std::string::npos,\n           "Home diagnostics report blocked shopping structural family");\n    expect(parsed.diagnostics.find("totallyUnknownRenderer") != std::string::npos,\n           "Home diagnostics report bounded opaque family names");\n    expect(parsed.diagnostics.find("home-video") == std::string::npos,\n           "Home diagnostics never expose video IDs");\n    expect(parsed.diagnostics.find("Normal Home Video") == std::string::npos,\n           "Home diagnostics never expose video titles");\n    expect(parsed.diagnostics.find("HOME-NEXT") == std::string::npos,\n           "Home diagnostics never expose continuation tokens");\n    expect(parsed.diagnostics.find("i.ytimg.com") == std::string::npos,\n           "Home diagnostics never expose thumbnail URLs");\n'''
+          if anchor not in text:
+              raise SystemExit('home_response test insertion anchor missing')
+          text = text.replace(anchor, replacement, 1)
+
+          anchor2 = '''    const auto unsupported = parse_scoped_home_response(R"JSON({\n      "topbar": {"videoRenderer": {"videoId": "x", "title": {"simpleText": "x"}}}\n    })JSON");\n'''
+          extra = r'''    const auto opaque_selected = parse_scoped_home_response(R"JSON({
+      "contents": {"twoColumnBrowseResultsRenderer": {"tabs": [
+        {"tabRenderer": {"selected": true, "content": {"richGridRenderer": {"contents": [
+          {"mysteryHomeRenderer": {"contents": [
+            {"videoRenderer": {"videoId": "PRIVATE-OPAQUE-ID", "title": {"simpleText": "Private Opaque Title"}}}
+          ]}}
+        ]}}}}
+      ]}}
+    })JSON");
+    expect(opaque_selected.page.has_value(), "opaque selected Home wrapper yields an empty normalized page, not unsafe recursion");
+    if (opaque_selected.page) {
+        expect(opaque_selected.page->results.empty(), "opaque Home wrapper contributes zero results");
+    }
+    expect(opaque_selected.diagnostics.find("mysteryHomeRenderer") != std::string::npos,
+           "opaque Home family name is structurally reported");
+    expect(opaque_selected.diagnostics.find("PRIVATE-OPAQUE-ID") == std::string::npos,
+           "opaque Home diagnostics do not expose nested IDs");
+    expect(opaque_selected.diagnostics.find("Private Opaque Title") == std::string::npos,
+           "opaque Home diagnostics do not expose nested titles");
+    expect(opaque_selected.diagnostics.find("videoRenderer") == std::string::npos,
+           "diagnostic scanner does not descend through an unreviewed wrapper");
+
+    const auto single_column = parse_scoped_home_response(R"JSON({
+      "contents": {"singleColumnBrowseResultsRenderer": {"tabs": [
+        {"tabRenderer": {"selected": true, "content": {"sectionListRenderer": {"contents": []}}}}
+      ]}}
+    })JSON");
+    expect(single_column.page.has_value(), "single-column empty Home scope is recognized");
+    expect(single_column.diagnostics.find("singleColumn=1") != std::string::npos,
+           "Home diagnostics identify single-column browse layout");
+
+    const auto unsupported = parse_scoped_home_response(R"JSON({
+      "topbar": {"videoRenderer": {"videoId": "x", "title": {"simpleText": "x"}}}
+    })JSON");
+'''
+          if anchor2 not in text:
+              raise SystemExit('home_response opaque test anchor missing')
+          p.write_text(text.replace(anchor2, extra, 1))
+
+          # Guest executor must propagate only the structural summary.
+          p = Path('tests/guest_home_tests.cpp')
+          text = p.read_text()
+          anchor = '''    expect(result.page.has_value(), "guest Home first page succeeds through fake transport");\n    expect(http.calls == 1, "guest Home performs exactly one HTTP request");\n'''
+          replacement = '''    expect(result.page.has_value(), "guest Home first page succeeds through fake transport");\n    expect(!result.diagnostics.empty(), "guest Home propagates structural diagnostics");\n    expect(result.diagnostics.find("richGridRenderer:") != std::string::npos,\n           "guest Home diagnostics retain renderer-family structure");\n    expect(result.diagnostics.find("safe-home-video") == std::string::npos,\n           "guest Home diagnostics never expose video IDs");\n    expect(result.diagnostics.find("visitor-home-test") == std::string::npos,\n           "guest Home diagnostics never expose visitor data");\n    expect(http.calls == 1, "guest Home performs exactly one HTTP request");\n'''
+          if anchor not in text:
+              raise SystemExit('guest_home test anchor missing')
+          p.write_text(text.replace(anchor, replacement, 1))
+
+          # Record the physical failure and the narrow diagnostic gate.
+          p = Path('docs/HARDWARE_GATES.md')
+          text = p.read_text()
+          note = '''\n### Guest Home first page — zero-result diagnostic gate\n\nHardware-tested NRO head: `ba0066b34270bfa1809dc5d3567aead86a298033`\n\nPhysical Switch result: **REJECTED**. Guest bootstrap, sockets, SSL and verified HTTPS all succeeded, and the explicit `Load Home` action completed, but the UI reported `YouTube Home returned no supported normal results.` No Home rows were rendered. This is therefore treated as a Home response-shape/parser-scope problem, not a guest-network failure.\n\nThe next candidate adds bounded structural diagnostics only: browse layout, tab/selected-tab counts, reviewed renderer/container family names and counts, blocked-category counts, continuation-renderer counts, opaque-wrapper counts, and at most 16 bounded opaque family names. It never exposes titles, IDs, URLs, continuation tokens, visitor data, API keys, cookies, request headers or raw response bodies. Unknown wrappers remain opaque to normalization, and the diagnostic scanner also stops at them instead of inspecting descendants.\n\nThe exact M2 network allowlist remains `www.youtube.com:443`. Search checkpoint `428497c90be6e768c607e45c68171827d74f0faf` remains a protected accepted baseline. Home continuation, thumbnails, playback and OAuth remain disabled for this diagnostic gate.\n'''
+          if '### Guest Home first page — zero-result diagnostic gate' not in text:
+              text += note
+          p.write_text(text)
+
+          p = Path('docs/HOME_GUEST_BROWSING.md')
+          text = p.read_text()
+          note = '''\n## Physical zero-result diagnostic follow-up\n\nThe first physical Home candidate at `ba0066b34270bfa1809dc5d3567aead86a298033` reached `Guest ready` and completed `Load Home`, but normalized zero supported results. The diagnostic follow-up does **not** loosen the renderer firewall or introduce generic result recursion. It reports only bounded structural renderer/container-family information from the selected Home scope and stops at blocked or unknown families. This is intended to identify the real modern Home wrapper returned on hardware before any new family is admitted to normalization.\n'''
+          if '## Physical zero-result diagnostic follow-up' not in text:
+              text += note
+          p.write_text(text)
+
+          for doc, heading, body in [
+              ('docs/PROJECT_STATUS.md', '## Home first-page hardware diagnostic gate', 'The first Home NRO at `ba0066b34270bfa1809dc5d3567aead86a298033` is physically rejected only for zero normalized Home results; guest networking succeeded. A privacy-safe structural diagnostic candidate is the active M2 task. Search through `428497c90be6e768c607e45c68171827d74f0faf` remains hardware accepted and protected.'),
+              ('docs/ROADMAP.md', '## Active Home diagnostic gate', 'Before Home continuation, channel pages or playlist pages, identify the real guest Home renderer/container family returned on Switch using bounded structural diagnostics. Do not widen `www.youtube.com:443`, fetch thumbnails, add OAuth, or loosen the Shorts/ad/shopping firewall for this gate.'),
+          ]:
+              p = Path(doc)
+              text = p.read_text()
+              if heading not in text:
+                  text += f'\n\n{heading}\n\n{body}\n'
+              p.write_text(text)
+          PY
+      - name: Host configure build and tests
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel
+          ctest --test-dir build --output-on-failure
+      - name: Commit implementation
+        shell: bash
+        run: |
+          rm .github/workflows/apply-home-diagnostics.yml
+          git config user.name GlitchedZeus
+          git config user.email user91746@protonmail.com
+          git add -A
+          git commit -m "home: add privacy-safe response diagnostics"
+          git push origin HEAD:feature/m2-guest-browsing
