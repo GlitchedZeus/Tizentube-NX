@@ -97,9 +97,15 @@
 - [x] Retryable continuation/network failure state
 - [x] Stable selection identity + stale-generation rejection
 - [x] Pure duration/live/upcoming/view/upload-age/count display helpers
-- [ ] Enable live Search POST in Switch UI
-- [ ] Render normalized Search results as Borealis cards
-- [ ] Live continuation paging on Switch
+- [x] Enable explicit live Search POST in Switch UI
+- [x] Reuse the memory-only accepted guest session for Search
+- [x] Keep live Search networking off the Borealis/UI thread
+- [x] Reject stale async completions by SearchModel generation
+- [x] Render normalized Video / Channel / Playlist results as text-only Borealis entries
+- [x] Controller-focusable result selection seam with clean canonical URL/ID detail
+- [x] Explicit Load more continuation flow on Switch
+- [x] Continuation retry retains existing first-page results
+- [x] Keep remote thumbnail fetching disabled pending separate host review
 - [ ] Real-hardware live Search acceptance
 
 ### Future feature seams — not active in M2
@@ -190,4 +196,4 @@ See `docs/PROFILES_AND_IMPORT.md` for the full post-v1 migration design.
 
 ## Current gate
 
-**Real-Switch guest bootstrap is accepted (`Guest ready`). The next gate is live Search activation and physical-Switch Search acceptance while preserving the exact `www.youtube.com:443` allowlist and the hard Shorts/ad firewall.**
+**Real-Switch guest bootstrap is accepted (`Guest ready`). Live Search, text-only normalized results, result selection and explicit continuation are now implemented and CI-built. The remaining gate is physical-Switch live Search acceptance while preserving the exact `www.youtube.com:443` allowlist and hard Shorts/ad firewall.**
