@@ -15,3 +15,6 @@ The pinned renderer omits `<optional>`; the Switch C++ build explicitly preinclu
 that standard header. CI pins the observed devkitA64 image digest. The shell
 supplies its own footer, frame counter and tap handling because those features
 are incomplete in this Borealis revision.
+
+The unused legacy Borealis keyboard wrapper is excluded from compilation because
+it calls the removed `swkbdConfigSetStringLenMaxExt` API. Search uses libnx directly.
