@@ -1,0 +1,214 @@
+name: apply-inline-result-fix
+
+on:
+  push:
+    branches:
+      - feature/m2-guest-browsing
+    paths:
+      - .github/workflows/apply-inline-result-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/m2-guest-browsing
+          fetch-depth: 0
+
+      - name: Apply asserted inline Search result fix
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path('switch/source/main.cpp')
+          s = p.read_text()
+
+          # The dedicated result Activity is hardware-rejected: on the real Switch
+          # its content is black during the pushed state and only flashes while
+          # popping. Remove the Activity entirely and keep selection inside the
+          # already hardware-stable Search page.
+          s, n = re.subn(
+              r'class SearchResultActivity : public brls::Activity \{.*?\n\};\n\nclass ShellActivity',
+              'class ShellActivity',
+              s,
+              count=1,
+              flags=re.S,
+          )
+          assert n == 1, 'SearchResultActivity block did not match exactly once'
+
+          old = '''    void tick() {
+              pump_network_result();
+              pump_search_result();
+              update_frame_rate();
+          }
+          '''
+          new = '''    void tick() {
+              pump_network_result();
+              pump_search_result();
+              if (search_selection_rebuild_pending_) {
+                  // The A-button callback has returned by the time tick() runs.
+                  // Rebuilding here avoids deleting the focused result button
+                  // while its own click callback is still executing.
+                  search_selection_rebuild_pending_ = false;
+                  rebuild_search_results();
+              }
+              update_frame_rate();
+          }
+          '''
+          assert old in s
+          s = s.replace(old, new, 1)
+
+          old = '''    brls::Button* search_action_button_{nullptr};
+              brls::Box* search_results_box_{nullptr};
+          '''
+          new = '''    brls::Button* search_action_button_{nullptr};
+              brls::Box* search_results_box_{nullptr};
+              bool search_selection_rebuild_pending_{false};
+          '''
+          assert old in s
+          s = s.replace(old, new, 1)
+
+          old = '''        for (const auto& result : search_model_.results()) {
+                      const auto identity = ttnx::core::browse_result_identity(result);
+          '''
+          new = '''        const auto selected_identity = search_model_.selected_identity();
+                  brls::Button* selected_button = nullptr;
+
+                  for (const auto& result : search_model_.results()) {
+                      const auto identity = ttnx::core::browse_result_identity(result);
+          '''
+          assert old in s
+          s = s.replace(old, new, 1)
+
+          old = '''            select->registerClickAction([this, identity](brls::View*) {
+                          if (!search_model_.select(identity)) return true;
+                          if (const auto* selected = selected_search_result()) {
+                              brls::Application::pushActivity(new SearchResultActivity(*selected));
+                          }
+                          return true;
+                      });
+
+                      const auto metadata = ttnx::core::search_result_metadata_display(result);
+          '''
+          new = '''            const bool is_selected = identity == selected_identity;
+                      if (is_selected) selected_button = select;
+                      select->registerClickAction([this, identity](brls::View*) {
+                          if (!search_model_.select(identity)) return true;
+                          // Defer the destructive list rebuild until the next
+                          // ShellActivity::tick(), after this callback has returned.
+                          search_selection_rebuild_pending_ = true;
+                          return true;
+                      });
+
+                      if (is_selected) {
+                          auto* detail_label = label(
+                              search_results_box_,
+                              ttnx::core::search_result_selection_display(result),
+                              18);
+                          detail_label->setMarginBottom(14);
+                      }
+
+                      const auto metadata = ttnx::core::search_result_metadata_display(result);
+          '''
+          assert old in s
+          s = s.replace(old, new, 1)
+
+          old = '''                metadata_label->setMarginBottom(14);
+                      }
+                  }
+              }
+          '''
+          new = '''                metadata_label->setMarginBottom(14);
+                      }
+                  }
+
+                  // Re-acquire controller focus on the same normalized result after
+                  // rebuilding the list. Borealis can then keep that card in the
+                  // scrolling viewport with the detail block immediately below it.
+                  if (selected_button) brls::Application::giveFocus(selected_button);
+              }
+          '''
+          assert old in s
+          s = s.replace(old, new, 1)
+
+          old = '''            label(content,
+                            "Press A on any result to open its normalized ID and clean canonical URL.",
+                            18);
+          '''
+          new = '''            label(content,
+                            "Press A on any result to show its normalized ID and clean canonical URL directly below that result.",
+                            18);
+          '''
+          assert old in s
+          s = s.replace(old, new, 1)
+
+          assert 'SearchResultActivity' not in s
+          assert 'pushActivity(new SearchResultActivity' not in s
+          p.write_text(s)
+
+          p = Path('docs/PROJECT_STATUS.md')
+          s = p.read_text()
+          old = '''The follow-up UI opens a dedicated Borealis result-detail activity when A is pressed. It displays normalized title/type/ID and, when the stable ID is valid, a locally generated canonical clean URL immediately, with B returning to Search:
+
+          - Video: `https://www.youtube.com/watch?v=VIDEO_ID`
+          - Channel: canonical stable `/channel/CHANNEL_ID` URL
+          - Playlist: canonical `playlist?list=PLAYLIST_ID` URL
+
+          The detail activity consumes only the already-normalized in-memory result and performs no additional network request. No source tracking parameters are preserved.
+          '''
+          new = '''The first follow-up attempted a dedicated Borealis result-detail activity at clean checkpoint `5e566c0a4a8c2b5c040686bcc95a305c675cc4ce`. Physical hardware rejected that presentation: pressing A produced a black blank pushed activity, while the correct normalized detail content became visible only for a fraction of a second during the B/pop transition. The underlying result data remained correct; this was a presentation/navigation failure.
+
+          The replacement keeps result details inside the already-stable Search `ScrollingFrame`. Pressing A selects the normalized result, returns from the button callback, and schedules a one-frame-deferred list rebuild. On the next UI tick, the selected result's normalized type/title/ID and locally generated clean canonical URL are inserted directly below that result, and controller focus is restored to the same card:
+
+          - Video: `https://www.youtube.com/watch?v=VIDEO_ID`
+          - Channel: canonical stable `/channel/CHANNEL_ID` URL
+          - Playlist: canonical `playlist?list=PLAYLIST_ID` URL
+
+          The one-frame defer is deliberate: it avoids removing/deleting the focused Borealis button while that button's own A callback is executing. The inline detail uses only the already-normalized in-memory result and performs no additional network request. No source tracking parameters are preserved.
+          '''
+          assert old in s
+          s = s.replace(old, new, 1)
+
+          old = '''The hardware test also found one presentation-only defect: the selection detail label was positioned after the whole first-page result list, making it difficult to see for non-bottom results. The next UI checkpoint replaces that list-bottom label with a dedicated result-detail activity opened by A and closed with B. This does not alter the accepted Search POST/parser/session/network path.
+          '''
+          new = '''The hardware test also found one presentation-only defect: the selection detail label was positioned after the whole first-page result list, making it difficult to see for non-bottom results. A dedicated result-detail activity was then tested at `5e566c0a4a8c2b5c040686bcc95a305c675cc4ce` and failed its physical UI gate: the pushed activity stayed black until B was pressed, when the correct detail screen flashed briefly during the pop transition. That checkpoint is **NOT accepted** as a result-detail UI.
+
+          The next UI-only checkpoint therefore removes the separate Activity path and expands the selected normalized result inline within the existing hardware-stable Search page. This does not alter the accepted Search POST/parser/session/network path.
+          '''
+          assert old in s
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+
+          p = Path('docs/ROADMAP.md')
+          s = p.read_text()
+          old = '''- [x] Replace the list-bottom selection detail with a dedicated A-open/B-back result-detail activity
+          - [ ] Real-hardware result-detail activity acceptance
+          - [ ] Re-enable continuation / `Load more` as a separate hardware-gated slice
+          '''
+          new = '''- [x] Attempt dedicated A-open/B-back result-detail activity
+          - [x] Hardware-reject the dedicated result-detail activity after black-screen/popup-transition failure
+          - [x] Replace it with a one-frame-deferred inline selected-result detail block on the stable Search page
+          - [ ] Real-hardware inline result-detail acceptance
+          - [ ] Re-enable continuation / `Load more` as a separate hardware-gated slice
+          '''
+          assert old in s
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+
+          git diff --check
+          git status --short
+
+          git config user.name "GlitchedZeus"
+          git config user.email "user91746@protonmail.com"
+          rm .github/workflows/apply-inline-result-fix.yml
+          git add -A
+          git diff --cached --check
+          git commit -m "search: show selected result details inline"
+          git push origin HEAD:feature/m2-guest-browsing
