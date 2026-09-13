@@ -35,6 +35,10 @@ std::string search_error_message(SearchErrorCode code) {
             return "No results found.";
         case SearchErrorCode::ContinuationFailure:
             return "More results could not be loaded. You can try again.";
+        case SearchErrorCode::MemoryPressure:
+            return "Search failed safely because there was not enough available memory. Please try again.";
+        case SearchErrorCode::InternalFailure:
+            return "Search failed safely because of an internal error. Please try again.";
     }
     return "Search could not be completed.";
 }
