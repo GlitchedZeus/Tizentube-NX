@@ -136,16 +136,35 @@ A mature Switch Borealis fork used by StreamFin independently moved this logic t
 
 The unexpected exit is not yet attributed to a specific allocator, renderer, network or focus failure without a crash log. The bounded live view tree is therefore a defensive stability measure, not a claim that memory pressure was definitively the crash cause.
 
-## Current physical gate — Search continuation focus polish
+### Pagination scrolling/stability foundation — hardware accepted
 
-The next candidate must preserve the already-proven continuation request/data path while fixing only the Borealis focus/scroll behavior:
+Hardware-tested NRO head: `57eac3c19fd19faa24a41d92dd60aa948b832d6b`
 
-- `Load more` must fetch and append additional normalized results without losing the visible selector;
-- after append, focus must remain on a visible stable control or be moved deliberately to the first newly-added result;
-- Up from `Load more` must go to the last result immediately above it, not the first Search result;
-- Down from the last result must reach `Load more` naturally;
-- pressing A twice on the same Search result must toggle inline detail open then closed without deleting/recreating the row;
-- B/sidebar traversal, first-page Search, accumulated result state and all previously accepted lifecycle behavior must remain unchanged;
+Physical Switch result: **SCROLL/STABILITY FIX ACCEPTED; FINAL POST-LOAD FOCUS UX STILL PENDING**.
+
+Observed on hardware:
+
+- repeated `Load more` remained stable through **156 loaded results**;
+- the previous disappearing/off-screen selector problem did not recur;
+- the earlier roughly 60–80-result unexpected exit did not recur during this stress run;
+- selecting visible loaded results still opens/toggles their inline normalized detail correctly;
+- the bounded 40-row hardware view remained usable while `SearchModel` retained the larger accumulated result set.
+
+This hardware result strongly validates the local absolute-pixel `ScrollingFrame` backport and bounded live-view tree as the fix for the prior dynamic-content scroll divergence/stability problem. It does **not** yet accept the overall continuation UX.
+
+One polish issue remains: after `Load more` succeeds, focus intentionally remains on the `Load more` button while the newly appended results appear immediately above it. The user therefore has to press/scroll Up to discover the new page. The next candidate should preserve the now-stable pixel scroll state but defer focus by stable result identity to the **first newly-added visible result** after layout.
+
+## Current physical gate — Search continuation post-load focus handoff
+
+The dynamic-scroll and repeated-pagination stability problem is now hardware accepted at `57eac3c19fd19faa24a41d92dd60aa948b832d6b`. The remaining continuation gate is narrower:
+
+- pressing `Load more` must still fetch and append normally;
+- once the new page is laid out, the visible selector should move automatically to the **first newly-added visible result**, rather than remaining on `Load more`;
+- the viewport must follow that focus transfer without disappearing, jumping to result 1, or losing the selector;
+- Up from that first new result should move naturally to the previous/older result when one is rendered;
+- Down should continue through the newly-added page, and the last result must still reach `Load more`;
+- repeated pagination should remain stable past the previously verified 156-result stress point;
+- A-twice inline-detail toggle, B/sidebar traversal, first-page Search, accumulated model state and all accepted lifecycle behavior must remain unchanged;
 - no network/parser/security policy changes are part of this gate.
 
 ## Invariants for every gate

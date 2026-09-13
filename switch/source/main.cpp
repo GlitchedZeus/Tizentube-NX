@@ -181,6 +181,7 @@ private:
     brls::Box* search_results_box_{nullptr};
     brls::ScrollingFrame* search_scroll_{nullptr};
     bool search_scroll_reflow_pending_{false};
+    std::string search_post_load_focus_identity_;
 
     struct SearchDetailRow {
         std::string identity;
@@ -190,6 +191,26 @@ private:
     std::vector<SearchDetailRow> search_detail_rows_;
 
     void apply_pending_search_scroll_reflow() {
+        // Continuation completion mutates the detached Search tree after the
+        // current frame has already been laid out. Defer the focus handoff until
+        // the next post-layout tick, then focus the first newly-rendered result.
+        // The local pixel-offset ScrollingFrame backport now makes this safe: a
+        // programmatic focus change can re-center against stable pixel state.
+        if (!search_post_load_focus_identity_.empty()) {
+            const std::string identity = std::move(search_post_load_focus_identity_);
+            search_post_load_focus_identity_.clear();
+            for (const auto& row : search_detail_rows_) {
+                if (row.identity == identity && row.button) {
+                    brls::Application::giveFocus(row.button);
+                    // Re-run one more centering pass on the following frame.
+                    // This keeps the focus highlight and viewport aligned even
+                    // if Borealis starts an animated focus scroll here.
+                    if (search_scroll_) search_scroll_reflow_pending_ = true;
+                    return;
+                }
+            }
+        }
+
         if (!search_scroll_reflow_pending_) return;
         search_scroll_reflow_pending_ = false;
         if (!search_scroll_ || !search_results_box_) return;
@@ -729,6 +750,24 @@ private:
             const std::size_t added = new_total >= previous_result_count
                 ? new_total - previous_result_count
                 : 0;
+
+            // Choose the first newly-added result that will actually exist in
+            // the bounded hardware view. With normal YouTube page sizes this is
+            // exactly results[previous_result_count]. The max() also stays safe
+            // if a future response adds more than the 40-row render window.
+            std::string first_new_visible_identity;
+            if (added > 0) {
+                const std::size_t rendered_start = new_total > kMaxRenderedSearchResults
+                    ? new_total - kMaxRenderedSearchResults
+                    : 0;
+                const std::size_t focus_index =
+                    std::max(previous_result_count, rendered_start);
+                if (focus_index < new_total) {
+                    first_new_visible_identity = ttnx::core::browse_result_identity(
+                        search_model_.results()[focus_index]);
+                }
+            }
+
             if (search_detail_rows_.size() + added > kMaxRenderedSearchResults) {
                 rebuild_search_results();
             } else {
@@ -737,10 +776,18 @@ private:
             refresh_search_inline_details();
             refresh_search_page(false, search_model_.end_of_results());
 
-            // The focused control can move when the detached Search content is
-            // relaid out. Re-run ScrollingFrame centering after one rendered
-            // frame so it sees the new Yoga coordinates.
-            if (search_scroll_) search_scroll_reflow_pending_ = true;
+            // Real-hardware testing at 57eac3c proved the pixel-offset
+            // ScrollingFrame fix keeps pagination stable through 156 loaded
+            // results, but leaving focus on Load more forces the user to scroll
+            // upward manually to discover what was appended. Hand focus to the
+            // first newly-rendered result on the next post-layout tick instead.
+            if (!first_new_visible_identity.empty()) {
+                search_post_load_focus_identity_ =
+                    std::move(first_new_visible_identity);
+                search_scroll_reflow_pending_ = false;
+            } else if (search_scroll_) {
+                search_scroll_reflow_pending_ = true;
+            }
         } else {
             refresh_search_page(true);
         }
@@ -936,6 +983,7 @@ private:
         search_results_box_ = nullptr;
         search_scroll_ = nullptr;
         search_scroll_reflow_pending_ = false;
+        search_post_load_focus_identity_.clear();
         search_detail_rows_.clear();
         auto* scroll = new brls::ScrollingFrame();
         auto* content = new brls::Box(brls::Axis::COLUMN);
