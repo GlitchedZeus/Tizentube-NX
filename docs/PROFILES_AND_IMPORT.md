@@ -1,4 +1,4 @@
-# TizenTube NX profiles and post-v1 YouTube import
+# TizenTube NX profiles and post-v1 YouTube linking/import
 
 ## Product decision
 
@@ -6,7 +6,7 @@ TizenTube NX does not need a Google/YouTube account to provide an account-like e
 
 For v1, profiles are **local-first TizenTube profiles** created directly on the Switch. A user can create a profile, choose a display name and avatar, and then build their own TizenTube library without Google authentication.
 
-This is the primary account model for v1.
+This remains the primary account model for v1.
 
 ## V1 — local TizenTube profiles
 
@@ -23,7 +23,7 @@ A local TizenTube profile should be able to own, at minimum:
 - per-profile playback, audio, caption, privacy and UI preferences;
 - future local recommendation signals derived from that profile's activity.
 
-Actions such as Follow/Subscribe, Like, Watch Later and playlist edits modify the local TizenTube profile only. They do not write back to a Google/YouTube account.
+Actions such as Follow/Subscribe, Like, Watch Later and playlist edits modify the local TizenTube profile only unless a future write-back feature is separately designed and explicitly approved.
 
 Multiple local TizenTube profiles may be supported. A later UX may optionally associate a TizenTube profile with a Nintendo Switch user, but the TizenTube data model must remain independent of Nintendo and Google accounts.
 
@@ -31,7 +31,7 @@ Multiple local TizenTube profiles may be supported. A later UX may optionally as
 
 Google authentication is not part of the v1 profile architecture.
 
-TizenTube NX must never request, accept, transmit, persist or log:
+For v1, TizenTube NX must never request, accept, transmit, persist or log:
 
 - Google passwords;
 - Google OAuth access or refresh tokens;
@@ -40,72 +40,101 @@ TizenTube NX must never request, accept, transmit, persist or log:
 - exported cookie files;
 - equivalent Google account/session credentials.
 
-The project should prefer an architecture in which these secrets never enter the TizenTube NX system at all.
+This keeps v1 local-first and reduces both account-takeover risk and maintenance caused by Google authentication changes.
 
-This reduces both account-takeover risk and long-term maintenance caused by Google authentication changes.
+## Post-v1 — optional real YouTube account linking
 
-## Post-v1 — YouTube to TizenTube migration
+After v1, TizenTube NX may optionally link a real YouTube account using Google's official limited-input / device-code OAuth flow.
 
-After v1, add an **optional import/migration feature** that can copy safely accessible YouTube data into an existing local TizenTube profile.
+The preferred UX is console-style:
 
-This is data migration, not Google sign-in.
+1. User chooses `Link YouTube` from an existing local TizenTube profile.
+2. The Switch displays a QR code and a human-readable device code / verification instruction.
+3. The user scans the QR or enters the code on a phone.
+4. The phone opens Google's real sign-in and authorization UI.
+5. Passwords, passkeys, 2FA and account challenges are handled by Google, not TizenTube NX.
+6. The user grants the minimum YouTube permission required.
+7. TizenTube NX receives OAuth authorization material but never the Google password or browser session cookies.
+8. Approved YouTube library data may be imported/synced into the existing local TizenTube profile.
 
-The preferred UX is:
+The Switch must never show a fake Google login form or ask the user to type a Google password into TizenTube NX.
 
-1. User chooses `Import from YouTube` on the Switch.
-2. The Switch displays a QR code that can be scanned by a phone.
-3. A short human-readable pairing code is also shown as a fallback.
-4. The phone opens a temporary TizenTube import page/session.
-5. The user supplies public YouTube channel/profile information and any public or unlisted playlist links they intentionally want to migrate.
-6. The phone sends an import manifest to the paired Switch session.
-7. The Switch shows an import preview and requires explicit confirmation.
-8. Imported data is converted into local TizenTube profile data.
-9. The temporary pairing/import session expires and is deleted.
+See `docs/OAUTH_ACCOUNT_LINKING.md` for the security and token-lifecycle contract.
 
-The QR/pairing code must identify only an ephemeral import session. It must not contain Google credentials.
+## Linked-account direction
 
-## Importable data
+The initial linked-account feature should prefer one-way, read-only synchronization:
 
-Where YouTube exposes the information publicly, or where the user explicitly supplies an unlisted playlist URL, the post-v1 importer may migrate things such as:
+`YouTube account -> TizenTube profile`
 
-- public channel name/avatar metadata;
-- public subscriptions/follows when exposed by the YouTube profile;
-- public playlists;
-- user-supplied unlisted playlists;
-- playlist membership/order where available;
-- public uploads/channel videos;
-- canonical video/channel/playlist identifiers.
+This may import or refresh approved library data such as subscriptions, playlists, liked/favorite library data where supported, and account/channel metadata required for import.
 
-The importer should merge into the local profile without creating duplicates.
+Do not request write-capable Google/YouTube scopes merely for convenience. Any future YouTube write-back feature requires its own security review and explicit user consent.
 
-A later re-import may update an existing TizenTube profile while preserving local-only follows, playlists, favorites and history.
+## Persistent authorization
 
-## Important limitation
+Post-v1, users may be offered two modes:
 
-Private YouTube account data cannot be discovered from a public channel without authentication.
+### Keep me connected
 
-For example, YouTube's built-in private Liked Videos data is not something TizenTube NX should attempt to obtain by bypassing the no-auth security boundary.
+- retain only the long-lived OAuth authorization needed to refresh short-lived access;
+- store it as a sensitive secret using the strongest practical Switch-homebrew storage model;
+- never store it as obvious plaintext on the SD card;
+- never log/export/back up the token accidentally;
+- silently refresh short-lived access tokens when possible.
 
-If a user wants to migrate otherwise-private selections without account authentication, a supported future workflow may allow them to create a normal public/unlisted migration playlist and provide that playlist to the importer.
+### Do not remember authorization
 
-## Pairing/import security goals
+- do not retain long-lived Google authorization;
+- require the phone/device flow again for a future sync.
 
-The future phone-to-Switch import path must be designed defensively:
+If authorization expires, is revoked or becomes invalid, the local TizenTube profile must continue working and should show `Reconnect YouTube` rather than losing local data.
 
-- random, high-entropy one-time pairing sessions;
-- QR primary UX plus short-code fallback;
-- short expiration time;
-- one-use completion semantics;
-- rate-limited code attempts;
-- explicit Switch-side confirmation before data is committed;
-- no ability for a pairing session to control arbitrary Switch functions;
-- no Google passwords, tokens or authenticated cookies;
-- no analytics/advertising SDK requirement for the pairing page;
-- no sensitive import payloads in logs;
-- unlisted playlist URLs treated as secrets and redacted from diagnostics;
-- temporary relay data deleted on completion or expiry.
+## Local-first merge model
 
-Prefer end-to-end encryption for the import payload: the Switch generates the encryption secret, the phone encrypts locally, a relay stores only ciphertext, and the Switch decrypts locally. The relay should not need the plaintext import contents.
+Linking YouTube augments a TizenTube profile; it does not replace it.
+
+Imported/synced data should merge without duplicate stable IDs and preserve local-only data.
+
+Losing or revoking Google authorization must never delete:
+
+- local follows;
+- local playlists;
+- Watch Later;
+- favorites/likes;
+- watch history;
+- resume positions;
+- settings.
+
+`Unlink YouTube` and `Delete TizenTube profile` must remain separate actions.
+
+## No-auth/public import fallback
+
+A later migration feature may also support importing public YouTube profile/channel data and user-supplied public/unlisted playlist links without account authentication.
+
+That path can remain useful for users who do not want OAuth linking.
+
+Unlisted playlist URLs must be treated as secrets and redacted from diagnostics.
+
+## Security goals
+
+Whether using OAuth linking or a public-data import helper:
+
+- never collect a Google password;
+- never collect passkeys/2FA recovery codes;
+- never import browser cookies;
+- never accept exported cookie files;
+- use least-privilege scopes;
+- prefer read-only YouTube permissions;
+- redact tokens and authorization headers everywhere;
+- keep short-lived access tokens in memory where practical;
+- protect any retained refresh token as a high-value secret;
+- provide obvious unlink/reconnect behavior;
+- preserve local profile data when authorization fails;
+- apply the project outbound network policy before every new auth/API destination is resolved;
+- do not add auth endpoints to the live allowlist until a dedicated implementation/security milestone reviews them.
+
+A modded Switch should be treated as a trusted-user environment, not as a guarantee that every homebrew/sysmodule on the device is trustworthy.
 
 ## Release planning
 
@@ -122,11 +151,14 @@ Prefer end-to-end encryption for the import payload: the Switch generates the en
 
 ### Post-v1
 
-- QR + short-code phone pairing;
-- public YouTube profile/list migration;
-- public/unlisted playlist migration;
-- duplicate-safe merge/re-import;
-- encrypted temporary relay design;
-- profile export/import/backup improvements as appropriate.
+- optional QR + device-code Google OAuth linking;
+- phone opens Google's official sign-in/consent UI;
+- least-privilege read-only sync into an existing TizenTube profile;
+- optional `Keep me connected` persistent authorization;
+- secure token storage review before persistence ships;
+- reconnect when authorization expires/revokes;
+- unlink/revoke support;
+- optional public/no-auth profile and playlist migration fallback;
+- duplicate-safe merge/re-import/sync.
 
-The post-v1 migration feature must not turn TizenTube NX into a Google-authenticated client.
+Post-v1 account linking must never turn TizenTube NX into a collector of Google passwords, browser cookies or unrelated Google credentials.
