@@ -14,7 +14,7 @@ A native, controller-first YouTube client for Nintendo Switch homebrew (Atmosphe
 
 ## Status
 
-Project bootstrap is underway. The first foundation slice provides host-testable content filtering and canonical YouTube URL generation, plus a minimal libnx NRO entry point for the first hardware boot checkpoint.
+M0 is device accepted. The M1 branch adds a Borealis interface preview with five sections, native keyboard entry and saved display preferences. YouTube networking, sign-in and playback are not implemented yet. See `docs/M1_DEVICE_TEST.md` for the next device check.
 
 See:
 
@@ -42,7 +42,17 @@ ctest --test-dir build --output-on-failure
 
 ## Switch build
 
-The repository contains the first libnx entry point under `switch/source/main.cpp` and `Makefile.switch`. A devkitPro/devkitA64 environment is required for an NRO build. The Switch build will be expanded as Borealis, networking, authentication, and playback are integrated.
+Requires devkitPro/devkitA64, libnx, deko3d and the uam shader compiler.
+
+```bash
+git submodule update --init --recursive
+make -f Makefile.switch -j2
+```
+
+The CI workflow builds with the devkitPro container and uploads the NRO. Resources
+and shaders are embedded, so only the NRO needs copying to the SD card. Preferences
+and a bounded boot log use `sdmc:/switch/TizenTube-NX/`. See `docs/THIRD_PARTY.md`
+for dependency attribution.
 
 ## License
 

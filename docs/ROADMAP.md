@@ -11,11 +11,13 @@
 
 ## M1 — Switch application shell
 
-- [ ] Add Borealis
-- [ ] Home/Search/Subscriptions/Library/Settings navigation shell
-- [ ] Controller + touch interaction contract
-- [ ] SD-card settings/log paths
-- [ ] App icon/resources
+- [x] Add Borealis
+- [x] Home/Search/Subscriptions/Library/Settings navigation shell
+- [x] Controller + touch interaction contract
+- [x] SD-card settings/log paths
+- [x] App icon/resources
+
+- [ ] Device acceptance: boot, layout, controller, taps, keyboard, persistence and docking
 
 ## M2 — YouTube guest browsing
 
