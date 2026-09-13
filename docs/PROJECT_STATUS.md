@@ -7,35 +7,58 @@ M2 — YouTube guest browsing / pre-alpha.
 Branch: `feature/m2-guest-browsing`  
 Draft PR: #6 — `M2: guest browsing networking foundation`
 
-Live Search remains disabled. The only live M2 action is the explicit Home `Test YouTube guest connection` probe.
+The real-Switch guest bootstrap gate is now accepted. The next activation target is live Search on physical hardware.
 
-## Real-hardware guest-bootstrap checkpoint
+## Real-hardware guest-bootstrap acceptance
 
 The native NRO boots successfully on the physical Atmosphere Switch.
 
-The first explicit guest-connection test reached native service initialization and stopped before any DNS/TCP/TLS/HTTP/YouTube traffic with:
+The first explicit guest-connection test originally stopped before DNS/TCP/TLS/HTTP with:
 
 `socketInitializeDefault failed: 0x00000f59`
 
-The UI reported `Network init failed` and the footer reported `M2 guest | Network init failed`.
+That result is libnx `LibnxError_AlreadyInitialized`.
 
-`0x00000f59` is libnx `LibnxError_AlreadyInitialized`.
+The source was proven: pinned Borealis commit `20e2d33b6c4ffce139ce304c503c04f5b94da920` initializes BSD sockets from its Switch `userAppInit()` before TizenTube NX reaches `main()`, and owns the matching `socketExit()` from `userAppExit()`.
 
-This result is specifically **not** evidence of DNS, TCP, TLS, HTTP, YouTube bootstrap, or outbound-policy failure; none of those stages had run yet.
+TizenTube NX was changed to borrow the existing Borealis socket environment safely, while retaining separate SSL service lifetime/ref-count ownership.
 
-## Proven socket initializer
+The follow-up physical-Switch build at code checkpoint:
 
-The repository pins Borealis commit `20e2d33b6c4ffce139ce304c503c04f5b94da920`.
+`96dbf0be46d7fddb38a5510d9269d267e74fcce2`
 
-That pinned Borealis Switch wrapper provides `userAppInit()`, which runs before `main()` and calls `socketInitializeDefault()`. It later calls `socketExit()` from its matching `userAppExit()`. `nxlinkStdio()` is invoked after the socket initialization and uses that environment.
+then passed the explicit guest connection test with:
 
-Therefore the pre-existing socket runtime is framework-owned. TizenTube NX must borrow it and must not tear it down.
+`Connection status: Guest ready`
 
-See `docs/NATIVE_NETWORK_LIFETIME.md` for the ownership analysis and libnx source semantics.
+and safe detail:
 
-## Native network lifetime fix
+`Sockets: existing | SSL: ready`
 
-`LibnxHttpClient` now distinguishes cleanup ownership explicitly.
+`Verified HTTPS and the bounded YouTube guest bootstrap both succeeded.`
+
+The footer reported:
+
+`M2 guest | Guest ready`
+
+Therefore the physical hardware has now verified the complete guest bootstrap path through:
+
+- borrowed BSD socket environment;
+- SSL service initialization;
+- outbound-policy acceptance;
+- DNS;
+- TCP;
+- TLS configuration/handshake;
+- peer CA, hostname and certificate-date verification;
+- HTTPS request/response;
+- bounded YouTube guest bootstrap parsing;
+- usable guest session creation.
+
+This does **not** yet mean live Search is hardware-accepted; Search activation is the next M2 gate.
+
+## Native network lifetime model
+
+`LibnxHttpClient` distinguishes cleanup ownership explicitly.
 
 ### BSD sockets
 
@@ -49,40 +72,13 @@ The production code does not compare against hardcoded `0xF59`.
 
 `sslInitialize(3)` uses libnx `ServiceGuard` reference-count semantics. A successful public `sslInitialize()` call acquires one matching `sslExit()` obligation even when another caller already holds an SSL reference.
 
-TizenTube NX therefore tracks SSL separately from sockets:
-
-- successful SSL initialization: usable and one matching `sslExit()` is required;
-- any non-zero SSL initialization result: failure for this caller;
-- a hypothetical SSL `AlreadyInitialized` error is not reinterpreted as a borrowed success under the current ServiceGuard implementation.
+TizenTube NX therefore tracks SSL separately from sockets.
 
 ### Application / worker lifetime
 
-The native HTTPS client is now owned by `main()` for application lifetime. `ShellActivity` and the guest-test worker borrow it.
+The native HTTPS client is owned by `main()` for application lifetime. `ShellActivity` and explicit request workers borrow it. Repeated guest-test button presses do not create service init/exit cycles.
 
-The shutdown order is:
-
-1. join the request worker;
-2. leave `main()` and destroy TizenTube NX's HTTPS client;
-3. release the SSL reference acquired by TizenTube NX;
-4. call `socketExit()` only if TizenTube NX actually initialized sockets itself;
-5. for the normal Borealis path, leave the borrowed socket environment intact for Borealis `userAppExit()`.
-
-Repeated guest-test button presses no longer create service init/exit cycles.
-
-## Hardware diagnostic stages
-
-The next diagnostic NRO distinguishes safe coarse stages without exposing session material:
-
-- `Socket init failed`
-- `SSL init failed`
-- `Network policy blocked`
-- `TCP failed`
-- `TLS failed`
-- `HTTP failed`
-- `Bootstrap rejected`
-- `Guest ready`
-
-Diagnostic detail may show service state such as `Sockets: existing | SSL: ready`. Credentials, cookies, authorization data, visitor/session IDs, continuation tokens and response bodies are not displayed.
+See `docs/NATIVE_NETWORK_LIFETIME.md` for the ownership analysis.
 
 ## Search / normalized-model state
 
@@ -101,7 +97,27 @@ The offline M2 Search work remains intact:
 - offline `SearchModel` with stale-generation and retry/end-of-results state;
 - UI-safe Search error taxonomy.
 
-Morphe remains a first-class future feature reference through `AGENTS.md` and `docs/MORPHE_REFERENCE.md`; those reference commits are preserved. Morphe does not weaken the project-wide no-Shorts invariant.
+The physical guest-bootstrap prerequisite for activating Search is now satisfied.
+
+The next work should wire the existing Search stack into the Switch UI, keep the request off the UI thread, render normalized results, support continuation/load-more, and then produce a new NRO for physical-Switch Search acceptance.
+
+Remote thumbnail downloads must not silently widen the outbound allowlist. If Search results contain image hosts other than `www.youtube.com`, keep placeholders/text-only cards until those hosts are separately reviewed and approved.
+
+## V1 profile/account direction
+
+V1 will use **local-first TizenTube profiles**, not Google/YouTube account authentication.
+
+Users should be able to create a TizenTube profile directly on Switch and build local follows/subscriptions, playlists, Watch Later, favorites/likes, history/resume and settings.
+
+TizenTube NX must not request or store Google passwords, OAuth tokens, authenticated cookies or equivalent Google account credentials.
+
+A post-v1 optional YouTube→TizenTube migration feature is planned separately. It should use a Switch-displayed QR code with a short-code fallback to pair a phone to an ephemeral import session and copy only safely accessible public data plus user-supplied public/unlisted playlists into an existing local TizenTube profile.
+
+See `docs/PROFILES_AND_IMPORT.md`.
+
+## Feature-reference policy
+
+Morphe remains a first-class future feature reference through `AGENTS.md` and `docs/MORPHE_REFERENCE.md`. Morphe does not weaken the project-wide no-Shorts invariant.
 
 ## Hard network safety invariant
 
@@ -110,25 +126,25 @@ Morphe remains a first-class future feature reference through `AGENTS.md` and `d
 This remains release-blocking and independent of 90DNS:
 
 - outbound networking is default-deny;
-- exact M2 allowlist remains `www.youtube.com:443` only;
+- exact current M2 allowlist remains `www.youtube.com:443` only;
 - policy evaluation happens before DNS/connect/TLS/HTTP;
 - Nintendo domain families are hard-denied;
 - HTTP, alternate ports, IP literals, userinfo and malformed authorities are rejected;
 - every redirect is revalidated before another DNS lookup;
 - `switch-curl` remains excluded from the NRO.
 
-No new host was authorized by the socket ownership fix.
+No host is authorized merely because YouTube returns a URL for it.
 
 ## Current activation gate
 
-The socket `AlreadyInitialized` condition is now handled as a borrowed, usable environment and cannot cause TizenTube NX to call `socketExit()` on Borealis-owned state.
+The real-Switch guest bootstrap is accepted as `Guest ready`.
 
-This is **not yet real-hardware networking acceptance**. A new physical-Switch test is required.
+The next gate is:
 
-Next test:
+1. enable the already-tested live Search request path in the Switch UI;
+2. render normalized Video/Channel/Playlist results without widening the allowlist for thumbnails;
+3. retain the hard Shorts/ad/promoted/shopping firewall;
+4. build a new NRO;
+5. physically test first-page Search and continuation/load-more on the Switch.
 
-`Test YouTube guest connection`
-
-Expected progress: the probe must no longer stop at `socketInitializeDefault` / `LibnxError_AlreadyInitialized`. Report the next exact connection status and detail. The next stage may be SSL, TCP, TLS, HTTP, bootstrap parsing, or `Guest ready`; CI must not guess which hardware stage comes next.
-
-Live Search must remain disabled until the explicit guest bootstrap reaches an accepted `Guest ready` result on hardware.
+Live Search must not be called hardware-accepted until that new build is tested on the physical Switch.
