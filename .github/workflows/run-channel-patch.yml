@@ -21,10 +21,18 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Apply stored Channel patch
+      - name: Extract stored Channel patch
         shell: bash
         run: >-
-          python3 -c "from pathlib import Path; p=Path('.github/workflows/apply-channel-first-page.yml'); t=p.read_text(); marker=\"          python3 - <<'PY'\\n\"; start=t.index(marker)+len(marker); end=t.index('          PY\\n', start); block=t[start:end]; code=''.join(line[10:] if line.startswith('          ') else line for line in block.splitlines(True)); compile(code, '<channel-patch>', 'exec'); exec(code)"
+          python3 -c "from pathlib import Path; p=Path('.github/workflows/apply-channel-first-page.yml'); t=p.read_text(); marker=\"          python3 - <<'PY'\\n\"; start=t.index(marker)+len(marker); end=t.index('          PY\\n', start); block=t[start:end]; code=''.join(line[10:] if line.startswith('          ') else line for line in block.splitlines(True)); Path('/tmp/channel_patch.py').write_text(code)"
+
+      - name: Show failing assertion neighborhood
+        shell: bash
+        run: nl -ba /tmp/channel_patch.py | sed -n '1418,1435p'
+
+      - name: Apply stored Channel patch
+        shell: bash
+        run: python3 /tmp/channel_patch.py
 
       - name: Configure host
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
