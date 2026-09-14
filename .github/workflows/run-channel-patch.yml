@@ -1,0 +1,65 @@
+name: run-channel-patch
+
+on:
+  push:
+    branches:
+      - feature/m2-guest-browsing
+    paths:
+      - .github/workflows/run-channel-patch.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/m2-guest-browsing
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Apply stored Channel patch
+        shell: bash
+        run: >-
+          python3 -c "from pathlib import Path; import textwrap; p=Path('.github/workflows/apply-channel-first-page.yml'); t=p.read_text(); marker=\"          python3 - <<'PY'\\n\"; start=t.index(marker)+len(marker); end=t.index('          PY\\n', start); code=textwrap.dedent(t[start:end]); compile(code, '<channel-patch>', 'exec'); exec(code)"
+
+      - name: Configure host
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build host
+        run: cmake --build build --parallel
+
+      - name: Run host tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Build Switch NRO
+        run: >-
+          docker run --rm
+          -v "$PWD:/work"
+          -w /work
+          devkitpro/devkita64@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282
+          make -f Makefile.switch -j2
+
+      - name: Verify invariants
+        shell: bash
+        run: |
+          test -f tizentube_nx.nro
+          test -f tizentube_nx.elf
+          test -f build-switch/tizentube_nx.map
+          ! grep -a -qi 'libcurl' tizentube_nx.nro
+          grep -q 'return normalized == "www.youtube.com";' src/core/outbound_policy.cpp
+          grep -q 'nintendo.com' src/core/outbound_policy.cpp
+          grep -q 'CPPFILES := $(filter-out curl_http_client.cpp,$(CPPFILES))' Makefile.switch
+
+      - name: Commit and push
+        shell: bash
+        run: |
+          git config user.name "GlitchedZeus"
+          git config user.email "user91746@protonmail.com"
+          git add CMakeLists.txt include/tizentube_nx/core/channel_model.hpp include/tizentube_nx/youtube/channel_response.hpp include/tizentube_nx/youtube/guest_channel.hpp src/core/channel_model.cpp src/core/guest_channel.cpp src/core/home_response.cpp switch/source/main.cpp tests/channel_model_tests.cpp tests/channel_response_tests.cpp tests/guest_channel_tests.cpp docs/CHANNEL_GUEST_BROWSING.md docs/HARDWARE_GATES.md docs/HOME_GUEST_BROWSING.md docs/PROJECT_STATUS.md docs/ROADMAP.md
+          git diff --cached --check
+          git commit -m "m2: add first-page channel browsing"
+          git push origin HEAD:feature/m2-guest-browsing
