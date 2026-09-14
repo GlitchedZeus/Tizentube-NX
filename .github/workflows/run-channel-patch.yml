@@ -51,7 +51,18 @@ jobs:
 
       - name: Apply stored Channel patch
         shell: bash
-        run: python3 /tmp/channel_patch.py
+        run: |
+          python3 /tmp/channel_patch.py
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('tests/channel_response_tests.cpp')
+          t = p.read_text()
+          old = '{"continuationItemRenderer": {"continuationEndpoint": {"continuationCommand": {"token": "CHANNEL-NEXT"}}}'
+          new = '{"continuationItemRenderer": {"continuationEndpoint": {"continuationCommand": {"token": "CHANNEL-NEXT"}}}}'
+          if old not in t:
+              raise SystemExit('expected continuation fixture fragment not found')
+          p.write_text(t.replace(old, new, 1))
+          PY
 
       - name: Configure host
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
