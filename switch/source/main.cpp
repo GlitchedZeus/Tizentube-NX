@@ -321,6 +321,9 @@ private:
                 return text;
             }
             case ttnx::core::HomeViewState::Empty: {
+                if (home_model_.empty_reason() == ttnx::core::HomeEmptyReason::FeedNudge) {
+                    return "YouTube isn't providing guest Home recommendations for this session. Use Search to get started.";
+                }
                 std::string text = "YouTube Home returned no supported normal results.";
                 if (!home_diagnostics_.empty()) text += "\n" + home_diagnostics_;
                 return text;

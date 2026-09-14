@@ -438,6 +438,9 @@ bool reviewed_diagnostic_leaf(std::string_view name) {
    std::string_view{"playlistRenderer"},
    std::string_view{"radioRenderer"},
    std::string_view{"lockupViewModel"},
+   // Physically observed guest Home empty-state leaf. Diagnostics may
+   // name it, but must never descend through it.
+   std::string_view{"feedNudgeRenderer"},
    std::string_view{"continuationItemRenderer"},
    std::string_view{"continuationItemViewModel"},
    std::string_view{"continuationItemView"}}) {
@@ -770,6 +773,16 @@ bool append_normalized_payload(
     return true;
 }
 
+bool is_selected_home_feed_nudge_entry(std::string_view entry) {
+    // Deliberately recognize only the physical selected-Home position:
+    // richGrid contents -> richSectionRenderer -> content -> feedNudgeRenderer.
+    // The renderer is terminal non-content; its payload is never inspected.
+    const auto rich_section = field(entry, "richSectionRenderer");
+    if (!rich_section) return false;
+    const auto content = field(*rich_section, "content");
+    return content && field(*content, "feedNudgeRenderer").has_value();
+}
+
 bool append_home_entry(
     core::HomePage& home,
     std::unordered_set<std::string>& seen,
@@ -970,6 +983,14 @@ bool collect_primary_home(
     }
     saw_payload = true;
     for (const auto entry : *entries) {
+        // A feed nudge is a valid YouTube-provided empty Home state, not
+        // a content wrapper. Recognition is confined to this selected
+        // primary Home array; continuation/unknown/blocked scopes cannot
+        // set the typed reason.
+        if (is_selected_home_feed_nudge_entry(entry)) {
+            home.empty_reason = core::HomeEmptyReason::FeedNudge;
+            continue;
+        }
         if (!append_home_entry(
                 home,
                 seen,
@@ -1088,6 +1109,14 @@ HomeResponseParseResult parse_scoped_home_response(
         return fail("Home response did not contain a recognized Home browse payload.", diagnostics);
     }
 
+    // Normal content wins if YouTube sends both content and a nudge. A
+    // nudge-only Home is terminal and cannot expose pagination.
+    if (!home.results.empty()) {
+        home.empty_reason = core::HomeEmptyReason::None;
+    } else if (home.empty_reason == core::HomeEmptyReason::FeedNudge) {
+        continuation.clear();
+        ambiguous_continuation = false;
+    }
     if (!ambiguous_continuation) home.continuation = std::move(continuation);
 
     HomeResponseParseResult result;

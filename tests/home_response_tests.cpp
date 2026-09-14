@@ -303,6 +303,111 @@ int main() {
     expect(opaque_selected.diagnostics.find("videoRenderer") == std::string::npos,
  "diagnostic scanner does not descend through an unreviewed wrapper");
 
+    // Exact physical guest-Home family chain observed on Switch:
+    // selected Home -> richGridRenderer -> richSectionRenderer -> feedNudgeRenderer.
+    // Display text is deliberately localized and irrelevant to recognition.
+    const auto physical_feed_nudge = parse_scoped_home_response(R"JSON({
+      "contents": {"twoColumnBrowseResultsRenderer": {"tabs": [
+        {"tabRenderer": {"selected": true, "content": {"richGridRenderer": {"contents": [
+          {"richSectionRenderer": {"content": {"feedNudgeRenderer": {
+            "title": {"simpleText": "Empieza buscando"},
+            "subtitle": {"simpleText": "Texto localizado no usado por el parser"},
+            "hostileNestedContent": {"videoRenderer": {
+              "videoId": "FEED-NUDGE-ESCAPE",
+              "title": {"simpleText": "Must never escape"}
+            }}
+          }}}}
+        ]}}}}
+      ]}}
+    })JSON");
+    expect(physical_feed_nudge.page.has_value(),
+           "physical feed-nudge Home shape is a valid parsed Home response");
+    if (physical_feed_nudge.page) {
+        expect(physical_feed_nudge.page->results.empty(),
+               "feed nudge contributes zero normalized content results");
+        expect(physical_feed_nudge.page->empty_reason == ttnx::core::HomeEmptyReason::FeedNudge,
+               "physical feed nudge sets typed Home empty reason");
+        expect(physical_feed_nudge.page->continuation.empty(),
+               "feed-nudge-only Home is terminal with no continuation");
+        expect(find_id(*physical_feed_nudge.page, "FEED-NUDGE-ESCAPE") == nullptr,
+               "feed nudge is terminal and cannot leak nested fake video");
+    }
+    expect(physical_feed_nudge.diagnostics.find("feedNudgeRenderer") != std::string::npos,
+           "structural diagnostics may identify the feed-nudge renderer family");
+    expect(physical_feed_nudge.diagnostics.find("FEED-NUDGE-ESCAPE") == std::string::npos,
+           "feed-nudge diagnostics never inspect nested response values");
+    expect(physical_feed_nudge.diagnostics.find("Empieza buscando") == std::string::npos,
+           "feed-nudge semantics do not depend on localized English/display text");
+
+    const auto hidden_feed_nudge = parse_scoped_home_response(R"JSON({
+      "contents": {"twoColumnBrowseResultsRenderer": {"tabs": [
+        {"tabRenderer": {"selected": true, "content": {"richGridRenderer": {"contents": [
+          {"mysteryHomeRenderer": {"content": {"richSectionRenderer": {"content": {
+            "feedNudgeRenderer": {"title": {"simpleText": "Hidden"}}
+          }}}}}
+        ]}}}}
+      ]}}
+    })JSON");
+    expect(hidden_feed_nudge.page.has_value(), "unknown wrapper remains a valid opaque Home entry");
+    if (hidden_feed_nudge.page) {
+        expect(hidden_feed_nudge.page->empty_reason == ttnx::core::HomeEmptyReason::None,
+               "feed nudge inside unknown wrapper cannot set Home empty reason");
+    }
+
+    const auto unselected_feed_nudge = parse_scoped_home_response(R"JSON({
+      "contents": {"twoColumnBrowseResultsRenderer": {"tabs": [
+        {"tabRenderer": {"selected": true, "content": {"richGridRenderer": {"contents": [
+          {"richItemRenderer": {"content": {"videoRenderer": {
+            "videoId": "SELECTED-NORMAL", "title": {"simpleText": "Selected normal"}
+          }}}}
+        ]}}}},
+        {"tabRenderer": {"selected": false, "content": {"richGridRenderer": {"contents": [
+          {"richSectionRenderer": {"content": {"feedNudgeRenderer": {}}}}
+        ]}}}}
+      ]}}
+    })JSON");
+    expect(unselected_feed_nudge.page.has_value(), "selected normal Home ignores unselected nudge tab");
+    if (unselected_feed_nudge.page) {
+        expect(find_id(*unselected_feed_nudge.page, "SELECTED-NORMAL") != nullptr,
+               "selected normal result survives beside unselected feed nudge");
+        expect(unselected_feed_nudge.page->empty_reason == ttnx::core::HomeEmptyReason::None,
+               "unselected feed nudge cannot set Home empty reason");
+    }
+
+    const auto topbar_feed_nudge = parse_scoped_home_response(R"JSON({
+      "topbar": {"richSectionRenderer": {"content": {"feedNudgeRenderer": {}}}},
+      "contents": {"twoColumnBrowseResultsRenderer": {"tabs": [
+        {"tabRenderer": {"selected": true, "content": {"richGridRenderer": {"contents": [
+          {"richItemRenderer": {"content": {"videoRenderer": {
+            "videoId": "HOME-NORMAL", "title": {"simpleText": "Home normal"}
+          }}}}
+        ]}}}}
+      ]}}
+    })JSON");
+    expect(topbar_feed_nudge.page.has_value(), "topbar nudge remains outside Home scope");
+    if (topbar_feed_nudge.page) {
+        expect(topbar_feed_nudge.page->empty_reason == ttnx::core::HomeEmptyReason::None,
+               "topbar feed nudge cannot set Home empty reason");
+    }
+
+    const auto mixed_feed_nudge = parse_scoped_home_response(R"JSON({
+      "contents": {"twoColumnBrowseResultsRenderer": {"tabs": [
+        {"tabRenderer": {"selected": true, "content": {"richGridRenderer": {"contents": [
+          {"richSectionRenderer": {"content": {"feedNudgeRenderer": {}}}},
+          {"richItemRenderer": {"content": {"videoRenderer": {
+            "videoId": "MIXED-NORMAL", "title": {"simpleText": "Normal wins"}
+          }}}}
+        ]}}}}
+      ]}}
+    })JSON");
+    expect(mixed_feed_nudge.page.has_value(), "mixed normal content plus feed nudge parses");
+    if (mixed_feed_nudge.page) {
+        expect(find_id(*mixed_feed_nudge.page, "MIXED-NORMAL") != nullptr,
+               "normal content survives mixed Home response");
+        expect(mixed_feed_nudge.page->empty_reason == ttnx::core::HomeEmptyReason::None,
+               "normal content wins over auxiliary feed-nudge marker");
+    }
+
     const auto single_column = parse_scoped_home_response(R"JSON({
       "contents": {"singleColumnBrowseResultsRenderer": {"tabs": [
         {"tabRenderer": {"selected": true, "content": {"sectionListRenderer": {"contents": []}}}}

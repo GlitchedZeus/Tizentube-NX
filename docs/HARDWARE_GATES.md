@@ -205,3 +205,14 @@ The diagnostic candidate adds bounded structural diagnostics only: browse layout
 The exact M2 network allowlist remains `www.youtube.com:443`. Search checkpoint `428497c90be6e768c607e45c68171827d74f0faf` remains a protected accepted baseline. Home continuation, thumbnails, playback and OAuth remain disabled for this diagnostic gate.
 
 Next physical test: launch -> Guest ready -> `Load Home` -> photograph the bounded `Home diag:` summary. Home first-page content remains **NOT ACCEPTED** until that hardware evidence identifies the actual response family.
+
+
+### Guest Home request path + feed-nudge empty state — physically accepted
+
+Diagnostic NRO head: `7b4993f7871ae71cb8ca44e30e51f876f8133cc2`
+
+Physical Switch result: **HOME REQUEST PATH ACCEPTED; VALID YOUTUBE GUEST EMPTY STATE OBSERVED**. Guest bootstrap, borrowed sockets, SSL and verified HTTPS succeeded. Explicit `Load Home` returned one selected two-column Home tab whose observed structural families were exactly `richGridRenderer:1`, `richSectionRenderer:1`, and `feedNudgeRenderer:1`; zero Shorts/reels, ads/promoted, shopping/product, premium/promo, or continuation renderers were observed. No normal Video/Channel/Playlist Home result was provided by YouTube in this session.
+
+`feedNudgeRenderer` is now a reviewed terminal non-content empty state represented as `HomeEmptyReason::FeedNudge`. It is recognized only at the selected primary Home structural position, never recursively. Its payload is not traversed, English/localized display text is irrelevant to recognition, unknown wrappers remain opaque, and a nudge-only Home cannot expose a continuation. Normal content wins if both are legitimately present.
+
+This gate does **not** claim hardware acceptance for normal Home-result rendering because the provider returned zero normal results. Normal Home Video/Channel/Playlist normalization and UI remain host-validated. The next M2 implementation surface is Channel pages, followed by Playlist pages.

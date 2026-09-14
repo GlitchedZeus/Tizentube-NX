@@ -27,6 +27,8 @@ std::uint64_t HomeModel::begin_load() {
 bool HomeModel::apply_page(std::uint64_t generation, HomePage page) {
     if (generation != generation_ || state_ != HomeViewState::Loading) return false;
 
+    // A real normalized result set wins over any auxiliary empty-state marker.
+    if (!page.results.empty()) page.empty_reason = HomeEmptyReason::None;
     page_ = std::move(page);
     state_ = page_.results.empty() ? HomeViewState::Empty : HomeViewState::Ready;
     error_.clear();

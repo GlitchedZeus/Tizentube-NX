@@ -38,6 +38,7 @@ ttnx::core::HomePage page_with(std::initializer_list<ttnx::core::BrowseResult> r
 }  // namespace
 
 int main() {
+    using ttnx::core::HomeEmptyReason;
     using ttnx::core::HomeModel;
     using ttnx::core::HomeViewState;
     using ttnx::core::browse_result_identity;
@@ -88,6 +89,28 @@ int main() {
     ttnx::core::HomePage empty;
     expect(model.apply_page(generation_six, std::move(empty)), "empty Home page applies");
     expect(model.state() == HomeViewState::Empty, "empty Home page enters Empty");
+    expect(model.empty_reason() == HomeEmptyReason::None,
+           "ordinary empty Home has no typed provider reason");
+
+    const auto generation_seven = model.begin_load();
+    ttnx::core::HomePage nudge;
+    nudge.empty_reason = HomeEmptyReason::FeedNudge;
+    expect(model.apply_page(generation_seven, std::move(nudge)),
+           "typed feed-nudge Home page applies");
+    expect(model.state() == HomeViewState::Empty,
+           "feed-nudge Home remains an empty view state");
+    expect(model.empty_reason() == HomeEmptyReason::FeedNudge,
+           "model preserves typed feed-nudge reason independently of Views");
+
+    const auto generation_eight = model.begin_load();
+    auto mixed = page_with({video("NORMAL", "Normal wins")});
+    mixed.empty_reason = HomeEmptyReason::FeedNudge;
+    expect(model.apply_page(generation_eight, std::move(mixed)),
+           "mixed Home page applies");
+    expect(model.state() == HomeViewState::Ready,
+           "normal results win over empty-state marker");
+    expect(model.empty_reason() == HomeEmptyReason::None,
+           "model clears feed-nudge marker when normal results exist");
 
     model.reset();
     expect(model.state() == HomeViewState::Idle, "reset returns Home to Idle");

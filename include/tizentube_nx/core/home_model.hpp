@@ -14,10 +14,18 @@ struct HomeSection {
     std::vector<BrowseResult> results;
 };
 
+enum class HomeEmptyReason {
+    None,
+    FeedNudge,
+};
+
 struct HomePage {
     std::vector<HomeSection> sections;
     std::vector<BrowseResult> results;
     std::string continuation;
+    // Renderer-independent reason for a valid, intentionally empty Home.
+    // This is semantic state, not raw YouTube display text.
+    HomeEmptyReason empty_reason{HomeEmptyReason::None};
 
     [[nodiscard]] bool has_more() const noexcept {
         return !continuation.empty();
@@ -48,6 +56,7 @@ public:
 
     [[nodiscard]] std::uint64_t generation() const noexcept { return generation_; }
     [[nodiscard]] HomeViewState state() const noexcept { return state_; }
+    [[nodiscard]] HomeEmptyReason empty_reason() const noexcept { return page_.empty_reason; }
     [[nodiscard]] const HomePage& page() const noexcept { return page_; }
     [[nodiscard]] const std::vector<BrowseResult>& results() const noexcept { return page_.results; }
     [[nodiscard]] const std::vector<HomeSection>& sections() const noexcept { return page_.sections; }

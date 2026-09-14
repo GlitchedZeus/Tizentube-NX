@@ -139,8 +139,9 @@
 ### Remaining guest surfaces
 
 - [x] Implement scoped live guest Home first-page request/parser/model/text UI
-- [ ] Real-hardware Home first-page acceptance
-- [ ] Home continuation after first-page acceptance
+- [x] Real-hardware Home request path + valid `feedNudgeRenderer` guest empty-state acceptance at `7b4993f7871ae71cb8ca44e30e51f876f8133cc2`
+- [ ] Real-hardware normal Home Video/Channel/Playlist rendering when YouTube actually provides normal guest results
+- [ ] Home continuation after normal-content Home is physically observable/accepted
 - [ ] Channel pages
 - [ ] Playlist pages
 - [ ] Real-hardware guest browsing acceptance
@@ -268,6 +269,6 @@ See `docs/PROFILES_AND_IMPORT.md` and `docs/OAUTH_ACCOUNT_LINKING.md` for the fu
 **Guest bootstrap, startup recovery, the complete Search slice, inline detail, sidebar traversal, and explicit Search continuation are physically accepted through `428497c90be6e768c607e45c68171827d74f0faf`. The current M2 gate is the first explicit live guest Home page. Preserve the accepted Search implementation, exact `www.youtube.com:443` allowlist, hard Shorts/ad/promoted/shopping firewall, remote-thumbnail block, and post-v1 OAuth documentation-only boundary.**
 
 
-## Active Home diagnostic gate
+## Current gate — Channel pages
 
-Before Home continuation, channel pages or playlist pages, identify the real guest Home renderer/container family returned on Switch using bounded structural diagnostics. Do not widen `www.youtube.com:443`, fetch thumbnails, add OAuth, or loosen the Shorts/ad/shopping firewall for this gate.
+The physical Home diagnostic gate is closed: `7b4993f7871ae71cb8ca44e30e51f876f8133cc2` proved the `FEwhat_to_watch` request path and a valid terminal `feedNudgeRenderer` guest empty state. Normal Home content was not provided by YouTube, so normal-result rendering remains host-validated rather than hardware-accepted. Do not fake Trending as Home. Preserve the exact `www.youtube.com:443` allowlist, accepted Search baseline, typed Home empty state, remote-thumbnail block, and hard Shorts/ad/shopping firewall while implementing Channel pages next.

@@ -62,3 +62,12 @@ Home development must not reopen or redesign that accepted Search path unless a 
 The first physical Home candidate at `ba0066b34270bfa1809dc5d3567aead86a298033` reached `Guest ready` and completed `Load Home`, but normalized zero supported results. The diagnostic follow-up does **not** loosen the renderer firewall or introduce generic result recursion. It reports only bounded structural renderer/container-family information from the selected Home scope and stops at blocked or unknown families. This is intended to identify the real modern Home wrapper returned on hardware before any new family is admitted to normalization.
 
 Implementation checkpoint `8d4bbc7e58e80e711232cade97c7608b8b3e6e42` adds the privacy-safe structural diagnostic path. The next exact-head NRO produced after this documentation marker is a diagnostics-only physical candidate: Guest ready -> Load Home -> capture the bounded `Home diag:` summary. Home first-page content remains unaccepted until that hardware evidence identifies the actual response family.
+
+
+## Physical guest empty-state acceptance
+
+Diagnostic head `7b4993f7871ae71cb8ca44e30e51f876f8133cc2` proved the real Switch request path reaches the selected `FEwhat_to_watch` Home scope. The physical response was `twoColumnBrowseResultsRenderer -> selected tabRenderer -> richGridRenderer -> richSectionRenderer -> feedNudgeRenderer`, with zero normal Video/Channel/Playlist results and no observed Shorts/ad/shopping/promo renderer families.
+
+`feedNudgeRenderer` is treated as a reviewed **terminal non-content** renderer and mapped to renderer-independent `HomeEmptyReason::FeedNudge`. Recognition is structural and localization-independent; no English title/subtitle text is parsed for semantics. The parser does not descend through the feed nudge, and feed nudges hidden in unknown/blocked/unselected/out-of-scope containers cannot set the typed reason. A nudge-only page is valid, empty, and terminal with no continuation. If normal reviewed results coexist, those results win and the empty marker is cleared.
+
+The normal Switch UI presents a friendly guest-empty message rather than a structural diagnostic dump. Diagnostics remain available only for genuinely unsupported/unknown responses. This accepts the **Home request path and provider empty state**, not normal-result rendering; normal Home Video/Channel/Playlist rows are still host-tested but not physically observed. Channel pages are the next M2 implementation surface.

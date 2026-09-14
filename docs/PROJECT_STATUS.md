@@ -7,7 +7,7 @@ M2 — YouTube guest browsing / pre-alpha.
 Branch: `feature/m2-guest-browsing`  
 Draft PR: #6 — `M2: guest browsing networking foundation`
 
-The real-Switch guest bootstrap, startup recovery, and complete M2 Search slice are physically accepted. Hardware-tested Search head `428497c90be6e768c607e45c68171827d74f0faf` closes the continuation focus gate: explicit Load more appends successfully, focus lands on the first newly-loaded result, the viewport follows, A-again collapses inline detail, sidebar navigation remains intact, and the underlying pixel-scroll foundation was previously stress-tested through 156 loaded results. Development has now moved to the first live guest Home page. Home is implemented as an explicit post-Guest-ready action with a scoped Home parser/model and text-only UI; it remains pending physical Switch acceptance.
+The real-Switch guest bootstrap, startup recovery, and complete M2 Search slice are physically accepted. Hardware-tested Search head `428497c90be6e768c607e45c68171827d74f0faf` closes the continuation focus gate. The explicit guest Home request path is now also physically proven at diagnostic head `7b4993f7871ae71cb8ca44e30e51f876f8133cc2`: `FEwhat_to_watch` returned the selected two-column Home scope and the terminal `feedNudgeRenderer` guest empty state with zero normal Video/Channel/Playlist results and zero observed blocked families. Normal Home-result rendering remains host-validated but has not been physically observed. The next M2 implementation surface is Channel pages.
 
 ## Real-hardware guest-bootstrap acceptance
 
@@ -186,7 +186,7 @@ The network-facing parser is scoped to the selected Home browse tab and recogniz
 
 `HomeModel` owns normalized data, generation and selected identity independently from Borealis Views. TabFrame can therefore destroy and reconstruct the Home page without giving a worker stale UI pointers. The first Switch presentation is intentionally text-only: normalized thumbnail candidates may exist in memory but no remote image host is contacted. A toggles the same clean canonical ID/URL detail style proven by Search. Home continuation tokens are parsed as an architectural seam but the UI intentionally defers Home pagination until the first page passes hardware.
 
-Home is **IMPLEMENTED / HOST-VALIDATED / PENDING PHYSICAL SWITCH TEST**. It is not yet called hardware accepted.
+The **Home request path is PHYSICALLY ACCEPTED** at diagnostic head `7b4993f7871ae71cb8ca44e30e51f876f8133cc2`. Real hardware observed a valid YouTube guest empty Home: selected `richGridRenderer -> richSectionRenderer -> feedNudgeRenderer`, zero normal results, and no Shorts/ad/shopping/promo families. `feedNudgeRenderer` is now a typed terminal non-content empty state rather than a parser failure. Normal Video/Channel/Playlist Home rendering remains **HOST-VALIDATED / NOT PHYSICALLY OBSERVED**.
 
 ## Search hardening state
 
