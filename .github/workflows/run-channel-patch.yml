@@ -21,14 +21,33 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Extract stored Channel patch
+      - name: Extract stored Channel patch safely
         shell: bash
-        run: >-
-          python3 -c "from pathlib import Path; p=Path('.github/workflows/apply-channel-first-page.yml'); t=p.read_text(); marker=\"          python3 - <<'PY'\\n\"; start=t.index(marker)+len(marker); end=t.index('          PY\\n', start); block=t[start:end]; code=''.join(line[10:] if line.startswith('          ') else line for line in block.splitlines(True)); Path('/tmp/channel_patch.py').write_text(code)"
-
-      - name: Show failing assertion neighborhood
-        shell: bash
-        run: nl -ba /tmp/channel_patch.py | sed -n '1418,1435p'
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('.github/workflows/apply-channel-first-page.yml')
+          t = p.read_text()
+          marker = "          python3 - <<'PY'\n"
+          start = t.index(marker) + len(marker)
+          end = t.index('          PY\n', start)
+          block = t[start:end]
+          out = []
+          inside_triple = False
+          for line in block.splitlines(True):
+              if inside_triple:
+                  out.append(line)
+                  if "'''" in line:
+                      inside_triple = False
+                  continue
+              normalized = line[10:] if line.startswith('          ') else line
+              out.append(normalized)
+              if normalized.count("'''") % 2 == 1:
+                  inside_triple = True
+          code = ''.join(out)
+          compile(code, '<channel-patch>', 'exec')
+          Path('/tmp/channel_patch.py').write_text(code)
+          PY
 
       - name: Apply stored Channel patch
         shell: bash
