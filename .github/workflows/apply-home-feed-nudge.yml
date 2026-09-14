@@ -1,0 +1,437 @@
+name: apply-home-feed-nudge
+
+on:
+  push:
+    branches:
+      - feature/m2-guest-browsing
+    paths:
+      - .github/workflows/apply-home-feed-nudge.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/m2-guest-browsing
+
+      - name: Apply typed guest Home feed-nudge empty state
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # ---- HomePage / HomeModel typed empty state ----
+          p = Path('include/tizentube_nx/core/home_model.hpp')
+          s = p.read_text()
+          old = '''struct HomePage {
+              std::vector<HomeSection> sections;
+              std::vector<BrowseResult> results;
+              std::string continuation;
+
+              [[nodiscard]] bool has_more() const noexcept {
+                  return !continuation.empty();
+              }
+          };
+          '''
+          new = '''enum class HomeEmptyReason {
+              None,
+              FeedNudge,
+          };
+
+          struct HomePage {
+              std::vector<HomeSection> sections;
+              std::vector<BrowseResult> results;
+              std::string continuation;
+              // Renderer-independent reason for a valid, intentionally empty Home.
+              // This is semantic state, not raw YouTube display text.
+              HomeEmptyReason empty_reason{HomeEmptyReason::None};
+
+              [[nodiscard]] bool has_more() const noexcept {
+                  return !continuation.empty();
+              }
+          };
+          '''
+          assert old in s, 'HomePage anchor changed'
+          s = s.replace(old, new, 1)
+          old = '''    [[nodiscard]] HomeViewState state() const noexcept { return state_; }
+              [[nodiscard]] const HomePage& page() const noexcept { return page_; }
+          '''
+          new = '''    [[nodiscard]] HomeViewState state() const noexcept { return state_; }
+              [[nodiscard]] HomeEmptyReason empty_reason() const noexcept { return page_.empty_reason; }
+              [[nodiscard]] const HomePage& page() const noexcept { return page_; }
+          '''
+          assert old in s, 'HomeModel accessor anchor changed'
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+
+          p = Path('src/core/home_model.cpp')
+          s = p.read_text()
+          old = '''    page_ = std::move(page);
+              state_ = page_.results.empty() ? HomeViewState::Empty : HomeViewState::Ready;
+          '''
+          new = '''    // A real normalized result set wins over any auxiliary empty-state marker.
+              if (!page.results.empty()) page.empty_reason = HomeEmptyReason::None;
+              page_ = std::move(page);
+              state_ = page_.results.empty() ? HomeViewState::Empty : HomeViewState::Ready;
+          '''
+          assert old in s, 'HomeModel apply_page anchor changed'
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+
+          # ---- Scoped Home parser: physical feedNudgeRenderer is a terminal leaf ----
+          p = Path('src/core/home_response.cpp')
+          s = p.read_text()
+          old = '''   std::string_view{"lockupViewModel"},
+             std::string_view{"continuationItemRenderer"},
+          '''
+          new = '''   std::string_view{"lockupViewModel"},
+             // Physically observed guest Home empty-state leaf. Diagnostics may
+             // name it, but must never descend through it.
+             std::string_view{"feedNudgeRenderer"},
+             std::string_view{"continuationItemRenderer"},
+          '''
+          assert old in s, 'diagnostic leaf list anchor changed'
+          s = s.replace(old, new, 1)
+
+          anchor = '''bool append_home_entry(
+              core::HomePage& home,
+          '''
+          helper = '''bool is_selected_home_feed_nudge_entry(std::string_view entry) {
+              // Deliberately recognize only the physical selected-Home position:
+              // richGrid contents -> richSectionRenderer -> content -> feedNudgeRenderer.
+              // The renderer is terminal non-content; its payload is never inspected.
+              const auto rich_section = field(entry, "richSectionRenderer");
+              if (!rich_section) return false;
+              const auto content = field(*rich_section, "content");
+              return content && field(*content, "feedNudgeRenderer").has_value();
+          }
+
+          bool append_home_entry(
+              core::HomePage& home,
+          '''
+          assert anchor in s, 'append_home_entry anchor changed'
+          s = s.replace(anchor, helper, 1)
+
+          old = '''    saw_payload = true;
+              for (const auto entry : *entries) {
+                  if (!append_home_entry(
+          '''
+          new = '''    saw_payload = true;
+              for (const auto entry : *entries) {
+                  // A feed nudge is a valid YouTube-provided empty Home state, not
+                  // a content wrapper. Recognition is confined to this selected
+                  // primary Home array; continuation/unknown/blocked scopes cannot
+                  // set the typed reason.
+                  if (is_selected_home_feed_nudge_entry(entry)) {
+                      home.empty_reason = core::HomeEmptyReason::FeedNudge;
+                      continue;
+                  }
+                  if (!append_home_entry(
+          '''
+          assert old in s, 'collect_primary_home loop anchor changed'
+          s = s.replace(old, new, 1)
+
+          old = '''    if (!ambiguous_continuation) home.continuation = std::move(continuation);
+
+              HomeResponseParseResult result;
+          '''
+          new = '''    // Normal content wins if YouTube sends both content and a nudge. A
+              // nudge-only Home is terminal and cannot expose pagination.
+              if (!home.results.empty()) {
+                  home.empty_reason = core::HomeEmptyReason::None;
+              } else if (home.empty_reason == core::HomeEmptyReason::FeedNudge) {
+                  continuation.clear();
+                  ambiguous_continuation = false;
+              }
+              if (!ambiguous_continuation) home.continuation = std::move(continuation);
+
+              HomeResponseParseResult result;
+          '''
+          assert old in s, 'Home parse finalization anchor changed'
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+
+          # ---- Switch UI: friendly typed empty state, no diagnostic dump ----
+          p = Path('switch/source/main.cpp')
+          s = p.read_text()
+          old = '''            case ttnx::core::HomeViewState::Empty: {
+                          std::string text = "YouTube Home returned no supported normal results.";
+                          if (!home_diagnostics_.empty()) text += "\\n" + home_diagnostics_;
+                          return text;
+                      }
+          '''
+          new = '''            case ttnx::core::HomeViewState::Empty: {
+                          if (home_model_.empty_reason() == ttnx::core::HomeEmptyReason::FeedNudge) {
+                              return "YouTube isn't providing guest Home recommendations for this session. Use Search to get started.";
+                          }
+                          std::string text = "YouTube Home returned no supported normal results.";
+                          if (!home_diagnostics_.empty()) text += "\\n" + home_diagnostics_;
+                          return text;
+                      }
+          '''
+          assert old in s, 'Home Empty UI anchor changed'
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+
+          # ---- Home parser tests ----
+          p = Path('tests/home_response_tests.cpp')
+          s = p.read_text()
+          anchor = '''    const auto single_column = parse_scoped_home_response(R"JSON({
+          '''
+          block = r'''    // Exact physical guest-Home family chain observed on Switch:
+              // selected Home -> richGridRenderer -> richSectionRenderer -> feedNudgeRenderer.
+              // Display text is deliberately localized and irrelevant to recognition.
+              const auto physical_feed_nudge = parse_scoped_home_response(R"JSON({
+                "contents": {"twoColumnBrowseResultsRenderer": {"tabs": [
+                  {"tabRenderer": {"selected": true, "content": {"richGridRenderer": {"contents": [
+                    {"richSectionRenderer": {"content": {"feedNudgeRenderer": {
+                      "title": {"simpleText": "Empieza buscando"},
+                      "subtitle": {"simpleText": "Texto localizado no usado por el parser"},
+                      "hostileNestedContent": {"videoRenderer": {
+                        "videoId": "FEED-NUDGE-ESCAPE",
+                        "title": {"simpleText": "Must never escape"}
+                      }}
+                    }}}}
+                  ]}}}}
+                ]}}
+              })JSON");
+              expect(physical_feed_nudge.page.has_value(),
+                     "physical feed-nudge Home shape is a valid parsed Home response");
+              if (physical_feed_nudge.page) {
+                  expect(physical_feed_nudge.page->results.empty(),
+                         "feed nudge contributes zero normalized content results");
+                  expect(physical_feed_nudge.page->empty_reason == ttnx::core::HomeEmptyReason::FeedNudge,
+                         "physical feed nudge sets typed Home empty reason");
+                  expect(physical_feed_nudge.page->continuation.empty(),
+                         "feed-nudge-only Home is terminal with no continuation");
+                  expect(find_id(*physical_feed_nudge.page, "FEED-NUDGE-ESCAPE") == nullptr,
+                         "feed nudge is terminal and cannot leak nested fake video");
+              }
+              expect(physical_feed_nudge.diagnostics.find("feedNudgeRenderer") != std::string::npos,
+                     "structural diagnostics may identify the feed-nudge renderer family");
+              expect(physical_feed_nudge.diagnostics.find("FEED-NUDGE-ESCAPE") == std::string::npos,
+                     "feed-nudge diagnostics never inspect nested response values");
+              expect(physical_feed_nudge.diagnostics.find("Empieza buscando") == std::string::npos,
+                     "feed-nudge semantics do not depend on localized English/display text");
+
+              const auto hidden_feed_nudge = parse_scoped_home_response(R"JSON({
+                "contents": {"twoColumnBrowseResultsRenderer": {"tabs": [
+                  {"tabRenderer": {"selected": true, "content": {"richGridRenderer": {"contents": [
+                    {"mysteryHomeRenderer": {"content": {"richSectionRenderer": {"content": {
+                      "feedNudgeRenderer": {"title": {"simpleText": "Hidden"}}
+                    }}}}}
+                  ]}}}}
+                ]}}
+              })JSON");
+              expect(hidden_feed_nudge.page.has_value(), "unknown wrapper remains a valid opaque Home entry");
+              if (hidden_feed_nudge.page) {
+                  expect(hidden_feed_nudge.page->empty_reason == ttnx::core::HomeEmptyReason::None,
+                         "feed nudge inside unknown wrapper cannot set Home empty reason");
+              }
+
+              const auto unselected_feed_nudge = parse_scoped_home_response(R"JSON({
+                "contents": {"twoColumnBrowseResultsRenderer": {"tabs": [
+                  {"tabRenderer": {"selected": true, "content": {"richGridRenderer": {"contents": [
+                    {"richItemRenderer": {"content": {"videoRenderer": {
+                      "videoId": "SELECTED-NORMAL", "title": {"simpleText": "Selected normal"}
+                    }}}}
+                  ]}}}},
+                  {"tabRenderer": {"selected": false, "content": {"richGridRenderer": {"contents": [
+                    {"richSectionRenderer": {"content": {"feedNudgeRenderer": {}}}}
+                  ]}}}}
+                ]}}
+              })JSON");
+              expect(unselected_feed_nudge.page.has_value(), "selected normal Home ignores unselected nudge tab");
+              if (unselected_feed_nudge.page) {
+                  expect(find_id(*unselected_feed_nudge.page, "SELECTED-NORMAL") != nullptr,
+                         "selected normal result survives beside unselected feed nudge");
+                  expect(unselected_feed_nudge.page->empty_reason == ttnx::core::HomeEmptyReason::None,
+                         "unselected feed nudge cannot set Home empty reason");
+              }
+
+              const auto topbar_feed_nudge = parse_scoped_home_response(R"JSON({
+                "topbar": {"richSectionRenderer": {"content": {"feedNudgeRenderer": {}}}},
+                "contents": {"twoColumnBrowseResultsRenderer": {"tabs": [
+                  {"tabRenderer": {"selected": true, "content": {"richGridRenderer": {"contents": [
+                    {"richItemRenderer": {"content": {"videoRenderer": {
+                      "videoId": "HOME-NORMAL", "title": {"simpleText": "Home normal"}
+                    }}}}
+                  ]}}}}
+                ]}}
+              })JSON");
+              expect(topbar_feed_nudge.page.has_value(), "topbar nudge remains outside Home scope");
+              if (topbar_feed_nudge.page) {
+                  expect(topbar_feed_nudge.page->empty_reason == ttnx::core::HomeEmptyReason::None,
+                         "topbar feed nudge cannot set Home empty reason");
+              }
+
+              const auto mixed_feed_nudge = parse_scoped_home_response(R"JSON({
+                "contents": {"twoColumnBrowseResultsRenderer": {"tabs": [
+                  {"tabRenderer": {"selected": true, "content": {"richGridRenderer": {"contents": [
+                    {"richSectionRenderer": {"content": {"feedNudgeRenderer": {}}}},
+                    {"richItemRenderer": {"content": {"videoRenderer": {
+                      "videoId": "MIXED-NORMAL", "title": {"simpleText": "Normal wins"}
+                    }}}}
+                  ]}}}}
+                ]}}
+              })JSON");
+              expect(mixed_feed_nudge.page.has_value(), "mixed normal content plus feed nudge parses");
+              if (mixed_feed_nudge.page) {
+                  expect(find_id(*mixed_feed_nudge.page, "MIXED-NORMAL") != nullptr,
+                         "normal content survives mixed Home response");
+                  expect(mixed_feed_nudge.page->empty_reason == ttnx::core::HomeEmptyReason::None,
+                         "normal content wins over auxiliary feed-nudge marker");
+              }
+
+          ''' + anchor
+          assert anchor in s, 'home_response_tests insertion anchor changed'
+          s = s.replace(anchor, block, 1)
+          p.write_text(s)
+
+          # ---- Home model tests ----
+          p = Path('tests/home_model_tests.cpp')
+          s = p.read_text()
+          old = '''    using ttnx::core::HomeModel;
+              using ttnx::core::HomeViewState;
+          '''
+          new = '''    using ttnx::core::HomeEmptyReason;
+              using ttnx::core::HomeModel;
+              using ttnx::core::HomeViewState;
+          '''
+          assert old in s, 'home_model_tests using anchor changed'
+          s = s.replace(old, new, 1)
+          old = '''    const auto generation_six = model.begin_load();
+              ttnx::core::HomePage empty;
+              expect(model.apply_page(generation_six, std::move(empty)), "empty Home page applies");
+              expect(model.state() == HomeViewState::Empty, "empty Home page enters Empty");
+
+              model.reset();
+          '''
+          new = '''    const auto generation_six = model.begin_load();
+              ttnx::core::HomePage empty;
+              expect(model.apply_page(generation_six, std::move(empty)), "empty Home page applies");
+              expect(model.state() == HomeViewState::Empty, "empty Home page enters Empty");
+              expect(model.empty_reason() == HomeEmptyReason::None,
+                     "ordinary empty Home has no typed provider reason");
+
+              const auto generation_seven = model.begin_load();
+              ttnx::core::HomePage nudge;
+              nudge.empty_reason = HomeEmptyReason::FeedNudge;
+              expect(model.apply_page(generation_seven, std::move(nudge)),
+                     "typed feed-nudge Home page applies");
+              expect(model.state() == HomeViewState::Empty,
+                     "feed-nudge Home remains an empty view state");
+              expect(model.empty_reason() == HomeEmptyReason::FeedNudge,
+                     "model preserves typed feed-nudge reason independently of Views");
+
+              const auto generation_eight = model.begin_load();
+              auto mixed = page_with({video("NORMAL", "Normal wins")});
+              mixed.empty_reason = HomeEmptyReason::FeedNudge;
+              expect(model.apply_page(generation_eight, std::move(mixed)),
+                     "mixed Home page applies");
+              expect(model.state() == HomeViewState::Ready,
+                     "normal results win over empty-state marker");
+              expect(model.empty_reason() == HomeEmptyReason::None,
+                     "model clears feed-nudge marker when normal results exist");
+
+              model.reset();
+          '''
+          assert old in s, 'home_model_tests empty-state anchor changed'
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+
+          # ---- Documentation ----
+          p = Path('docs/PROJECT_STATUS.md')
+          s = p.read_text()
+          old = '''The real-Switch guest bootstrap, startup recovery, and complete M2 Search slice are physically accepted. Hardware-tested Search head `428497c90be6e768c607e45c68171827d74f0faf` closes the continuation focus gate: explicit Load more appends successfully, focus lands on the first newly-loaded result, the viewport follows, A-again collapses inline detail, sidebar navigation remains intact, and the underlying pixel-scroll foundation was previously stress-tested through 156 loaded results. Development has now moved to the first live guest Home page. Home is implemented as an explicit post-Guest-ready action with a scoped Home parser/model and text-only UI; it remains pending physical Switch acceptance.'''
+          new = '''The real-Switch guest bootstrap, startup recovery, and complete M2 Search slice are physically accepted. Hardware-tested Search head `428497c90be6e768c607e45c68171827d74f0faf` closes the continuation focus gate. The explicit guest Home request path is now also physically proven at diagnostic head `7b4993f7871ae71cb8ca44e30e51f876f8133cc2`: `FEwhat_to_watch` returned the selected two-column Home scope and the terminal `feedNudgeRenderer` guest empty state with zero normal Video/Channel/Playlist results and zero observed blocked families. Normal Home-result rendering remains host-validated but has not been physically observed. The next M2 implementation surface is Channel pages.'''
+          assert old in s, 'PROJECT_STATUS phase paragraph changed'
+          s = s.replace(old, new, 1)
+          old = '''Home is **IMPLEMENTED / HOST-VALIDATED / PENDING PHYSICAL SWITCH TEST**. It is not yet called hardware accepted.'''
+          new = '''The **Home request path is PHYSICALLY ACCEPTED** at diagnostic head `7b4993f7871ae71cb8ca44e30e51f876f8133cc2`. Real hardware observed a valid YouTube guest empty Home: selected `richGridRenderer -> richSectionRenderer -> feedNudgeRenderer`, zero normal results, and no Shorts/ad/shopping/promo families. `feedNudgeRenderer` is now a typed terminal non-content empty state rather than a parser failure. Normal Video/Channel/Playlist Home rendering remains **HOST-VALIDATED / NOT PHYSICALLY OBSERVED**.'''
+          assert old in s, 'PROJECT_STATUS Home acceptance sentence changed'
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+
+          p = Path('docs/HOME_GUEST_BROWSING.md')
+          s = p.read_text()
+          s += '''\n\n## Physical guest empty-state acceptance\n\nDiagnostic head `7b4993f7871ae71cb8ca44e30e51f876f8133cc2` proved the real Switch request path reaches the selected `FEwhat_to_watch` Home scope. The physical response was `twoColumnBrowseResultsRenderer -> selected tabRenderer -> richGridRenderer -> richSectionRenderer -> feedNudgeRenderer`, with zero normal Video/Channel/Playlist results and no observed Shorts/ad/shopping/promo renderer families.\n\n`feedNudgeRenderer` is treated as a reviewed **terminal non-content** renderer and mapped to renderer-independent `HomeEmptyReason::FeedNudge`. Recognition is structural and localization-independent; no English title/subtitle text is parsed for semantics. The parser does not descend through the feed nudge, and feed nudges hidden in unknown/blocked/unselected/out-of-scope containers cannot set the typed reason. A nudge-only page is valid, empty, and terminal with no continuation. If normal reviewed results coexist, those results win and the empty marker is cleared.\n\nThe normal Switch UI presents a friendly guest-empty message rather than a structural diagnostic dump. Diagnostics remain available only for genuinely unsupported/unknown responses. This accepts the **Home request path and provider empty state**, not normal-result rendering; normal Home Video/Channel/Playlist rows are still host-tested but not physically observed. Channel pages are the next M2 implementation surface.\n'''
+          p.write_text(s)
+
+          p = Path('docs/HARDWARE_GATES.md')
+          s = p.read_text()
+          s += '''\n\n### Guest Home request path + feed-nudge empty state — physically accepted\n\nDiagnostic NRO head: `7b4993f7871ae71cb8ca44e30e51f876f8133cc2`\n\nPhysical Switch result: **HOME REQUEST PATH ACCEPTED; VALID YOUTUBE GUEST EMPTY STATE OBSERVED**. Guest bootstrap, borrowed sockets, SSL and verified HTTPS succeeded. Explicit `Load Home` returned one selected two-column Home tab whose observed structural families were exactly `richGridRenderer:1`, `richSectionRenderer:1`, and `feedNudgeRenderer:1`; zero Shorts/reels, ads/promoted, shopping/product, premium/promo, or continuation renderers were observed. No normal Video/Channel/Playlist Home result was provided by YouTube in this session.\n\n`feedNudgeRenderer` is now a reviewed terminal non-content empty state represented as `HomeEmptyReason::FeedNudge`. It is recognized only at the selected primary Home structural position, never recursively. Its payload is not traversed, English/localized display text is irrelevant to recognition, unknown wrappers remain opaque, and a nudge-only Home cannot expose a continuation. Normal content wins if both are legitimately present.\n\nThis gate does **not** claim hardware acceptance for normal Home-result rendering because the provider returned zero normal results. Normal Home Video/Channel/Playlist normalization and UI remain host-validated. The next M2 implementation surface is Channel pages, followed by Playlist pages.\n'''
+          p.write_text(s)
+
+          p = Path('docs/ROADMAP.md')
+          s = p.read_text()
+          old = '''- [x] Implement scoped live guest Home first-page request/parser/model/text UI
+          - [ ] Real-hardware Home first-page acceptance
+          - [ ] Home continuation after first-page acceptance
+          - [ ] Channel pages
+          - [ ] Playlist pages
+          - [ ] Real-hardware guest browsing acceptance
+          '''
+          new = '''- [x] Implement scoped live guest Home first-page request/parser/model/text UI
+          - [x] Real-hardware Home request path + valid `feedNudgeRenderer` guest empty-state acceptance at `7b4993f7871ae71cb8ca44e30e51f876f8133cc2`
+          - [ ] Real-hardware normal Home Video/Channel/Playlist rendering when YouTube actually provides normal guest results
+          - [ ] Home continuation after normal-content Home is physically observable/accepted
+          - [ ] Channel pages
+          - [ ] Playlist pages
+          - [ ] Real-hardware guest browsing acceptance
+          '''
+          assert old in s, 'ROADMAP remaining guest surfaces block changed'
+          s = s.replace(old, new, 1)
+          old = '''## Active Home diagnostic gate
+
+          Before Home continuation, channel pages or playlist pages, identify the real guest Home renderer/container family returned on Switch using bounded structural diagnostics. Do not widen `www.youtube.com:443`, fetch thumbnails, add OAuth, or loosen the Shorts/ad/shopping firewall for this gate.
+          '''
+          new = '''## Current gate — Channel pages
+
+          The physical Home diagnostic gate is closed: `7b4993f7871ae71cb8ca44e30e51f876f8133cc2` proved the `FEwhat_to_watch` request path and a valid terminal `feedNudgeRenderer` guest empty state. Normal Home content was not provided by YouTube, so normal-result rendering remains host-validated rather than hardware-accepted. Do not fake Trending as Home. Preserve the exact `www.youtube.com:443` allowlist, accepted Search baseline, typed Home empty state, remote-thumbnail block, and hard Shorts/ad/shopping firewall while implementing Channel pages next.
+          '''
+          assert old in s, 'ROADMAP active diagnostic gate block changed'
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+
+      - name: Host configure, build, and tests
+        shell: bash
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j2
+          ctest --test-dir build --output-on-failure
+
+      - name: Verify patch invariants
+        shell: bash
+        run: |
+          grep -q 'HomeEmptyReason::FeedNudge' src/core/home_response.cpp
+          grep -q "YouTube isn't providing guest Home recommendations" switch/source/main.cpp
+          grep -q 'www.youtube.com' src/core/outbound_policy.cpp
+          ! grep -R 'feedNudgeRenderer.*videoRenderer' -n src/core || true
+          git diff --check
+
+      - name: Commit and push
+        shell: bash
+        run: |
+          git config user.name "GlitchedZeus"
+          git config user.email "user91746@protonmail.com"
+          git add include/tizentube_nx/core/home_model.hpp \
+                  src/core/home_model.cpp \
+                  src/core/home_response.cpp \
+                  switch/source/main.cpp \
+                  tests/home_response_tests.cpp \
+                  tests/home_model_tests.cpp \
+                  docs/PROJECT_STATUS.md \
+                  docs/HOME_GUEST_BROWSING.md \
+                  docs/HARDWARE_GATES.md \
+                  docs/ROADMAP.md
+          git diff --cached --check
+          git diff --cached --stat
+          git commit -m "home: recognize guest feed-nudge empty state"
+          git push origin HEAD:feature/m2-guest-browsing
