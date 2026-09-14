@@ -25,3 +25,11 @@ jobs:
           name: tizentube-nx-nro
           path: tizentube_nx.nro
           if-no-files-found: error
+      - name: Upload exact debug symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: tizentube-nx-debug-symbols
+          path: |
+            tizentube_nx.elf
+            build-switch/tizentube_nx.map
+          if-no-files-found: error

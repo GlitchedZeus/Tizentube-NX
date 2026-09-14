@@ -22,8 +22,9 @@ struct ContentItem {
 };
 
 struct FilterPolicy {
-    // Non-negotiable project rule. Kept explicit in the policy object so tests
-    // can guarantee it cannot silently regress during feed/parser refactors.
+    // Shorts and promoted/ad content are hard project invariants. These fields
+    // stay in the policy shape so future settings migrations cannot accidentally
+    // reinterpret old data as permission to surface them.
     bool hide_shorts{true};
     bool hide_promoted{true};
     bool hide_shopping{true};
