@@ -33,6 +33,7 @@ Reference projects have distinct roles. Do not treat every upstream project as a
 - **ReVanced is not a current TizenTube NX philosophy/design reference.** Do not use it as the default source for product direction in new planning/docs.
 - Do not blindly port Android bytecode patches or implementation details. Translate useful behavior into independent native TizenTube NX architecture.
 - No reference project may weaken the no-Shorts invariant.
+- Before M3 player/extractor work, read `docs/M3_PLAYBACK_EXTRACTION_RESEARCH_2026-09.md`. Its current architecture direction is Switch-native libmpv/FFmpeg/Deko3D/nvtegra playback behind a project-owned player interface, separate adaptive video/audio support, and a provider-neutral extraction boundary rather than a small hard-coded C++ YouTube parser.
 - See `docs/PRODUCT_PHILOSOPHY.md` and `docs/MORPHE_REFERENCE.md` before major player/ad-blocking/SponsorBlock/polish work.
 
 ## Engineering rules
