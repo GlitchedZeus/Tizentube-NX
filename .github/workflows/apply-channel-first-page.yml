@@ -1,0 +1,1793 @@
+name: apply-channel-first-page
+
+on:
+  push:
+    branches:
+      - feature/m2-guest-browsing
+    paths:
+      - .github/workflows/apply-channel-first-page.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-build-commit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/m2-guest-browsing
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Assert accepted starting history
+        shell: bash
+        run: |
+          git merge-base --is-ancestor ca8467e459389c22afee4f26fbebcddc858634a8 HEAD
+          test "$(git status --porcelain | wc -l)" -eq 0
+
+      - name: Apply Channel first-page implementation
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def write(path, content):
+              p = Path(path)
+              p.parent.mkdir(parents=True, exist_ok=True)
+              p.write_text(content)
+
+          write('include/tizentube_nx/core/channel_model.hpp', r'''#pragma once
+
+#include "tizentube_nx/core/search_result.hpp"
+
+#include <cstdint>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace ttnx::core {
+
+struct ChannelIdentity {
+    std::string browse_id;
+    std::string title;
+};
+
+struct ChannelMetadata {
+    std::string title;
+    std::string handle;
+    std::string subscriber_text;
+    std::string description;
+    std::string canonical_url;
+    std::vector<ThumbnailCandidate> thumbnails;
+};
+
+struct ChannelSection {
+    std::string title;
+    std::vector<BrowseResult> results;
+};
+
+struct ChannelPage {
+    ChannelIdentity identity;
+    ChannelMetadata metadata;
+    std::vector<ChannelSection> sections;
+    std::vector<BrowseResult> results;
+    // Architectural seam only. M2 Channel first-page UI does not expose it.
+    std::string continuation;
+
+    [[nodiscard]] bool has_more() const noexcept { return !continuation.empty(); }
+};
+
+enum class ChannelViewState {
+    Idle,
+    Loading,
+    Ready,
+    Empty,
+    Error,
+};
+
+// UI-thread-owned Channel state. Workers publish only normalized ChannelPage data
+// plus the generation captured by begin_load(); Borealis Views never enter here.
+class ChannelModel {
+public:
+    [[nodiscard]] std::uint64_t begin_load(ChannelIdentity identity);
+    [[nodiscard]] bool apply_page(std::uint64_t generation, ChannelPage page);
+    [[nodiscard]] bool fail(std::uint64_t generation, std::string error);
+    void reset();
+
+    [[nodiscard]] bool select(std::string_view identity);
+    void clear_selection();
+
+    [[nodiscard]] std::uint64_t generation() const noexcept { return generation_; }
+    [[nodiscard]] ChannelViewState state() const noexcept { return state_; }
+    [[nodiscard]] const ChannelIdentity& identity() const noexcept { return identity_; }
+    [[nodiscard]] const ChannelPage& page() const noexcept { return page_; }
+    [[nodiscard]] const ChannelMetadata& metadata() const noexcept { return page_.metadata; }
+    [[nodiscard]] const std::vector<BrowseResult>& results() const noexcept { return page_.results; }
+    [[nodiscard]] const std::vector<ChannelSection>& sections() const noexcept { return page_.sections; }
+    [[nodiscard]] const std::string& selected_identity() const noexcept { return selected_identity_; }
+    [[nodiscard]] const std::string& error() const noexcept { return error_; }
+
+private:
+    [[nodiscard]] bool contains_identity(std::string_view identity) const;
+
+    std::uint64_t generation_{0};
+    ChannelViewState state_{ChannelViewState::Idle};
+    ChannelIdentity identity_;
+    ChannelPage page_;
+    std::string selected_identity_;
+    std::string error_;
+};
+
+}  // namespace ttnx::core
+''')
+
+          write('src/core/channel_model.cpp', r'''#include "tizentube_nx/core/channel_model.hpp"
+
+#include "tizentube_nx/core/search_result.hpp"
+
+#include <algorithm>
+#include <utility>
+
+namespace ttnx::core {
+namespace {
+
+constexpr std::size_t kMaxChannelErrorBytes = 512;
+
+std::string bounded_error(std::string error) {
+    if (error.size() > kMaxChannelErrorBytes) error.resize(kMaxChannelErrorBytes);
+    return error;
+}
+
+}  // namespace
+
+std::uint64_t ChannelModel::begin_load(ChannelIdentity identity) {
+    ++generation_;
+    state_ = ChannelViewState::Loading;
+    identity_ = std::move(identity);
+    page_ = {};
+    page_.identity = identity_;
+    selected_identity_.clear();
+    error_.clear();
+    return generation_;
+}
+
+bool ChannelModel::apply_page(std::uint64_t generation, ChannelPage page) {
+    if (generation != generation_ || state_ != ChannelViewState::Loading) return false;
+
+    if (page.identity.browse_id.empty()) page.identity.browse_id = identity_.browse_id;
+    if (page.identity.title.empty()) page.identity.title = identity_.title;
+    if (page.metadata.title.empty()) page.metadata.title = page.identity.title;
+    identity_ = page.identity;
+    page_ = std::move(page);
+    state_ = page_.results.empty() ? ChannelViewState::Empty : ChannelViewState::Ready;
+    error_.clear();
+
+    if (!selected_identity_.empty() && !contains_identity(selected_identity_)) {
+        selected_identity_.clear();
+    }
+    return true;
+}
+
+bool ChannelModel::fail(std::uint64_t generation, std::string error) {
+    if (generation != generation_ || state_ != ChannelViewState::Loading) return false;
+    state_ = ChannelViewState::Error;
+    error_ = bounded_error(std::move(error));
+    return true;
+}
+
+void ChannelModel::reset() {
+    ++generation_;
+    state_ = ChannelViewState::Idle;
+    identity_ = {};
+    page_ = {};
+    selected_identity_.clear();
+    error_.clear();
+}
+
+bool ChannelModel::select(std::string_view identity) {
+    if (identity.empty() || !contains_identity(identity)) return false;
+    selected_identity_ = std::string(identity);
+    return true;
+}
+
+void ChannelModel::clear_selection() {
+    selected_identity_.clear();
+}
+
+bool ChannelModel::contains_identity(std::string_view identity) const {
+    return std::any_of(page_.results.begin(), page_.results.end(), [&](const BrowseResult& result) {
+        return browse_result_identity(result) == identity;
+    });
+}
+
+}  // namespace ttnx::core
+''')
+
+          write('include/tizentube_nx/youtube/channel_response.hpp', r'''#pragma once
+
+#include "tizentube_nx/core/channel_model.hpp"
+#include "tizentube_nx/core/content_filter.hpp"
+
+#include <optional>
+#include <string>
+#include <string_view>
+
+namespace ttnx::youtube {
+
+struct ChannelResponseParseResult {
+    std::optional<core::ChannelPage> page;
+    std::string error;
+    // Bounded structural family names/counts only. Never raw response values,
+    // titles, IDs, continuation tokens, visitor data, cookies or URLs.
+    std::string diagnostics;
+
+    [[nodiscard]] explicit operator bool() const noexcept { return page.has_value(); }
+};
+
+// Network-facing Channel parser boundary. Only the provider-selected browse tab
+// and explicitly reviewed structural wrappers are traversed. Unknown/blocked
+// wrappers stay opaque and unselected tabs/topbar/menu metadata remain out of scope.
+[[nodiscard]] ChannelResponseParseResult parse_scoped_channel_response(
+    std::string_view response_body,
+    std::string_view expected_channel_id,
+    const core::FilterPolicy& policy = {});
+
+}  // namespace ttnx::youtube
+''')
+
+          write('include/tizentube_nx/youtube/guest_channel.hpp', r'''#pragma once
+
+#include "tizentube_nx/core/channel_model.hpp"
+#include "tizentube_nx/core/guest_browse.hpp"
+#include "tizentube_nx/net/http.hpp"
+#include "tizentube_nx/youtube/guest_api.hpp"
+
+#include <optional>
+#include <string>
+
+namespace ttnx::youtube {
+
+struct GuestChannelResult {
+    std::optional<core::ChannelPage> page;
+    std::string error;
+    std::string diagnostics;
+
+    [[nodiscard]] explicit operator bool() const noexcept { return page.has_value(); }
+};
+
+// Explicit first-page Channel boundary. Channel continuation remains disabled
+// until the first-page shape is physically accepted.
+[[nodiscard]] GuestChannelResult execute_guest_channel(
+    net::HttpClient& http,
+    const GuestSession& session,
+    const core::GuestRequest& request,
+    const core::FilterPolicy& policy = {});
+
+}  // namespace ttnx::youtube
+''')
+
+          write('src/core/guest_channel.cpp', r'''#include "tizentube_nx/youtube/guest_channel.hpp"
+
+#include "tizentube_nx/core/url.hpp"
+#include "tizentube_nx/net/diagnostics.hpp"
+#include "tizentube_nx/youtube/channel_response.hpp"
+
+#include <utility>
+
+namespace ttnx::youtube {
+namespace {
+
+GuestChannelResult fail(std::string error) {
+    GuestChannelResult result;
+    result.error = std::move(error);
+    return result;
+}
+
+}  // namespace
+
+GuestChannelResult execute_guest_channel(
+    net::HttpClient& http,
+    const GuestSession& session,
+    const core::GuestRequest& request,
+    const core::FilterPolicy& policy) {
+    if (request.surface != core::BrowseSurface::Channel ||
+        request.is_continuation() ||
+        !core::valid_guest_request(request) ||
+        !core::is_valid_channel_id(request.value)) {
+        return fail("Guest Channel request is invalid.");
+    }
+    if (!session.usable()) return fail("Guest session is not usable.");
+
+    const auto http_request = make_browse_request(session, request.value);
+    if (!http_request) return fail("Could not build guest Channel request.");
+
+    const auto http_result = http.perform(*http_request);
+    if (!http_result.ok) {
+        return fail(net::safe_public_diagnostic(
+            http_result.error,
+            "Guest Channel HTTP request failed."));
+    }
+    if (http_result.response.status_code < 200 || http_result.response.status_code >= 300) {
+        return fail("Guest Channel returned a non-success HTTP status.");
+    }
+
+    auto parsed = parse_scoped_channel_response(
+        http_result.response.body,
+        request.value,
+        policy);
+    if (!parsed || !parsed.page) {
+        auto result = fail(parsed.error.empty()
+            ? std::string{"Guest Channel response was rejected."}
+            : net::safe_public_diagnostic(
+                  parsed.error,
+                  "Guest Channel response was rejected."));
+        result.diagnostics = std::move(parsed.diagnostics);
+        return result;
+    }
+
+    GuestChannelResult result;
+    result.page = std::move(parsed.page);
+    result.diagnostics = std::move(parsed.diagnostics);
+    return result;
+}
+
+}  // namespace ttnx::youtube
+''')
+
+          write('tests/channel_model_tests.cpp', r'''#include "tizentube_nx/core/channel_model.hpp"
+
+#include <cstdlib>
+#include <iostream>
+#include <string>
+
+namespace {
+
+int failures = 0;
+void expect(bool condition, const char* message) {
+    if (!condition) {
+        ++failures;
+        std::cerr << "FAIL: " << message << '\n';
+    }
+}
+
+ttnx::core::BrowseResult video(std::string id, std::string title) {
+    ttnx::core::BrowseResult result;
+    result.kind = ttnx::core::BrowseResultKind::Video;
+    result.id = std::move(id);
+    result.title = std::move(title);
+    return result;
+}
+
+ttnx::core::ChannelPage page_with(std::string browse_id, std::initializer_list<ttnx::core::BrowseResult> results) {
+    ttnx::core::ChannelPage page;
+    page.identity.browse_id = std::move(browse_id);
+    page.metadata.title = "Parsed Channel";
+    for (const auto& result : results) page.results.push_back(result);
+    return page;
+}
+
+}  // namespace
+
+int main() {
+    using namespace ttnx::core;
+
+    ChannelModel model;
+    expect(model.state() == ChannelViewState::Idle, "Channel starts idle");
+
+    ChannelIdentity a{"UCabcdefghijklmnopqrstuv", "Search Channel A"};
+    const auto g1 = model.begin_load(a);
+    expect(model.state() == ChannelViewState::Loading, "begin_load enters Loading");
+    expect(model.identity().browse_id == a.browse_id, "requested identity is retained while loading");
+
+    auto page = page_with(a.browse_id, {video("abcdefghijk", "Alpha")});
+    expect(model.apply_page(g1, std::move(page)), "matching generation applies Channel page");
+    expect(model.state() == ChannelViewState::Ready, "non-empty Channel enters Ready");
+    expect(model.results().size() == 1, "normalized results retained");
+    expect(model.metadata().title == "Parsed Channel", "parsed Channel metadata retained");
+
+    const auto selected = browse_result_identity(model.results()[0]);
+    expect(model.select(selected), "Channel selection accepts normalized identity");
+    expect(model.selected_identity() == selected, "Channel selection is View-independent");
+    model.clear_selection();
+    expect(model.selected_identity().empty(), "Channel selection clears non-destructively");
+
+    ChannelIdentity b{"UC1234567890123456789012", "Channel B"};
+    const auto stale = model.begin_load(b);
+    ChannelIdentity c{"UC2345678901234567890123", "Channel C"};
+    const auto fresh = model.begin_load(c);
+    expect(!model.apply_page(stale, page_with(b.browse_id, {video("bbbbbbbbbbb", "Stale")})),
+           "stale Channel A/B completion cannot overwrite newer request");
+    expect(model.apply_page(fresh, page_with(c.browse_id, {video("ccccccccccc", "Fresh")})),
+           "newest Channel completion applies");
+    expect(model.results().size() == 1 && model.results()[0].id == "ccccccccccc",
+           "fresh Channel result wins");
+
+    const auto g4 = model.begin_load(c);
+    ChannelPage empty;
+    empty.identity = c;
+    expect(model.apply_page(g4, std::move(empty)), "valid empty Channel page applies");
+    expect(model.state() == ChannelViewState::Empty, "valid empty Channel enters Empty");
+
+    const auto g5 = model.begin_load(c);
+    expect(model.fail(g5, std::string(800, 'x')), "current Channel failure applies");
+    expect(model.state() == ChannelViewState::Error, "Channel failure enters Error");
+    expect(model.error().size() == 512, "Channel error text is bounded");
+
+    model.reset();
+    expect(model.state() == ChannelViewState::Idle, "Channel reset returns Idle");
+    expect(model.results().empty(), "Channel reset clears result state");
+
+    if (failures == 0) {
+        std::cout << "All Channel model tests passed.\n";
+        return EXIT_SUCCESS;
+    }
+    return EXIT_FAILURE;
+}
+''')
+
+          write('tests/channel_response_tests.cpp', r'''#include "tizentube_nx/youtube/channel_response.hpp"
+
+#include <cstdlib>
+#include <iostream>
+#include <string>
+
+namespace {
+
+int failures = 0;
+void expect(bool condition, const char* message) {
+    if (!condition) {
+        ++failures;
+        std::cerr << "FAIL: " << message << '\n';
+    }
+}
+
+constexpr const char* kChannelId = "UCabcdefghijklmnopqrstuv";
+
+const ttnx::core::BrowseResult* find_id(const ttnx::core::ChannelPage& page, const std::string& id) {
+    for (const auto& result : page.results) if (result.id == id) return &result;
+    return nullptr;
+}
+
+std::string normal_fixture() {
+    return R"JSON({
+      "topbar": {"desktopTopbarRenderer": {"videoRenderer": {
+        "videoId": "topbarxxxxx", "title": {"simpleText": "Never"}
+      }}},
+      "metadata": {"channelMetadataRenderer": {
+        "title": "Fixture Channel",
+        "externalId": "UCabcdefghijklmnopqrstuv",
+        "description": "A bounded channel description.",
+        "vanityChannelUrl": "https://www.youtube.com/@fixturechannel"
+      }},
+      "header": {"c4TabbedHeaderRenderer": {
+        "channelId": "UCabcdefghijklmnopqrstuv",
+        "title": "Fixture Channel",
+        "channelHandleText": {"simpleText": "@fixturechannel"},
+        "subscriberCountText": {"simpleText": "12.3K subscribers"}
+      }},
+      "contents": {"twoColumnBrowseResultsRenderer": {"tabs": [
+        {"tabRenderer": {
+          "selected": false,
+          "content": {"richGridRenderer": {"contents": [
+            {"richItemRenderer": {"content": {"videoRenderer": {
+              "videoId": "unselectedx", "title": {"simpleText": "Unselected fake"}
+            }}}}
+          ]}}
+        }},
+        {"tabRenderer": {
+          "selected": true,
+          "content": {"richGridRenderer": {"contents": [
+            {"richItemRenderer": {"content": {"videoRenderer": {
+              "videoId": "abcdefghijk",
+              "title": {"simpleText": "Normal Channel Video"},
+              "longBylineText": {"runs": [{"text": "Fixture Channel", "navigationEndpoint": {"browseEndpoint": {"browseId": "UCabcdefghijklmnopqrstuv"}}}]},
+              "lengthText": {"simpleText": "10:20"},
+              "viewCountText": {"simpleText": "1,234 views"},
+              "publishedTimeText": {"simpleText": "3 days ago"}
+            }}}},
+            {"richItemRenderer": {"content": {"playlistRenderer": {
+              "playlistId": "PLCHANNEL123",
+              "title": {"simpleText": "Normal Playlist"},
+              "shortBylineText": {"runs": [{"text": "Fixture Channel"}]},
+              "videoCountText": {"simpleText": "12 videos"}
+            }}}},
+            {"richItemRenderer": {"content": {"channelRenderer": {
+              "channelId": "UC1234567890123456789012",
+              "title": {"simpleText": "Related Channel"}
+            }}}},
+            {"richItemRenderer": {"content": {"lockupViewModel": {
+              "contentType": "LOCKUP_CONTENT_TYPE_VIDEO",
+              "contentId": "lmnopqrstuv",
+              "metadata": {"lockupMetadataViewModel": {"title": {"content": "Modern Channel Video"}}},
+              "rendererContext": {"commandContext": {"onTap": {"innertubeCommand": {"watchEndpoint": {"videoId": "lmnopqrstuv"}}}}}
+            }}}},
+            {"richSectionRenderer": {"content": {"reelShelfRenderer": {
+              "items": [{"videoRenderer": {"videoId": "shortescape1", "title": {"simpleText": "Short escape"}}}]
+            }}}},
+            {"adSlotRenderer": {"content": {"videoRenderer": {
+              "videoId": "adescape123", "title": {"simpleText": "Ad escape"}
+            }}}},
+            {"productRenderer": {"content": {"videoRenderer": {
+              "videoId": "shopescape1", "title": {"simpleText": "Shop escape"}
+            }}}},
+            {"mealbarPromoRenderer": {"content": {"videoRenderer": {
+              "videoId": "promoescape", "title": {"simpleText": "Promo escape"}
+            }}}},
+            {"mysteryChannelRenderer": {"content": {"videoRenderer": {
+              "videoId": "opaquevideo1", "title": {"simpleText": "Opaque escape"}
+            }}}},
+            {"richItemRenderer": {"content": {"videoRenderer": {
+              "videoId": "shortlookal",
+              "title": {"simpleText": "Disguised Short"},
+              "navigationEndpoint": {"reelWatchEndpoint": {"videoId": "shortlookal"}}
+            }}}},
+            {"richItemRenderer": {"content": {"videoRenderer": {
+              "videoId": "abcdefghijk", "title": {"simpleText": "Duplicate"}
+            }}}},
+            {"continuationItemRenderer": {"continuationEndpoint": {"continuationCommand": {"token": "CHANNEL-NEXT"}}}
+          ]}}
+        }}
+      ]}}
+    })JSON";
+}
+
+}  // namespace
+
+int main() {
+    using ttnx::core::BrowseResultKind;
+    using ttnx::youtube::parse_scoped_channel_response;
+
+    const auto parsed = parse_scoped_channel_response(normal_fixture(), kChannelId);
+    expect(parsed.page.has_value(), "selected Channel tab parses");
+    expect(parsed.diagnostics.find("Channel diag:") != std::string::npos,
+           "Channel diagnostics are clearly scoped");
+    expect(parsed.diagnostics.find("selected=1") != std::string::npos,
+           "Channel diagnostics count selected tabs");
+    expect(parsed.diagnostics.find("mysteryChannelRenderer") != std::string::npos,
+           "Channel diagnostics report bounded opaque family names");
+    expect(parsed.diagnostics.find("CHANNEL-NEXT") == std::string::npos,
+           "Channel diagnostics never expose continuation token values");
+    expect(parsed.diagnostics.find("Normal Channel Video") == std::string::npos,
+           "Channel diagnostics never expose titles");
+
+    if (parsed.page) {
+        const auto& page = *parsed.page;
+        expect(page.identity.browse_id == kChannelId, "Channel identity anchored to requested browse id");
+        expect(page.metadata.title == "Fixture Channel", "Channel metadata title parsed");
+        expect(page.metadata.handle == "@fixturechannel", "Channel handle parsed structurally");
+        expect(page.metadata.subscriber_text == "12.3K subscribers", "subscriber display text preserved without numeric fabrication");
+        expect(page.metadata.description == "A bounded channel description.", "Channel description parsed from reviewed metadata renderer");
+        expect(page.metadata.canonical_url == "https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv",
+               "Channel canonical URL is generated locally from stable ID");
+        expect(page.results.size() == 4, "normal video/playlist/channel/lockup survive with duplicate removed");
+        expect(page.continuation == "CHANNEL-NEXT", "Channel continuation seam retained but not exposed in UI");
+        expect(find_id(page, "abcdefghijk") != nullptr, "normal Channel video survives");
+        const auto* playlist = find_id(page, "PLCHANNEL123");
+        expect(playlist && playlist->kind == BrowseResultKind::Playlist,
+               "normal Channel playlist survives");
+        const auto* related = find_id(page, "UC1234567890123456789012");
+        expect(related && related->kind == BrowseResultKind::Channel,
+               "legitimate Channel result survives reviewed scope");
+        expect(find_id(page, "lmnopqrstuv") != nullptr, "modern lockup normal video survives");
+        expect(find_id(page, "unselectedx") == nullptr, "unselected Channel tab remains isolated");
+        expect(find_id(page, "shortescape1") == nullptr, "Shorts shelf remains opaque");
+        expect(find_id(page, "adescape123") == nullptr, "ad subtree remains opaque");
+        expect(find_id(page, "shopescape1") == nullptr, "shopping subtree remains opaque");
+        expect(find_id(page, "promoescape") == nullptr, "Premium/promo subtree remains opaque");
+        expect(find_id(page, "opaquevideo1") == nullptr, "unknown wrapper remains opaque");
+        expect(find_id(page, "shortlookal") == nullptr, "disguised reel endpoint fails closed");
+        expect(find_id(page, "topbarxxxxx") == nullptr, "topbar renderer-shaped content remains out of scope");
+    }
+
+    const auto empty = parse_scoped_channel_response(R"JSON({
+      "contents": {"twoColumnBrowseResultsRenderer": {"tabs": [
+        {"tabRenderer": {"selected": true, "content": {"richGridRenderer": {"contents": []}}}}
+      ]}}
+    })JSON", kChannelId);
+    expect(empty.page.has_value(), "valid empty selected Channel tab parses as empty page");
+    if (empty.page) expect(empty.page->results.empty(), "valid empty Channel has no invented content");
+
+    const auto unknown_only = parse_scoped_channel_response(R"JSON({
+      "contents": {"twoColumnBrowseResultsRenderer": {"tabs": [
+        {"tabRenderer": {"selected": true, "content": {"richGridRenderer": {"contents": [
+          {"unknownOnlyRenderer": {"content": {"videoRenderer": {"videoId": "abcdefghijk", "title": {"simpleText": "Do not recurse"}}}}}
+        ]}}}}
+      ]}}
+    })JSON", kChannelId);
+    expect(!unknown_only.page.has_value(), "unknown-only selected Channel structure is classified unsupported");
+    expect(unknown_only.diagnostics.find("unknownOnlyRenderer") != std::string::npos,
+           "unsupported Channel returns bounded family diagnostic");
+    expect(unknown_only.diagnostics.find("abcdefghijk") == std::string::npos,
+           "unsupported Channel diagnostic does not leak nested ID");
+
+    const auto no_selected = parse_scoped_channel_response(R"JSON({
+      "contents": {"twoColumnBrowseResultsRenderer": {"tabs": [
+        {"tabRenderer": {"selected": false, "content": {"richGridRenderer": {"contents": []}}}}
+      ]}}
+    })JSON", kChannelId);
+    expect(!no_selected.page.has_value(), "Channel parser does not pretend an unselected tab is selected");
+
+    const auto two_selected = parse_scoped_channel_response(R"JSON({
+      "contents": {"twoColumnBrowseResultsRenderer": {"tabs": [
+        {"tabRenderer": {"selected": true, "content": {"richGridRenderer": {"contents": []}}}},
+        {"tabRenderer": {"selected": true, "content": {"richGridRenderer": {"contents": []}}}}
+      ]}}
+    })JSON", kChannelId);
+    expect(!two_selected.page.has_value(), "multiple selected Channel tabs fail closed");
+
+    const auto malformed = parse_scoped_channel_response("{broken", kChannelId);
+    expect(!malformed.page.has_value(), "malformed Channel response rejected separately");
+
+    const auto wrong_identity = parse_scoped_channel_response(normal_fixture(), "not-a-channel");
+    expect(!wrong_identity.page.has_value(), "invalid requested Channel identity rejected before parsing");
+
+    if (failures == 0) {
+        std::cout << "All Channel response tests passed.\n";
+        return EXIT_SUCCESS;
+    }
+    return EXIT_FAILURE;
+}
+''')
+
+          write('tests/guest_channel_tests.cpp', r'''#include "tizentube_nx/youtube/guest_channel.hpp"
+
+#include <cstdlib>
+#include <iostream>
+#include <string>
+
+namespace {
+
+int failures = 0;
+void expect(bool condition, const char* message) {
+    if (!condition) {
+        ++failures;
+        std::cerr << "FAIL: " << message << '\n';
+    }
+}
+
+class FakeHttpClient final : public ttnx::net::HttpClient {
+public:
+    int calls{0};
+    ttnx::net::HttpRequest last_request;
+    ttnx::net::HttpResult next_result;
+
+    ttnx::net::HttpResult perform(const ttnx::net::HttpRequest& request) override {
+        ++calls;
+        last_request = request;
+        return next_result;
+    }
+};
+
+ttnx::youtube::GuestSession usable_session() {
+    ttnx::youtube::GuestSession session;
+    session.client_name = "WEB";
+    session.client_name_id = "1";
+    session.client_version = "2.20260901.00.00";
+    session.visitor_data = "visitor-channel-test";
+    session.language = "en";
+    session.region = "CA";
+    session.timezone = "America/Toronto";
+    session.user_agent = "TizenTube-NX-Test";
+    return session;
+}
+
+std::string response_fixture() {
+    return R"JSON({
+      "metadata": {"channelMetadataRenderer": {
+        "title": "Guest Channel", "externalId": "UCabcdefghijklmnopqrstuv"
+      }},
+      "contents": {"twoColumnBrowseResultsRenderer": {"tabs": [
+        {"tabRenderer": {"selected": true, "content": {"richGridRenderer": {"contents": [
+          {"richItemRenderer": {"content": {"videoRenderer": {
+            "videoId": "abcdefghijk", "title": {"simpleText": "Safe Channel Video"}
+          }}}}
+        ]}}}}
+      ]}}
+    })JSON";
+}
+
+}  // namespace
+
+int main() {
+    using ttnx::core::BrowseSurface;
+    using ttnx::core::GuestRequest;
+    using ttnx::net::HttpMethod;
+    using ttnx::youtube::execute_guest_channel;
+
+    FakeHttpClient http;
+    http.next_result.ok = true;
+    http.next_result.response.status_code = 200;
+    http.next_result.response.body = response_fixture();
+
+    const auto session = usable_session();
+    GuestRequest request;
+    request.surface = BrowseSurface::Channel;
+    request.value = "UCabcdefghijklmnopqrstuv";
+
+    const auto result = execute_guest_channel(http, session, request);
+    expect(result.page.has_value(), "guest Channel first page succeeds through fake transport");
+    expect(http.calls == 1, "Channel performs exactly one explicit HTTP request");
+    expect(http.last_request.method == HttpMethod::Post, "Channel uses POST");
+    expect(http.last_request.url == "https://www.youtube.com/youtubei/v1/browse?prettyPrint=false&alt=json",
+           "Channel targets existing approved YouTube browse endpoint");
+    expect(http.last_request.body.find("\"browseId\":\"UCabcdefghijklmnopqrstuv\"") != std::string::npos,
+           "Channel request uses normalized browse ID");
+    expect(http.last_request.body.find("clickTrackingParams") == std::string::npos,
+           "Channel request omits tracking fields");
+    expect(http.last_request.body.find("adSignalsInfo") == std::string::npos,
+           "Channel request omits ad-signals fields");
+    expect(result.diagnostics.find("visitor-channel-test") == std::string::npos,
+           "Channel diagnostics never expose visitor data");
+
+    FakeHttpClient wrong_http;
+    GuestRequest wrong;
+    wrong.surface = BrowseSurface::Search;
+    wrong.value = request.value;
+    expect(!execute_guest_channel(wrong_http, session, wrong).page.has_value(),
+           "wrong surface rejected by Channel executor");
+    expect(wrong_http.calls == 0, "wrong surface rejected before HTTP");
+
+    GuestRequest continuation = request;
+    continuation.continuation = "NOT-YET";
+    expect(!execute_guest_channel(wrong_http, session, continuation).page.has_value(),
+           "Channel continuation explicitly disabled for first-page hardware gate");
+    expect(wrong_http.calls == 0, "disabled continuation rejected before HTTP");
+
+    GuestRequest invalid_id = request;
+    invalid_id.value = "bad";
+    expect(!execute_guest_channel(wrong_http, session, invalid_id).page.has_value(),
+           "invalid Channel ID rejected before HTTP");
+
+    auto bad_session = session;
+    bad_session.visitor_data.clear();
+    expect(!execute_guest_channel(wrong_http, bad_session, request).page.has_value(),
+           "unusable guest session rejected before HTTP");
+
+    FakeHttpClient failed;
+    failed.next_result.ok = false;
+    failed.next_result.error = "X-Goog-Visitor-Id=visitor-channel-test continuation=SECRET";
+    const auto transport = execute_guest_channel(failed, session, request);
+    expect(!transport.page.has_value(), "Channel transport failure does not create a page");
+    expect(transport.error == "Guest Channel HTTP request failed.",
+           "Channel transport failure is privacy-sanitized");
+
+    if (failures == 0) {
+        std::cout << "All guest Channel executor tests passed.\n";
+        return EXIT_SUCCESS;
+    }
+    return EXIT_FAILURE;
+}
+''')
+
+          # Extend the existing bounded scope engine in home_response.cpp so the
+          # Channel parser shares exactly the same JSON limits and leaf firewall.
+          path = Path('src/core/home_response.cpp')
+          text = path.read_text()
+          include_anchor = '#include "tizentube_nx/youtube/home_response.hpp"\n'
+          assert include_anchor in text
+          text = text.replace(
+              include_anchor,
+              include_anchor + '#include "tizentube_nx/youtube/channel_response.hpp"\n#include "tizentube_nx/core/url.hpp"\n',
+              1)
+
+          end_anchor = '\n}  // namespace ttnx::youtube\n'
+          assert text.endswith(end_anchor)
+          channel_impl = r'''
+
+namespace {
+
+ChannelResponseParseResult channel_fail(std::string error, std::string diagnostics = {}) {
+    ChannelResponseParseResult result;
+    result.error = std::move(error);
+    result.diagnostics = std::move(diagnostics);
+    return result;
+}
+
+std::string channel_diagnostics(std::string_view response_body) {
+    auto summary = build_home_diagnostics(response_body).summary();
+    constexpr std::string_view prefix = "Home diag:";
+    if (summary.starts_with(prefix)) {
+        summary.replace(0, prefix.size(), "Channel diag:");
+    }
+    return summary;
+}
+
+std::string decoded_field(std::string_view object, std::string_view key) {
+    const auto value = field(object, key);
+    if (!value) return {};
+    const auto decoded = decode_json_string(*value);
+    return decoded ? *decoded : std::string{};
+}
+
+std::string bounded_channel_text(std::string value, std::size_t max_bytes) {
+    if (value.size() > max_bytes) value.clear();
+    return value;
+}
+
+bool apply_channel_metadata(
+    std::string_view response_body,
+    std::string_view expected_channel_id,
+    core::ChannelPage& channel,
+    std::string& error) {
+    channel.identity.browse_id = std::string(expected_channel_id);
+    if (const auto canonical = core::canonical_channel_url(expected_channel_id)) {
+        channel.metadata.canonical_url = *canonical;
+    }
+
+    if (const auto metadata = path(response_body, {"metadata", "channelMetadataRenderer"})) {
+        const auto external_id = decoded_field(*metadata, "externalId");
+        if (!external_id.empty() && external_id != expected_channel_id) {
+            error = "Channel metadata identity does not match the requested channel.";
+            return false;
+        }
+        channel.metadata.title = bounded_channel_text(decoded_field(*metadata, "title"), 512);
+        channel.metadata.description = bounded_channel_text(decoded_field(*metadata, "description"), 1024);
+
+        const auto vanity = decoded_field(*metadata, "vanityChannelUrl");
+        const auto marker = vanity.find("/@");
+        if (marker != std::string::npos) {
+            auto handle = vanity.substr(marker + 1);
+            if (handle.size() <= 128 && handle.starts_with('@')) {
+                bool safe = true;
+                for (const unsigned char c : handle) {
+                    if (c <= 0x20 || c == 0x7f || c == '/' || c == '?' || c == '#') {
+                        safe = false;
+                        break;
+                    }
+                }
+                if (safe) channel.metadata.handle = std::move(handle);
+            }
+        }
+    }
+
+    if (const auto header = path(response_body, {"header", "c4TabbedHeaderRenderer"})) {
+        const auto header_id = decoded_field(*header, "channelId");
+        if (!header_id.empty() && header_id != expected_channel_id) {
+            error = "Channel header identity does not match the requested channel.";
+            return false;
+        }
+        if (channel.metadata.title.empty()) {
+            channel.metadata.title = bounded_channel_text(decoded_field(*header, "title"), 512);
+        }
+        if (const auto handle = field(*header, "channelHandleText")) {
+            channel.metadata.handle = bounded_channel_text(text_node(*handle), 128);
+        }
+        if (const auto subscribers = field(*header, "subscriberCountText")) {
+            channel.metadata.subscriber_text = bounded_channel_text(text_node(*subscribers), 256);
+        }
+    }
+
+    channel.identity.title = channel.metadata.title;
+    return true;
+}
+
+bool channel_blocked_terminal(std::string_view entry) {
+    for (const auto key : {
+             std::string_view{"reelShelfRenderer"},
+             std::string_view{"reelItemRenderer"},
+             std::string_view{"shortsLockupViewModel"},
+             std::string_view{"adSlotRenderer"},
+             std::string_view{"promotedVideoRenderer"},
+             std::string_view{"promotedSparklesWebRenderer"},
+             std::string_view{"productRenderer"},
+             std::string_view{"shoppingShelfRenderer"},
+             std::string_view{"merchandiseShelfRenderer"},
+             std::string_view{"mealbarPromoRenderer"},
+             std::string_view{"premiumUpsellRenderer"}}) {
+        if (field(entry, key)) return true;
+    }
+    return false;
+}
+
+bool append_channel_payload(
+    core::ChannelPage& channel,
+    std::unordered_set<std::string>& seen,
+    std::string title,
+    std::string_view payload,
+    const core::FilterPolicy& policy,
+    std::string& continuation,
+    bool& ambiguous_continuation,
+    std::string& error) {
+    auto parsed = parse_search_response(payload, policy);
+    if (!parsed || !parsed.page) {
+        error = parsed.error.empty()
+            ? "Channel scoped renderer payload was rejected."
+            : parsed.error;
+        return false;
+    }
+
+    (void)merge_continuation(
+        continuation,
+        ambiguous_continuation,
+        parsed.page->continuation);
+
+    std::vector<core::BrowseResult> accepted;
+    accepted.reserve(parsed.page->results.size());
+    for (auto& result : parsed.page->results) {
+        const auto identity = core::browse_result_identity(result);
+        if (identity.empty() || !seen.insert(identity).second) continue;
+        channel.results.push_back(result);
+        accepted.push_back(std::move(result));
+    }
+
+    if (accepted.empty()) return true;
+    if (title.size() > kMaxSectionTitleBytes) title.clear();
+    if (title.empty() && !channel.sections.empty() && channel.sections.back().title.empty()) {
+        auto& existing = channel.sections.back().results;
+        existing.insert(existing.end(),
+                        std::make_move_iterator(accepted.begin()),
+                        std::make_move_iterator(accepted.end()));
+    } else {
+        core::ChannelSection section;
+        section.title = std::move(title);
+        section.results = std::move(accepted);
+        channel.sections.push_back(std::move(section));
+    }
+    return true;
+}
+
+bool append_channel_entry(
+    core::ChannelPage& channel,
+    std::unordered_set<std::string>& seen,
+    std::string inherited_title,
+    std::string_view entry,
+    const core::FilterPolicy& policy,
+    std::string& continuation,
+    bool& ambiguous_continuation,
+    bool& saw_reviewed,
+    std::string& error) {
+    if (channel_blocked_terminal(entry)) {
+        saw_reviewed = true;
+        return true;
+    }
+
+    if (const auto rich_item = field(entry, "richItemRenderer")) {
+        saw_reviewed = true;
+        const auto content = field(*rich_item, "content");
+        return !content || append_channel_entry(
+            channel, seen, std::move(inherited_title), *content, policy,
+            continuation, ambiguous_continuation, saw_reviewed, error);
+    }
+
+    if (const auto rich_section = field(entry, "richSectionRenderer")) {
+        saw_reviewed = true;
+        const auto content = field(*rich_section, "content");
+        if (!content) return true;
+        const auto title = section_title(entry);
+        if (const auto rich_shelf = field(*content, "richShelfRenderer")) {
+            const auto contents = field(*rich_shelf, "contents");
+            if (!contents) return true;
+            const auto items = array_elements(*contents);
+            if (!items) {
+                error = "Channel rich-shelf contents are malformed or exceed limits.";
+                return false;
+            }
+            for (const auto item : *items) {
+                if (!append_channel_entry(
+                        channel, seen, title, item, policy,
+                        continuation, ambiguous_continuation, saw_reviewed, error)) return false;
+            }
+            return true;
+        }
+        if (const auto shelf = field(*content, "shelfRenderer")) {
+            return append_channel_entry(
+                channel, seen, title, *shelf, policy,
+                continuation, ambiguous_continuation, saw_reviewed, error);
+        }
+        // reelShelfRenderer and all other unreviewed section payloads are terminal.
+        return true;
+    }
+
+    if (const auto item_section = field(entry, "itemSectionRenderer")) {
+        saw_reviewed = true;
+        const auto contents = field(*item_section, "contents");
+        if (!contents) return true;
+        const auto items = array_elements(*contents);
+        if (!items) {
+            error = "Channel item-section contents are malformed or exceed limits.";
+            return false;
+        }
+        const auto title = section_title(entry);
+        for (const auto item : *items) {
+            if (!append_channel_entry(
+                    channel, seen, title, item, policy,
+                    continuation, ambiguous_continuation, saw_reviewed, error)) return false;
+        }
+        return true;
+    }
+
+    if (const auto rich_shelf = field(entry, "richShelfRenderer")) {
+        saw_reviewed = true;
+        const auto contents = field(*rich_shelf, "contents");
+        if (!contents) return true;
+        const auto items = array_elements(*contents);
+        if (!items) {
+            error = "Channel rich-shelf contents are malformed or exceed limits.";
+            return false;
+        }
+        const auto title = section_title(entry).empty() ? inherited_title : section_title(entry);
+        for (const auto item : *items) {
+            if (!append_channel_entry(
+                    channel, seen, title, item, policy,
+                    continuation, ambiguous_continuation, saw_reviewed, error)) return false;
+        }
+        return true;
+    }
+
+    if (const auto shelf = field(entry, "shelfRenderer")) {
+        saw_reviewed = true;
+        std::optional<std::string_view> items;
+        if (const auto content = field(*shelf, "content")) {
+            if (const auto horizontal = field(*content, "horizontalListRenderer")) {
+                items = field(*horizontal, "items");
+            } else if (const auto expanded = field(*content, "expandedShelfContentsRenderer")) {
+                items = field(*expanded, "items");
+            }
+        }
+        if (!items) items = field(*shelf, "contents");
+        if (!items) return true;
+        const auto children = array_elements(*items);
+        if (!children) {
+            error = "Channel shelf item list is malformed or exceeds limits.";
+            return false;
+        }
+        const auto title = section_title(entry).empty() ? inherited_title : section_title(entry);
+        for (const auto child : *children) {
+            if (!append_channel_entry(
+                    channel, seen, title, child, policy,
+                    continuation, ambiguous_continuation, saw_reviewed, error)) return false;
+        }
+        return true;
+    }
+
+    for (const auto key : {
+             std::string_view{"videoRenderer"},
+             std::string_view{"channelRenderer"},
+             std::string_view{"playlistRenderer"},
+             std::string_view{"radioRenderer"},
+             std::string_view{"lockupViewModel"},
+             std::string_view{"continuationItemRenderer"},
+             std::string_view{"continuationItemViewModel"},
+             std::string_view{"continuationItemView"}}) {
+        if (field(entry, key)) {
+            saw_reviewed = true;
+            return append_channel_payload(
+                channel, seen, std::move(inherited_title), entry, policy,
+                continuation, ambiguous_continuation, error);
+        }
+    }
+
+    // Unknown wrapper: deliberately opaque. Do not recurse.
+    return true;
+}
+
+}  // namespace
+
+ChannelResponseParseResult parse_scoped_channel_response(
+    std::string_view response_body,
+    std::string_view expected_channel_id,
+    const core::FilterPolicy& policy) {
+    if (!core::is_valid_channel_id(expected_channel_id)) {
+        return channel_fail("Channel request identity is invalid.");
+    }
+    if (response_body.empty()) return channel_fail("Channel response is empty.");
+    if (response_body.size() > kMaxHomeResponseBytes) {
+        return channel_fail("Channel response is too large.");
+    }
+    if (!validate_document(response_body)) {
+        return channel_fail("Channel response is malformed or exceeds scope parser limits.");
+    }
+
+    const std::string diagnostics = channel_diagnostics(response_body);
+    const auto tabs_json = browse_tabs(response_body);
+    if (!tabs_json) {
+        return channel_fail("Channel response did not contain a recognized browse-tab scope.", diagnostics);
+    }
+    const auto tabs = array_elements(*tabs_json);
+    if (!tabs) return channel_fail("Channel tab list is malformed or exceeds limits.", diagnostics);
+
+    std::optional<std::string_view> selected_contents;
+    std::size_t selected_count = 0;
+    for (const auto tab : *tabs) {
+        const auto renderer = field(tab, "tabRenderer");
+        if (!renderer || !tab_selected(*renderer)) continue;
+        ++selected_count;
+        const auto contents = recognized_tab_contents(*renderer);
+        if (contents) selected_contents = *contents;
+    }
+    if (selected_count != 1) {
+        return channel_fail(
+            selected_count == 0
+                ? "Channel response has no provider-selected browse tab."
+                : "Channel response contains multiple selected browse tabs.",
+            diagnostics);
+    }
+    if (!selected_contents) {
+        return channel_fail("Selected Channel tab uses an unsupported content container.", diagnostics);
+    }
+
+    const auto entries = array_elements(*selected_contents);
+    if (!entries) {
+        return channel_fail("Selected Channel result container is malformed or exceeds limits.", diagnostics);
+    }
+
+    core::ChannelPage channel;
+    std::string error;
+    if (!apply_channel_metadata(response_body, expected_channel_id, channel, error)) {
+        return channel_fail(std::move(error), diagnostics);
+    }
+
+    std::unordered_set<std::string> seen;
+    seen.reserve(128);
+    std::string continuation;
+    bool ambiguous_continuation = false;
+    bool saw_reviewed = entries->empty();
+
+    for (const auto entry : *entries) {
+        if (!append_channel_entry(
+                channel,
+                seen,
+                section_title(entry),
+                entry,
+                policy,
+                continuation,
+                ambiguous_continuation,
+                saw_reviewed,
+                error)) {
+            return channel_fail(
+                error.empty() ? "Channel selected-tab scope could not be read safely." : std::move(error),
+                diagnostics);
+        }
+    }
+
+    if (!saw_reviewed && !entries->empty()) {
+        return channel_fail("Selected Channel tab uses unsupported renderer families.", diagnostics);
+    }
+    if (!ambiguous_continuation) channel.continuation = std::move(continuation);
+
+    ChannelResponseParseResult result;
+    result.page = std::move(channel);
+    result.diagnostics = diagnostics;
+    return result;
+}
+'''
+          text = text[:-len(end_anchor)] + channel_impl + end_anchor
+          path.write_text(text)
+
+          # CMake: add Channel sources/tests without altering existing targets.
+          path = Path('CMakeLists.txt')
+          text = path.read_text()
+          text = text.replace('    src/core/home_model.cpp\n', '    src/core/home_model.cpp\n    src/core/channel_model.cpp\n', 1)
+          text = text.replace('    src/core/guest_home.cpp\n', '    src/core/guest_home.cpp\n    src/core/guest_channel.cpp\n', 1)
+          anchor = '''    add_executable(tizentube_nx_guest_home_tests tests/guest_home_tests.cpp)
+    target_link_libraries(tizentube_nx_guest_home_tests PRIVATE tizentube_nx_core)
+    add_test(NAME guest_home COMMAND tizentube_nx_guest_home_tests)
+'''
+          addition = anchor + '''
+    add_executable(tizentube_nx_channel_model_tests tests/channel_model_tests.cpp)
+    target_link_libraries(tizentube_nx_channel_model_tests PRIVATE tizentube_nx_core)
+    add_test(NAME channel_model COMMAND tizentube_nx_channel_model_tests)
+
+    add_executable(tizentube_nx_channel_response_tests tests/channel_response_tests.cpp)
+    target_link_libraries(tizentube_nx_channel_response_tests PRIVATE tizentube_nx_core)
+    add_test(NAME channel_response COMMAND tizentube_nx_channel_response_tests)
+
+    add_executable(tizentube_nx_guest_channel_tests tests/guest_channel_tests.cpp)
+    target_link_libraries(tizentube_nx_guest_channel_tests PRIVATE tizentube_nx_core)
+    add_test(NAME guest_channel COMMAND tizentube_nx_guest_channel_tests)
+'''
+          assert anchor in text
+          text = text.replace(anchor, addition, 1)
+          path.write_text(text)
+
+          # Main Switch UI: add a dedicated plain-ScrollingFrame Channel Activity.
+          # Search stays alive underneath it; A still owns the accepted inline detail.
+          path = Path('switch/source/main.cpp')
+          text = path.read_text()
+          text = text.replace('#include <cstdlib>\n', '#include <cstdlib>\n#include <functional>\n', 1)
+          text = text.replace('#include "tizentube_nx/core/home_model.hpp"\n', '#include "tizentube_nx/core/home_model.hpp"\n#include "tizentube_nx/core/channel_model.hpp"\n#include "tizentube_nx/core/url.hpp"\n', 1)
+          text = text.replace('#include "tizentube_nx/youtube/guest_home.hpp"\n', '#include "tizentube_nx/youtube/guest_home.hpp"\n#include "tizentube_nx/youtube/guest_channel.hpp"\n', 1)
+
+          button_anchor = '''brls::Button* button(brls::Box* box, const std::string& text) {
+    auto* view = new brls::Button();
+    view->setText(text);
+    view->setHeight(64);
+    view->setMarginBottom(20);
+    box->addView(view);
+    return view;
+}
+
+class ShellActivity : public brls::Activity {
+'''
+          channel_activity = r'''brls::Button* button(brls::Box* box, const std::string& text) {
+    auto* view = new brls::Button();
+    view->setText(text);
+    view->setHeight(64);
+    view->setMarginBottom(20);
+    box->addView(view);
+    return view;
+}
+
+class ChannelActivity : public brls::Activity {
+public:
+    ChannelActivity(
+        ttnx::core::ChannelModel& model,
+        std::function<void()> on_close)
+        : model_(model), on_close_(std::move(on_close)) {}
+
+    brls::View* createContentView() override {
+        auto* scroll = new brls::ScrollingFrame();
+        auto* content = new brls::Box(brls::Axis::COLUMN);
+        content->setPadding(32, 36, 32, 36);
+        scroll->setContentView(content);
+
+        title_label_ = label(content, "Channel", 34);
+        status_label_ = label(content, "Loading Channel...", 20);
+        metadata_label_ = label(content, "", 18);
+        description_label_ = label(content, "", 18);
+
+        back_button_ = button(content, "Back to Search");
+        auto close = [this](brls::View*) {
+            if (on_close_) on_close_();
+            brls::Application::popActivity();
+            return true;
+        };
+        back_button_->registerClickAction(close);
+        content->registerAction("Back", brls::BUTTON_B, close);
+
+        label(content,
+              "Channel first-page guest browsing. Thumbnails, pagination and playback remain disabled for this hardware gate.",
+              18);
+        results_box_ = new brls::Box(brls::Axis::COLUMN);
+        results_box_->setMarginBottom(8);
+        content->addView(results_box_);
+        diagnostic_label_ = label(content, "", 17);
+        refresh(true);
+        return scroll;
+    }
+
+    void set_diagnostics(std::string diagnostics) {
+        diagnostics_ = std::move(diagnostics);
+    }
+
+    void refresh(bool rebuild_results) {
+        if (!title_label_) return;
+        const auto& metadata = model_.metadata();
+        const auto& identity = model_.identity();
+        std::string title = metadata.title.empty() ? identity.title : metadata.title;
+        if (title.empty()) title = "Channel";
+        title_label_->setText(bounded_ui_text(title, kMaxUiTitleChars));
+
+        std::string status;
+        switch (model_.state()) {
+            case ttnx::core::ChannelViewState::Idle:
+                status = "Channel is idle.";
+                break;
+            case ttnx::core::ChannelViewState::Loading:
+                status = "Loading Channel first page...";
+                break;
+            case ttnx::core::ChannelViewState::Ready:
+                status = std::to_string(model_.results().size()) + " normal Channel result";
+                if (model_.results().size() != 1) status += 's';
+                status += ".";
+                break;
+            case ttnx::core::ChannelViewState::Empty:
+                status = "This selected Channel tab has no supported normal content.";
+                break;
+            case ttnx::core::ChannelViewState::Error:
+                status = model_.error().empty()
+                    ? "Channel could not be loaded safely."
+                    : model_.error();
+                break;
+        }
+        status_label_->setText(status);
+
+        std::string metadata_text;
+        if (!metadata.handle.empty()) metadata_text += metadata.handle;
+        if (!metadata.subscriber_text.empty()) {
+            if (!metadata_text.empty()) metadata_text += "  •  ";
+            metadata_text += metadata.subscriber_text;
+        }
+        if (!metadata.canonical_url.empty()) {
+            if (!metadata_text.empty()) metadata_text += "\n";
+            metadata_text += metadata.canonical_url;
+        }
+        metadata_label_->setText(bounded_ui_text(metadata_text, kMaxUiMetadataChars));
+        description_label_->setText(bounded_ui_text(metadata.description, 700));
+
+        if (diagnostic_label_) {
+            diagnostic_label_->setText(
+                model_.state() == ttnx::core::ChannelViewState::Error
+                    ? diagnostics_
+                    : std::string{});
+        }
+        if (rebuild_results) rebuild();
+    }
+
+private:
+    struct DetailRow {
+        std::string identity;
+        brls::Button* button{nullptr};
+        brls::Label* detail{nullptr};
+    };
+
+    ttnx::core::ChannelModel& model_;
+    std::function<void()> on_close_;
+    std::string diagnostics_;
+    brls::Label* title_label_{nullptr};
+    brls::Label* status_label_{nullptr};
+    brls::Label* metadata_label_{nullptr};
+    brls::Label* description_label_{nullptr};
+    brls::Label* diagnostic_label_{nullptr};
+    brls::Button* back_button_{nullptr};
+    brls::Box* results_box_{nullptr};
+    std::vector<DetailRow> detail_rows_;
+
+    void refresh_inline_details() {
+        const auto& selected = model_.selected_identity();
+        for (auto& row : detail_rows_) {
+            if (!row.detail) continue;
+            row.detail->setVisibility(
+                !selected.empty() && row.identity == selected
+                    ? brls::Visibility::VISIBLE
+                    : brls::Visibility::GONE);
+        }
+    }
+
+    void rebuild() {
+        if (!results_box_) return;
+        detail_rows_.clear();
+        while (!results_box_->getChildren().empty()) {
+            results_box_->removeView(results_box_->getChildren().back());
+        }
+
+        std::string last_section;
+        for (const auto& section : model_.sections()) {
+            if (!section.title.empty()) {
+                label(results_box_, bounded_ui_text(section.title, 100), 24)->setMarginBottom(12);
+            }
+            for (const auto& result : section.results) append_result(result);
+        }
+        if (model_.sections().empty()) {
+            for (const auto& result : model_.results()) append_result(result);
+        }
+    }
+
+    void append_result(const ttnx::core::BrowseResult& result) {
+        const auto identity = ttnx::core::browse_result_identity(result);
+        if (identity.empty()) return;
+        std::string title = "[" + ttnx::core::search_result_kind_label(result.kind) + "] ";
+        title += result.title.empty() ? "Untitled result" : result.title;
+        auto* select = button(results_box_, bounded_ui_text(title, kMaxUiTitleChars));
+        select->setHeight(72);
+        select->registerClickAction([this, identity](brls::View*) {
+            if (model_.selected_identity() == identity) model_.clear_selection();
+            else if (!model_.select(identity)) return true;
+            refresh_inline_details();
+            return true;
+        });
+        auto* detail = label(
+            results_box_,
+            ttnx::core::search_result_selection_display(result),
+            18);
+        detail->setMarginBottom(14);
+        detail->setVisibility(
+            identity == model_.selected_identity()
+                ? brls::Visibility::VISIBLE
+                : brls::Visibility::GONE);
+        detail_rows_.push_back({identity, select, detail});
+        const auto metadata = ttnx::core::search_result_metadata_display(result);
+        if (!metadata.empty()) {
+            auto* info = label(results_box_, bounded_ui_text(metadata, kMaxUiMetadataChars), 18);
+            info->setMarginBottom(14);
+        }
+    }
+};
+
+class ShellActivity : public brls::Activity {
+'''
+          assert button_anchor in text
+          text = text.replace(button_anchor, channel_activity, 1)
+
+          text = text.replace(
+              '        pump_home_result();\n        pump_search_result();\n',
+              '        pump_home_result();\n        pump_search_result();\n        pump_channel_result();\n',
+              1)
+          text = text.replace(
+              '        if (search_worker_.joinable()) search_worker_.join();\n',
+              '        if (search_worker_.joinable()) search_worker_.join();\n        if (channel_worker_.joinable()) channel_worker_.join();\n',
+              1)
+          text = text.replace(
+              '        search_worker_done_.store(false);\n',
+              '        search_worker_done_.store(false);\n        channel_busy_.store(false);\n        channel_worker_done_.store(false);\n',
+              1)
+
+          member_anchor = '''    std::atomic<ttnx::youtube::SearchWorkerStage> search_worker_stage_{
+        ttnx::youtube::SearchWorkerStage::Idle};
+
+    // These pointers are UI-thread-only conveniences for the currently visible
+'''
+          member_add = '''    std::atomic<ttnx::youtube::SearchWorkerStage> search_worker_stage_{
+        ttnx::youtube::SearchWorkerStage::Idle};
+
+    // Channel first-page state lives above the accepted Search Activity. The
+    // network worker owns no Views; the plain ChannelActivity is updated only
+    // by ShellActivity::tick() on the UI thread.
+    ttnx::core::ChannelModel channel_model_;
+    std::atomic_bool channel_busy_{false};
+    std::atomic_bool channel_worker_done_{false};
+    std::thread channel_worker_;
+    std::mutex channel_mutex_;
+    bool pending_channel_result_{false};
+    std::uint64_t pending_channel_generation_{0};
+    ttnx::youtube::GuestChannelResult pending_channel_;
+    std::string channel_diagnostics_;
+    ChannelActivity* active_channel_activity_{nullptr};
+
+    // These pointers are UI-thread-only conveniences for the currently visible
+'''
+          assert member_anchor in text
+          text = text.replace(member_anchor, member_add, 1)
+
+          row_anchor = '''    struct SearchDetailRow {
+        std::string identity;
+        brls::Button* button{nullptr};
+        brls::Label* detail{nullptr};
+    };
+'''
+          row_add = '''    struct SearchDetailRow {
+        std::string identity;
+        brls::Button* button{nullptr};
+        brls::Label* detail{nullptr};
+        brls::Button* open_channel{nullptr};
+    };
+'''
+          assert row_anchor in text
+          text = text.replace(row_anchor, row_add, 1)
+
+          footer_anchor = '''        if (search_busy_.load()) {
+            text += "Searching...";
+        } else if (home_busy_.load()) {
+'''
+          footer_add = '''        if (channel_busy_.load()) {
+            text += "Loading Channel...";
+        } else if (search_busy_.load()) {
+            text += "Searching...";
+        } else if (home_busy_.load()) {
+'''
+          assert footer_anchor in text
+          text = text.replace(footer_anchor, footer_add, 1)
+
+          inline_anchor = '''        for (auto& row : search_detail_rows_) {
+            if (!row.detail) continue;
+            const bool selected = !selected_identity.empty() && row.identity == selected_identity;
+            row.detail->setVisibility(
+                selected ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
+        }
+    }
+'''
+          inline_add = '''        for (auto& row : search_detail_rows_) {
+            const bool selected = !selected_identity.empty() && row.identity == selected_identity;
+            if (row.detail) {
+                row.detail->setVisibility(
+                    selected ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
+            }
+            if (row.open_channel) {
+                row.open_channel->setVisibility(
+                    selected ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
+            }
+        }
+    }
+'''
+          assert inline_anchor in text
+          text = text.replace(inline_anchor, inline_add, 1)
+
+          row_push_anchor = '''        home_detail_rows_.push_back({identity, select, detail_label});
+'''
+          # Don't touch Home's structurally-similar push.
+
+          search_push = '''        search_detail_rows_.push_back({identity, select, detail_label});
+
+        const auto metadata = ttnx::core::search_result_metadata_display(result);
+'''
+          search_push_new = '''        brls::Button* open_channel = nullptr;
+        if (result.kind == ttnx::core::BrowseResultKind::Channel &&
+            ttnx::core::is_valid_channel_id(result.id)) {
+            open_channel = button(search_results_box_, "Open channel");
+            open_channel->setVisibility(brls::Visibility::GONE);
+            const auto channel_id = result.id;
+            const auto channel_title = result.title;
+            open_channel->registerClickAction([this, channel_id, channel_title](brls::View*) {
+                open_channel_page(channel_id, channel_title);
+                return true;
+            });
+        }
+        search_detail_rows_.push_back({identity, select, detail_label, open_channel});
+
+        const auto metadata = ttnx::core::search_result_metadata_display(result);
+'''
+          assert search_push in text
+          text = text.replace(search_push, search_push_new, 1)
+
+          # No Search/Home network request may overlap the Channel request.
+          text = text.replace(
+              '        if (search_busy_.load() || home_busy_.load()) {\n',
+              '        if (search_busy_.load() || home_busy_.load() || channel_busy_.load()) {\n',
+              1)
+          text = text.replace(
+              '        if (home_busy_.load() || network_busy_.load()) {\n            refresh_search_page(false);\n',
+              '        if (home_busy_.load() || channel_busy_.load() || network_busy_.load()) {\n            refresh_search_page(false);\n',
+              1)
+          text = text.replace(
+              '        if (search_busy_.load() || home_busy_.load() || network_busy_.load()) return;\n',
+              '        if (search_busy_.load() || home_busy_.load() || channel_busy_.load() || network_busy_.load()) return;\n',
+              2)
+
+          # Insert Channel worker/open functions before keyboard helper.
+          keyboard_anchor = '''    void open_search_keyboard() {
+'''
+          channel_methods = r'''    void publish_channel_result(
+        std::uint64_t generation,
+        ttnx::youtube::GuestChannelResult result) noexcept {
+        try {
+            std::lock_guard<std::mutex> lock(channel_mutex_);
+            pending_channel_generation_ = generation;
+            pending_channel_ = std::move(result);
+            pending_channel_result_ = true;
+        } catch (...) {
+            pending_channel_result_ = false;
+        }
+        channel_worker_done_.store(true);
+    }
+
+    void pump_channel_result() {
+        if (!channel_worker_done_.load()) return;
+        if (channel_worker_.joinable()) channel_worker_.join();
+
+        ttnx::youtube::GuestChannelResult result;
+        std::uint64_t generation = 0;
+        bool have_result = false;
+        {
+            std::lock_guard<std::mutex> lock(channel_mutex_);
+            if (pending_channel_result_) {
+                generation = pending_channel_generation_;
+                result = std::move(pending_channel_);
+                pending_channel_result_ = false;
+                have_result = true;
+            }
+        }
+        channel_worker_done_.store(false);
+        channel_busy_.store(false);
+
+        bool applied = false;
+        if (have_result) {
+            channel_diagnostics_ = std::move(result.diagnostics);
+            if (result.page) {
+                applied = channel_model_.apply_page(generation, std::move(*result.page));
+            } else {
+                applied = channel_model_.fail(
+                    generation,
+                    result.error.empty()
+                        ? "Channel could not be loaded safely."
+                        : std::move(result.error));
+            }
+        } else {
+            channel_diagnostics_.clear();
+            applied = channel_model_.fail(
+                generation,
+                "Channel failed safely because of an internal error.");
+        }
+
+        refresh_footer();
+        if (applied && active_channel_activity_) {
+            active_channel_activity_->set_diagnostics(channel_diagnostics_);
+            active_channel_activity_->refresh(true);
+        }
+    }
+
+    void launch_channel_worker(std::uint64_t generation, std::string channel_id) {
+        if (!guest_session_ || !guest_session_->usable()) return;
+        if (channel_worker_.joinable()) channel_worker_.join();
+        channel_busy_.store(true);
+        channel_worker_done_.store(false);
+        refresh_footer();
+
+        try {
+            const auto session = *guest_session_;
+            channel_worker_ = std::thread([this, generation, channel_id = std::move(channel_id), session] {
+                try {
+                    ttnx::core::GuestRequest request;
+                    request.surface = ttnx::core::BrowseSurface::Channel;
+                    request.value = channel_id;
+                    publish_channel_result(
+                        generation,
+                        ttnx::youtube::execute_guest_channel(
+                            network_client_, session, request));
+                } catch (const std::bad_alloc&) {
+                    ttnx::youtube::GuestChannelResult failure;
+                    failure.error = "Channel failed safely because there was not enough available memory.";
+                    publish_channel_result(generation, std::move(failure));
+                } catch (const std::exception&) {
+                    ttnx::youtube::GuestChannelResult failure;
+                    failure.error = "Channel failed safely because of an internal error.";
+                    publish_channel_result(generation, std::move(failure));
+                } catch (...) {
+                    ttnx::youtube::GuestChannelResult failure;
+                    failure.error = "Channel failed safely because of an internal error.";
+                    publish_channel_result(generation, std::move(failure));
+                }
+            });
+        } catch (const std::bad_alloc&) {
+            channel_busy_.store(false);
+            channel_worker_done_.store(false);
+            (void)channel_model_.fail(
+                generation,
+                "Could not start Channel because there was not enough available memory.");
+            if (active_channel_activity_) active_channel_activity_->refresh(false);
+            refresh_footer();
+        } catch (...) {
+            channel_busy_.store(false);
+            channel_worker_done_.store(false);
+            (void)channel_model_.fail(generation, "Could not start the Channel worker thread.");
+            if (active_channel_activity_) active_channel_activity_->refresh(false);
+            refresh_footer();
+        }
+    }
+
+    void open_channel_page(const std::string& channel_id, const std::string& channel_title) {
+        if (channel_busy_.load() || active_channel_activity_ ||
+            search_busy_.load() || home_busy_.load() || network_busy_.load()) return;
+        if (!guest_session_ || !guest_session_->usable() ||
+            !ttnx::core::is_valid_channel_id(channel_id)) return;
+
+        ttnx::core::ChannelIdentity identity;
+        identity.browse_id = channel_id;
+        identity.title = channel_title;
+        const auto generation = channel_model_.begin_load(std::move(identity));
+        channel_diagnostics_.clear();
+
+        auto* activity = new ChannelActivity(
+            channel_model_,
+            [this] {
+                active_channel_activity_ = nullptr;
+                // Invalidates an in-flight completion if the user backs out early.
+                channel_model_.reset();
+                channel_diagnostics_.clear();
+            });
+        active_channel_activity_ = activity;
+        brls::Application::pushActivity(activity);
+        launch_channel_worker(generation, channel_id);
+    }
+
+    void open_search_keyboard() {
+'''
+          assert keyboard_anchor in text
+          text = text.replace(keyboard_anchor, channel_methods, 1)
+
+          # Update temporary Search explanatory text to mention explicit Channel open seam.
+          search_note = '''            label(content,
+                  "Press A on any result to show its normalized ID and clean canonical URL directly below that result.",
+                  18);
+'''
+          search_note_new = '''            label(content,
+                  "Press A on any result to toggle its normalized ID and clean canonical URL. Channel results also reveal an explicit Open channel action.",
+                  18);
+'''
+          assert search_note in text
+          text = text.replace(search_note, search_note_new, 1)
+          path.write_text(text)
+
+          # Project documentation.
+          write('docs/CHANNEL_GUEST_BROWSING.md', r'''# Channel guest browsing
+
+## Scope
+
+M2 Channel pages are explicit, first-page-only guest browse requests opened from an already-normalized Search `Channel` result. They reuse the app-lifetime native libnx/Horizon-SSL transport and the existing in-memory guest session. No Channel request occurs at startup or merely from highlighting a Search row.
+
+## Entry and navigation
+
+Search keeps its physically accepted A-to-toggle inline detail behavior. Selecting a normalized Channel result reveals a separate `Open channel` button. Activating that button pushes a plain `ScrollingFrame` Channel activity while the original Search page remains alive underneath. B/`Back to Search` pops only the Channel activity, so the query, loaded Search results, continuation state and existing Search View tree are preserved.
+
+The Channel worker owns no Borealis Views. `ShellActivity::tick()` joins/publishes the plain normalized result on the UI thread and refreshes the active Channel activity only if it still exists. Backing out invalidates the Channel model generation, so a stale completion cannot mutate a later Channel request.
+
+## Request boundary
+
+A first-page request uses the stable normalized channel browse ID (`UC...`) from Search and the existing `/youtubei/v1/browse` request builder. Channel continuation is retained only as an opaque parser/model seam and is not exposed in the M2 first-page hardware gate.
+
+The exact M2 network allowlist remains `www.youtube.com:443`. Remote avatars/banners/thumbnails, playback/media hosts and Google authentication remain unauthorized.
+
+## Scoped parser
+
+The parser selects exactly one provider-selected browse tab from `twoColumnBrowseResultsRenderer` or `singleColumnBrowseResultsRenderer`. It opens only reviewed structural wrappers (`richGridRenderer` / `sectionListRenderer`, `richItemRenderer`, `richSectionRenderer`, `richShelfRenderer`, `shelfRenderer`, `itemSectionRenderer`) and delegates only recognized normal leaf renderers to the existing bounded renderer/firewall parser.
+
+Unknown wrappers are opaque. Unselected tabs, topbars, menus, command metadata and accessibility-only structures are never scanned for content. Shorts/reels, ads/promoted UI, shopping/product/merch and Premium/promo wrappers are terminal. A normal-looking `videoRenderer` with reel/Shorts navigation is still rejected by the shared renderer firewall.
+
+If the selected physical Channel tab uses an unknown container family, the request fails as a structurally unsupported response and returns only a bounded family-name diagnostic. Raw JSON, IDs, titles, tokens, cookies, visitor data and URLs are never included in diagnostics.
+
+## Metadata
+
+Reviewed `channelMetadataRenderer` and legacy `c4TabbedHeaderRenderer` fields may provide optional title, handle, subscriber display text and description. The canonical Channel URL is generated locally from the validated requested channel ID. Missing optional metadata never fails an otherwise valid Channel page.
+
+## Hardware gate
+
+The first candidate must prove:
+
+1. Guest ready.
+2. Search for a query that returns a Channel result.
+3. A toggles the existing inline detail unchanged.
+4. `Open channel` performs the explicit browse request.
+5. First-page normal results or a bounded unsupported-shape diagnostic render safely.
+6. B returns to the still-populated original Search page.
+7. Reopening a Channel does not crash, blank Search or corrupt focus.
+
+Channel pagination, Playlist-page opening, playback, thumbnails and OAuth are deliberately deferred.
+''')
+
+          # Prepend concise milestone blocks rather than rewriting accepted history.
+          p = Path('docs/HARDWARE_GATES.md')
+          d = p.read_text()
+          marker = '# Hardware gates\n'
+          block = '''# Hardware gates\n\n## Channel first-page candidate — host validated / hardware pending\n\nPhysical Home cleanup head `ca8467e459389c22afee4f26fbebcddc858634a8` is accepted: Guest ready, explicit `Load Home`, typed `FeedNudge`, friendly non-error message, no structural diagnostic dump and no crash. Normal Home Video/Channel/Playlist rows remain not physically observed because YouTube supplied none.\n\nChannel pages now have an explicit Search `Open channel` action, generation-safe first-page model/worker, selected-tab scoped parser, bounded structural diagnostics and a text-only plain-ScrollingFrame activity that leaves the original Search page alive underneath. Channel hardware acceptance remains **PENDING** until the new NRO is tested. Channel continuation, Playlist pages, playback, thumbnails and OAuth remain disabled.\n\n'''
+          assert d.startswith(marker)
+          p.write_text(block + d[len(marker):])
+
+          p = Path('docs/PROJECT_STATUS.md')
+          d = p.read_text()
+          phase = '## Current phase\n\n'
+          insert = '''## Current phase\n\n**Channel first-page candidate:** implemented/host-validated, physical Switch test pending. The physical FeedNudge presentation cleanup at `ca8467e459389c22afee4f26fbebcddc858634a8` is accepted. Channel entry is explicit from a normalized Search Channel result; accepted Search state stays alive underneath a plain Channel activity. Channel requests use only the existing guest session and `www.youtube.com:443`; pagination/thumbnails/playback/OAuth remain disabled.\n\n'''
+          assert phase in d
+          d = d.replace(phase, insert, 1)
+          p.write_text(d)
+
+          p = Path('docs/ROADMAP.md')
+          d = p.read_text()
+          old = '- [ ] Channel pages\n'
+          new = '- [ ] Channel pages — first-page implementation/host validation complete; physical Switch gate pending\n'
+          assert old in d
+          p.write_text(d.replace(old, new, 1))
+
+          p = Path('docs/HOME_GUEST_BROWSING.md')
+          d = p.read_text()
+          d += '''\n\n## Physical FeedNudge presentation acceptance\n\nExact-head NRO `ca8467e459389c22afee4f26fbebcddc858634a8` was physically tested after the typed empty-state cleanup. Guest bootstrap and explicit Home browse succeeded; the app displayed the friendly `YouTube isn't providing guest Home recommendations for this session. Use Search to get started.` message with no structural diagnostic dump and no crash. This accepts the Home request path, provider FeedNudge state and friendly UI presentation. Normal Home result rendering remains host-validated/not physically observed because YouTube supplied zero normal Home results.\n'''
+          p.write_text(d)
+          PY
+
+      - name: Configure host
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build host
+        run: cmake --build build --parallel
+
+      - name: Run host tests
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Build Switch NRO
+        run: >-
+          docker run --rm
+          -v "$PWD:/work"
+          -w /work
+          devkitpro/devkita64@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282
+          make -f Makefile.switch -j2
+
+      - name: Verify release invariants
+        shell: bash
+        run: |
+          test -f tizentube_nx.nro
+          test -f tizentube_nx.elf
+          test -f build-switch/tizentube_nx.map
+          ! grep -a -qi 'libcurl' tizentube_nx.nro
+          grep -q 'return normalized == "www.youtube.com";' src/core/outbound_policy.cpp
+          grep -q 'nintendo.com' src/core/outbound_policy.cpp
+          grep -q 'CPPFILES := $(filter-out curl_http_client.cpp,$(CPPFILES))' Makefile.switch
+
+      - name: Commit and push Channel slice
+        shell: bash
+        run: |
+          git config user.name "GlitchedZeus"
+          git config user.email "user91746@protonmail.com"
+          git add CMakeLists.txt include/tizentube_nx/core/channel_model.hpp include/tizentube_nx/youtube/channel_response.hpp include/tizentube_nx/youtube/guest_channel.hpp src/core/channel_model.cpp src/core/guest_channel.cpp src/core/home_response.cpp switch/source/main.cpp tests/channel_model_tests.cpp tests/channel_response_tests.cpp tests/guest_channel_tests.cpp docs/CHANNEL_GUEST_BROWSING.md docs/HARDWARE_GATES.md docs/HOME_GUEST_BROWSING.md docs/PROJECT_STATUS.md docs/ROADMAP.md
+          git diff --cached --check
+          git commit -m "m2: add first-page channel browsing"
+          git push origin HEAD:feature/m2-guest-browsing
