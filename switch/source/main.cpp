@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -17,11 +18,14 @@
 #include "app_storage.hpp"
 #include "libnx_http_client.hpp"
 #include "tizentube_nx/core/home_model.hpp"
+#include "tizentube_nx/core/channel_model.hpp"
+#include "tizentube_nx/core/url.hpp"
 #include "tizentube_nx/core/search_model.hpp"
 #include "tizentube_nx/core/search_presentation.hpp"
 #include "tizentube_nx/ui/navigation.hpp"
 #include "tizentube_nx/youtube/guest_api.hpp"
 #include "tizentube_nx/youtube/guest_home.hpp"
+#include "tizentube_nx/youtube/guest_channel.hpp"
 #include "tizentube_nx/youtube/search_flow.hpp"
 #include "tizentube_nx/youtube/search_worker_guard.hpp"
 #include "tizentube_nx/youtube/session_bootstrap.hpp"
@@ -61,6 +65,182 @@ brls::Button* button(brls::Box* box, const std::string& text) {
     box->addView(view);
     return view;
 }
+
+class ChannelActivity : public brls::Activity {
+public:
+    ChannelActivity(
+        ttnx::core::ChannelModel& model,
+        std::function<void()> on_close)
+        : model_(model), on_close_(std::move(on_close)) {}
+
+    brls::View* createContentView() override {
+        auto* scroll = new brls::ScrollingFrame();
+        auto* content = new brls::Box(brls::Axis::COLUMN);
+        content->setPadding(32, 36, 32, 36);
+        scroll->setContentView(content);
+
+        title_label_ = label(content, "Channel", 34);
+        status_label_ = label(content, "Loading Channel...", 20);
+        metadata_label_ = label(content, "", 18);
+        description_label_ = label(content, "", 18);
+
+        back_button_ = button(content, "Back to Search");
+        auto close = [this](brls::View*) {
+            if (on_close_) on_close_();
+            brls::Application::popActivity();
+            return true;
+        };
+        back_button_->registerClickAction(close);
+        content->registerAction("Back", brls::BUTTON_B, close);
+
+        label(content,
+              "Channel first-page guest browsing. Thumbnails, pagination and playback remain disabled for this hardware gate.",
+              18);
+        results_box_ = new brls::Box(brls::Axis::COLUMN);
+        results_box_->setMarginBottom(8);
+        content->addView(results_box_);
+        diagnostic_label_ = label(content, "", 17);
+        refresh(true);
+        return scroll;
+    }
+
+    void set_diagnostics(std::string diagnostics) {
+        diagnostics_ = std::move(diagnostics);
+    }
+
+    void refresh(bool rebuild_results) {
+        if (!title_label_) return;
+        const auto& metadata = model_.metadata();
+        const auto& identity = model_.identity();
+        std::string title = metadata.title.empty() ? identity.title : metadata.title;
+        if (title.empty()) title = "Channel";
+        title_label_->setText(bounded_ui_text(title, kMaxUiTitleChars));
+
+        std::string status;
+        switch (model_.state()) {
+            case ttnx::core::ChannelViewState::Idle:
+                status = "Channel is idle.";
+                break;
+            case ttnx::core::ChannelViewState::Loading:
+                status = "Loading Channel first page...";
+                break;
+            case ttnx::core::ChannelViewState::Ready:
+                status = std::to_string(model_.results().size()) + " normal Channel result";
+                if (model_.results().size() != 1) status += 's';
+                status += ".";
+                break;
+            case ttnx::core::ChannelViewState::Empty:
+                status = "This selected Channel tab has no supported normal content.";
+                break;
+            case ttnx::core::ChannelViewState::Error:
+                status = model_.error().empty()
+                    ? "Channel could not be loaded safely."
+                    : model_.error();
+                break;
+        }
+        status_label_->setText(status);
+
+        std::string metadata_text;
+        if (!metadata.handle.empty()) metadata_text += metadata.handle;
+        if (!metadata.subscriber_text.empty()) {
+            if (!metadata_text.empty()) metadata_text += "  •  ";
+            metadata_text += metadata.subscriber_text;
+        }
+        if (!metadata.canonical_url.empty()) {
+            if (!metadata_text.empty()) metadata_text += "\n";
+            metadata_text += metadata.canonical_url;
+        }
+        metadata_label_->setText(bounded_ui_text(metadata_text, kMaxUiMetadataChars));
+        description_label_->setText(bounded_ui_text(metadata.description, 700));
+
+        if (diagnostic_label_) {
+            diagnostic_label_->setText(
+                model_.state() == ttnx::core::ChannelViewState::Error
+                    ? diagnostics_
+                    : std::string{});
+        }
+        if (rebuild_results) rebuild();
+    }
+
+private:
+    struct DetailRow {
+        std::string identity;
+        brls::Button* button{nullptr};
+        brls::Label* detail{nullptr};
+    };
+
+    ttnx::core::ChannelModel& model_;
+    std::function<void()> on_close_;
+    std::string diagnostics_;
+    brls::Label* title_label_{nullptr};
+    brls::Label* status_label_{nullptr};
+    brls::Label* metadata_label_{nullptr};
+    brls::Label* description_label_{nullptr};
+    brls::Label* diagnostic_label_{nullptr};
+    brls::Button* back_button_{nullptr};
+    brls::Box* results_box_{nullptr};
+    std::vector<DetailRow> detail_rows_;
+
+    void refresh_inline_details() {
+        const auto& selected = model_.selected_identity();
+        for (auto& row : detail_rows_) {
+            if (!row.detail) continue;
+            row.detail->setVisibility(
+                !selected.empty() && row.identity == selected
+                    ? brls::Visibility::VISIBLE
+                    : brls::Visibility::GONE);
+        }
+    }
+
+    void rebuild() {
+        if (!results_box_) return;
+        detail_rows_.clear();
+        while (!results_box_->getChildren().empty()) {
+            results_box_->removeView(results_box_->getChildren().back());
+        }
+
+        std::string last_section;
+        for (const auto& section : model_.sections()) {
+            if (!section.title.empty()) {
+                label(results_box_, bounded_ui_text(section.title, 100), 24)->setMarginBottom(12);
+            }
+            for (const auto& result : section.results) append_result(result);
+        }
+        if (model_.sections().empty()) {
+            for (const auto& result : model_.results()) append_result(result);
+        }
+    }
+
+    void append_result(const ttnx::core::BrowseResult& result) {
+        const auto identity = ttnx::core::browse_result_identity(result);
+        if (identity.empty()) return;
+        std::string title = "[" + ttnx::core::search_result_kind_label(result.kind) + "] ";
+        title += result.title.empty() ? "Untitled result" : result.title;
+        auto* select = button(results_box_, bounded_ui_text(title, kMaxUiTitleChars));
+        select->setHeight(72);
+        select->registerClickAction([this, identity](brls::View*) {
+            if (model_.selected_identity() == identity) model_.clear_selection();
+            else if (!model_.select(identity)) return true;
+            refresh_inline_details();
+            return true;
+        });
+        auto* detail = label(
+            results_box_,
+            ttnx::core::search_result_selection_display(result),
+            18);
+        detail->setMarginBottom(14);
+        detail->setVisibility(
+            identity == model_.selected_identity()
+                ? brls::Visibility::VISIBLE
+                : brls::Visibility::GONE);
+        detail_rows_.push_back({identity, select, detail});
+        const auto metadata = ttnx::core::search_result_metadata_display(result);
+        if (!metadata.empty()) {
+            auto* info = label(results_box_, bounded_ui_text(metadata, kMaxUiMetadataChars), 18);
+            info->setMarginBottom(14);
+        }
+    }
+};
 
 class ShellActivity : public brls::Activity {
 public:
@@ -111,6 +291,7 @@ public:
         pump_network_result();
         pump_home_result();
         pump_search_result();
+        pump_channel_result();
         update_frame_rate();
     }
 
@@ -118,11 +299,14 @@ public:
         if (network_worker_.joinable()) network_worker_.join();
         if (home_worker_.joinable()) home_worker_.join();
         if (search_worker_.joinable()) search_worker_.join();
+        if (channel_worker_.joinable()) channel_worker_.join();
         network_busy_.store(false);
         home_busy_.store(false);
         home_worker_done_.store(false);
         search_busy_.store(false);
         search_worker_done_.store(false);
+        channel_busy_.store(false);
+        channel_worker_done_.store(false);
     }
 
 
@@ -186,6 +370,20 @@ private:
     std::atomic<ttnx::youtube::SearchWorkerStage> search_worker_stage_{
         ttnx::youtube::SearchWorkerStage::Idle};
 
+    // Channel first-page state lives above the accepted Search Activity. The
+    // network worker owns no Views; the plain ChannelActivity is updated only
+    // by ShellActivity::tick() on the UI thread.
+    ttnx::core::ChannelModel channel_model_;
+    std::atomic_bool channel_busy_{false};
+    std::atomic_bool channel_worker_done_{false};
+    std::thread channel_worker_;
+    std::mutex channel_mutex_;
+    bool pending_channel_result_{false};
+    std::uint64_t pending_channel_generation_{0};
+    ttnx::youtube::GuestChannelResult pending_channel_;
+    std::string channel_diagnostics_;
+    ChannelActivity* active_channel_activity_{nullptr};
+
     // These pointers are UI-thread-only conveniences for the currently visible
     // plain ScrollingFrame. create_page() clears every page pointer before the
     // replacement page is built. Workers never capture or dereference them.
@@ -215,6 +413,7 @@ private:
         std::string identity;
         brls::Button* button{nullptr};
         brls::Label* detail{nullptr};
+        brls::Button* open_channel{nullptr};
     };
     std::vector<SearchDetailRow> search_detail_rows_;
 
@@ -270,7 +469,9 @@ private:
     void refresh_footer() {
         if (!footer_) return;
         std::string text = "M2 guest | ";
-        if (search_busy_.load()) {
+        if (channel_busy_.load()) {
+            text += "Loading Channel...";
+        } else if (search_busy_.load()) {
             text += "Searching...";
         } else if (home_busy_.load()) {
             text += "Loading Home...";
@@ -591,10 +792,15 @@ private:
     void refresh_search_inline_details() {
         const auto& selected_identity = search_model_.selected_identity();
         for (auto& row : search_detail_rows_) {
-            if (!row.detail) continue;
             const bool selected = !selected_identity.empty() && row.identity == selected_identity;
-            row.detail->setVisibility(
-                selected ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
+            if (row.detail) {
+                row.detail->setVisibility(
+                    selected ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
+            }
+            if (row.open_channel) {
+                row.open_channel->setVisibility(
+                    selected ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
+            }
         }
     }
 
@@ -647,7 +853,19 @@ private:
             identity == search_model_.selected_identity()
                 ? brls::Visibility::VISIBLE
                 : brls::Visibility::GONE);
-        search_detail_rows_.push_back({identity, select, detail_label});
+        brls::Button* open_channel = nullptr;
+        if (result.kind == ttnx::core::BrowseResultKind::Channel &&
+            ttnx::core::is_valid_channel_id(result.id)) {
+            open_channel = button(search_results_box_, "Open channel");
+            open_channel->setVisibility(brls::Visibility::GONE);
+            const auto channel_id = result.id;
+            const auto channel_title = result.title;
+            open_channel->registerClickAction([this, channel_id, channel_title](brls::View*) {
+                open_channel_page(channel_id, channel_title);
+                return true;
+            });
+        }
+        search_detail_rows_.push_back({identity, select, detail_label, open_channel});
 
         const auto metadata = ttnx::core::search_result_metadata_display(result);
         if (!metadata.empty()) {
@@ -804,7 +1022,7 @@ private:
     }
 
     void start_guest_connection_test() {
-        if (search_busy_.load() || home_busy_.load()) {
+        if (search_busy_.load() || home_busy_.load() || channel_busy_.load()) {
             network_detail_ = "A live YouTube request is in progress. Try the guest diagnostic again after it finishes.";
             refresh_home_page();
             return;
@@ -1116,7 +1334,7 @@ private:
 
     void start_search() {
         if (search_busy_.load()) return;
-        if (home_busy_.load() || network_busy_.load()) {
+        if (home_busy_.load() || channel_busy_.load() || network_busy_.load()) {
             refresh_search_page(false);
             return;
         }
@@ -1132,7 +1350,7 @@ private:
 
 
     void retry_search_request() {
-        if (search_busy_.load() || home_busy_.load() || network_busy_.load()) return;
+        if (search_busy_.load() || home_busy_.load() || channel_busy_.load() || network_busy_.load()) return;
         if (!guest_session_ || !guest_session_->usable()) {
             refresh_search_page(false);
             return;
@@ -1145,7 +1363,7 @@ private:
     }
 
     void start_load_more() {
-        if (search_busy_.load() || home_busy_.load() || network_busy_.load()) return;
+        if (search_busy_.load() || home_busy_.load() || channel_busy_.load() || network_busy_.load()) return;
         if (!guest_session_ || !guest_session_->usable()) {
             refresh_search_page(false);
             return;
@@ -1166,6 +1384,139 @@ private:
         // Keep all existing result Views alive while the continuation runs.
         refresh_search_page(false);
         launch_search_worker(generation, {}, true);
+    }
+
+    void publish_channel_result(
+        std::uint64_t generation,
+        ttnx::youtube::GuestChannelResult result) noexcept {
+        try {
+            std::lock_guard<std::mutex> lock(channel_mutex_);
+            pending_channel_generation_ = generation;
+            pending_channel_ = std::move(result);
+            pending_channel_result_ = true;
+        } catch (...) {
+            pending_channel_result_ = false;
+        }
+        channel_worker_done_.store(true);
+    }
+
+    void pump_channel_result() {
+        if (!channel_worker_done_.load()) return;
+        if (channel_worker_.joinable()) channel_worker_.join();
+
+        ttnx::youtube::GuestChannelResult result;
+        std::uint64_t generation = 0;
+        bool have_result = false;
+        {
+            std::lock_guard<std::mutex> lock(channel_mutex_);
+            if (pending_channel_result_) {
+                generation = pending_channel_generation_;
+                result = std::move(pending_channel_);
+                pending_channel_result_ = false;
+                have_result = true;
+            }
+        }
+        channel_worker_done_.store(false);
+        channel_busy_.store(false);
+
+        bool applied = false;
+        if (have_result) {
+            channel_diagnostics_ = std::move(result.diagnostics);
+            if (result.page) {
+                applied = channel_model_.apply_page(generation, std::move(*result.page));
+            } else {
+                applied = channel_model_.fail(
+                    generation,
+                    result.error.empty()
+                        ? "Channel could not be loaded safely."
+                        : std::move(result.error));
+            }
+        } else {
+            channel_diagnostics_.clear();
+            applied = channel_model_.fail(
+                generation,
+                "Channel failed safely because of an internal error.");
+        }
+
+        refresh_footer();
+        if (applied && active_channel_activity_) {
+            active_channel_activity_->set_diagnostics(channel_diagnostics_);
+            active_channel_activity_->refresh(true);
+        }
+    }
+
+    void launch_channel_worker(std::uint64_t generation, std::string channel_id) {
+        if (!guest_session_ || !guest_session_->usable()) return;
+        if (channel_worker_.joinable()) channel_worker_.join();
+        channel_busy_.store(true);
+        channel_worker_done_.store(false);
+        refresh_footer();
+
+        try {
+            const auto session = *guest_session_;
+            channel_worker_ = std::thread([this, generation, channel_id = std::move(channel_id), session] {
+                try {
+                    ttnx::core::GuestRequest request;
+                    request.surface = ttnx::core::BrowseSurface::Channel;
+                    request.value = channel_id;
+                    publish_channel_result(
+                        generation,
+                        ttnx::youtube::execute_guest_channel(
+                            network_client_, session, request));
+                } catch (const std::bad_alloc&) {
+                    ttnx::youtube::GuestChannelResult failure;
+                    failure.error = "Channel failed safely because there was not enough available memory.";
+                    publish_channel_result(generation, std::move(failure));
+                } catch (const std::exception&) {
+                    ttnx::youtube::GuestChannelResult failure;
+                    failure.error = "Channel failed safely because of an internal error.";
+                    publish_channel_result(generation, std::move(failure));
+                } catch (...) {
+                    ttnx::youtube::GuestChannelResult failure;
+                    failure.error = "Channel failed safely because of an internal error.";
+                    publish_channel_result(generation, std::move(failure));
+                }
+            });
+        } catch (const std::bad_alloc&) {
+            channel_busy_.store(false);
+            channel_worker_done_.store(false);
+            (void)channel_model_.fail(
+                generation,
+                "Could not start Channel because there was not enough available memory.");
+            if (active_channel_activity_) active_channel_activity_->refresh(false);
+            refresh_footer();
+        } catch (...) {
+            channel_busy_.store(false);
+            channel_worker_done_.store(false);
+            (void)channel_model_.fail(generation, "Could not start the Channel worker thread.");
+            if (active_channel_activity_) active_channel_activity_->refresh(false);
+            refresh_footer();
+        }
+    }
+
+    void open_channel_page(const std::string& channel_id, const std::string& channel_title) {
+        if (channel_busy_.load() || active_channel_activity_ ||
+            search_busy_.load() || home_busy_.load() || network_busy_.load()) return;
+        if (!guest_session_ || !guest_session_->usable() ||
+            !ttnx::core::is_valid_channel_id(channel_id)) return;
+
+        ttnx::core::ChannelIdentity identity;
+        identity.browse_id = channel_id;
+        identity.title = channel_title;
+        const auto generation = channel_model_.begin_load(std::move(identity));
+        channel_diagnostics_.clear();
+
+        auto* activity = new ChannelActivity(
+            channel_model_,
+            [this] {
+                active_channel_activity_ = nullptr;
+                // Invalidates an in-flight completion if the user backs out early.
+                channel_model_.reset();
+                channel_diagnostics_.clear();
+            });
+        active_channel_activity_ = activity;
+        brls::Application::pushActivity(activity);
+        launch_channel_worker(generation, channel_id);
     }
 
     void open_search_keyboard() {
@@ -1323,7 +1674,7 @@ private:
 
             search_status_label_ = label(content, "", 20);
             label(content,
-                  "Press A on any result to show its normalized ID and clean canonical URL directly below that result.",
+                  "Press A on any result to toggle its normalized ID and clean canonical URL. Channel results also reveal an explicit Open channel action.",
                   18);
             search_results_box_ = new brls::Box(brls::Axis::COLUMN);
             search_results_box_->setMarginBottom(8);

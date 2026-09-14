@@ -142,7 +142,7 @@
 - [x] Real-hardware Home request path + valid `feedNudgeRenderer` guest empty-state acceptance at `7b4993f7871ae71cb8ca44e30e51f876f8133cc2`
 - [ ] Real-hardware normal Home Video/Channel/Playlist rendering when YouTube actually provides normal guest results
 - [ ] Home continuation after normal-content Home is physically observable/accepted
-- [ ] Channel pages
+- [ ] Channel pages — first-page implementation/host validation complete; physical Switch gate pending
 - [ ] Playlist pages
 - [ ] Real-hardware guest browsing acceptance
 

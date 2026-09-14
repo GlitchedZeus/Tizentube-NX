@@ -1,5 +1,12 @@
 # Hardware gates
 
+## Channel first-page candidate — host validated / hardware pending
+
+Physical Home cleanup head `ca8467e459389c22afee4f26fbebcddc858634a8` is accepted: Guest ready, explicit `Load Home`, typed `FeedNudge`, friendly non-error message, no structural diagnostic dump and no crash. Normal Home Video/Channel/Playlist rows remain not physically observed because YouTube supplied none.
+
+Channel pages now have an explicit Search `Open channel` action, generation-safe first-page model/worker, selected-tab scoped parser, bounded structural diagnostics and a text-only plain-ScrollingFrame activity that leaves the original Search page alive underneath. Channel hardware acceptance remains **PENDING** until the new NRO is tested. Channel continuation, Playlist pages, playback, thumbnails and OAuth remain disabled.
+
+
 This file records physical Nintendo Switch acceptance separately from host/CI validation. A feature is not called hardware accepted until it has been exercised on the real Atmosphere Switch.
 
 ## Accepted

@@ -2,6 +2,8 @@
 
 ## Current phase
 
+**Channel first-page candidate:** implemented/host-validated, physical Switch test pending. The physical FeedNudge presentation cleanup at `ca8467e459389c22afee4f26fbebcddc858634a8` is accepted. Channel entry is explicit from a normalized Search Channel result; accepted Search state stays alive underneath a plain Channel activity. Channel requests use only the existing guest session and `www.youtube.com:443`; pagination/thumbnails/playback/OAuth remain disabled.
+
 M2 — YouTube guest browsing / pre-alpha.
 
 Branch: `feature/m2-guest-browsing`  

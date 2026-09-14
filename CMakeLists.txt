@@ -13,6 +13,7 @@ add_library(tizentube_nx_core
     src/core/search_error.cpp
     src/core/search_model.cpp
     src/core/home_model.cpp
+    src/core/channel_model.cpp
     src/core/guest_browse.cpp
     src/core/guest_api.cpp
     src/core/session_bootstrap.cpp
@@ -21,6 +22,7 @@ add_library(tizentube_nx_core
     src/core/home_response.cpp
     src/core/guest_search.cpp
     src/core/guest_home.cpp
+    src/core/guest_channel.cpp
     src/core/search_flow.cpp
     src/core/diagnostics.cpp
     src/core/outbound_policy.cpp
@@ -119,6 +121,18 @@ if(TTNX_BUILD_TESTS)
     add_executable(tizentube_nx_guest_home_tests tests/guest_home_tests.cpp)
     target_link_libraries(tizentube_nx_guest_home_tests PRIVATE tizentube_nx_core)
     add_test(NAME guest_home COMMAND tizentube_nx_guest_home_tests)
+
+    add_executable(tizentube_nx_channel_model_tests tests/channel_model_tests.cpp)
+    target_link_libraries(tizentube_nx_channel_model_tests PRIVATE tizentube_nx_core)
+    add_test(NAME channel_model COMMAND tizentube_nx_channel_model_tests)
+
+    add_executable(tizentube_nx_channel_response_tests tests/channel_response_tests.cpp)
+    target_link_libraries(tizentube_nx_channel_response_tests PRIVATE tizentube_nx_core)
+    add_test(NAME channel_response COMMAND tizentube_nx_channel_response_tests)
+
+    add_executable(tizentube_nx_guest_channel_tests tests/guest_channel_tests.cpp)
+    target_link_libraries(tizentube_nx_guest_channel_tests PRIVATE tizentube_nx_core)
+    add_test(NAME guest_channel COMMAND tizentube_nx_guest_channel_tests)
 
     add_executable(tizentube_nx_search_executor_error_tests tests/search_executor_error_tests.cpp)
     target_link_libraries(tizentube_nx_search_executor_error_tests PRIVATE tizentube_nx_core)

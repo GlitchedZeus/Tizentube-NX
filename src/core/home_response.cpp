@@ -1,4 +1,6 @@
 #include "tizentube_nx/youtube/home_response.hpp"
+#include "tizentube_nx/youtube/channel_response.hpp"
+#include "tizentube_nx/core/url.hpp"
 
 #include "tizentube_nx/core/search_result.hpp"
 #include "tizentube_nx/youtube/browse_response.hpp"
@@ -1121,6 +1123,384 @@ HomeResponseParseResult parse_scoped_home_response(
 
     HomeResponseParseResult result;
     result.page = std::move(home);
+    result.diagnostics = diagnostics;
+    return result;
+}
+
+
+namespace {
+
+ChannelResponseParseResult channel_fail(std::string error, std::string diagnostics = {}) {
+    ChannelResponseParseResult result;
+    result.error = std::move(error);
+    result.diagnostics = std::move(diagnostics);
+    return result;
+}
+
+std::string channel_diagnostics(std::string_view response_body) {
+    auto summary = build_home_diagnostics(response_body).summary();
+    constexpr std::string_view prefix = "Home diag:";
+    if (summary.starts_with(prefix)) {
+        summary.replace(0, prefix.size(), "Channel diag:");
+    }
+    return summary;
+}
+
+std::string decoded_field(std::string_view object, std::string_view key) {
+    const auto value = field(object, key);
+    if (!value) return {};
+    const auto decoded = decode_json_string(*value);
+    return decoded ? *decoded : std::string{};
+}
+
+std::string bounded_channel_text(std::string value, std::size_t max_bytes) {
+    if (value.size() > max_bytes) value.clear();
+    return value;
+}
+
+bool apply_channel_metadata(
+    std::string_view response_body,
+    std::string_view expected_channel_id,
+    core::ChannelPage& channel,
+    std::string& error) {
+    channel.identity.browse_id = std::string(expected_channel_id);
+    if (const auto canonical = core::canonical_channel_url(expected_channel_id)) {
+        channel.metadata.canonical_url = *canonical;
+    }
+
+    if (const auto metadata = path(response_body, {"metadata", "channelMetadataRenderer"})) {
+        const auto external_id = decoded_field(*metadata, "externalId");
+        if (!external_id.empty() && external_id != expected_channel_id) {
+            error = "Channel metadata identity does not match the requested channel.";
+            return false;
+        }
+        channel.metadata.title = bounded_channel_text(decoded_field(*metadata, "title"), 512);
+        channel.metadata.description = bounded_channel_text(decoded_field(*metadata, "description"), 1024);
+
+        const auto vanity = decoded_field(*metadata, "vanityChannelUrl");
+        const auto marker = vanity.find("/@");
+        if (marker != std::string::npos) {
+            auto handle = vanity.substr(marker + 1);
+            if (handle.size() <= 128 && handle.starts_with('@')) {
+                bool safe = true;
+                for (const unsigned char c : handle) {
+                    if (c <= 0x20 || c == 0x7f || c == '/' || c == '?' || c == '#') {
+                        safe = false;
+                        break;
+                    }
+                }
+                if (safe) channel.metadata.handle = std::move(handle);
+            }
+        }
+    }
+
+    if (const auto header = path(response_body, {"header", "c4TabbedHeaderRenderer"})) {
+        const auto header_id = decoded_field(*header, "channelId");
+        if (!header_id.empty() && header_id != expected_channel_id) {
+            error = "Channel header identity does not match the requested channel.";
+            return false;
+        }
+        if (channel.metadata.title.empty()) {
+            channel.metadata.title = bounded_channel_text(decoded_field(*header, "title"), 512);
+        }
+        if (const auto handle = field(*header, "channelHandleText")) {
+            channel.metadata.handle = bounded_channel_text(text_node(*handle), 128);
+        }
+        if (const auto subscribers = field(*header, "subscriberCountText")) {
+            channel.metadata.subscriber_text = bounded_channel_text(text_node(*subscribers), 256);
+        }
+    }
+
+    channel.identity.title = channel.metadata.title;
+    return true;
+}
+
+bool channel_blocked_terminal(std::string_view entry) {
+    for (const auto key : {
+             std::string_view{"reelShelfRenderer"},
+             std::string_view{"reelItemRenderer"},
+             std::string_view{"shortsLockupViewModel"},
+             std::string_view{"adSlotRenderer"},
+             std::string_view{"promotedVideoRenderer"},
+             std::string_view{"promotedSparklesWebRenderer"},
+             std::string_view{"productRenderer"},
+             std::string_view{"shoppingShelfRenderer"},
+             std::string_view{"merchandiseShelfRenderer"},
+             std::string_view{"mealbarPromoRenderer"},
+             std::string_view{"premiumUpsellRenderer"}}) {
+        if (field(entry, key)) return true;
+    }
+    return false;
+}
+
+bool append_channel_payload(
+    core::ChannelPage& channel,
+    std::unordered_set<std::string>& seen,
+    std::string title,
+    std::string_view payload,
+    const core::FilterPolicy& policy,
+    std::string& continuation,
+    bool& ambiguous_continuation,
+    std::string& error) {
+    auto parsed = parse_search_response(payload, policy);
+    if (!parsed || !parsed.page) {
+        error = parsed.error.empty()
+            ? "Channel scoped renderer payload was rejected."
+            : parsed.error;
+        return false;
+    }
+
+    (void)merge_continuation(
+        continuation,
+        ambiguous_continuation,
+        parsed.page->continuation);
+
+    std::vector<core::BrowseResult> accepted;
+    accepted.reserve(parsed.page->results.size());
+    for (auto& result : parsed.page->results) {
+        const auto identity = core::browse_result_identity(result);
+        if (identity.empty() || !seen.insert(identity).second) continue;
+        channel.results.push_back(result);
+        accepted.push_back(std::move(result));
+    }
+
+    if (accepted.empty()) return true;
+    if (title.size() > kMaxSectionTitleBytes) title.clear();
+    if (title.empty() && !channel.sections.empty() && channel.sections.back().title.empty()) {
+        auto& existing = channel.sections.back().results;
+        existing.insert(existing.end(),
+                        std::make_move_iterator(accepted.begin()),
+                        std::make_move_iterator(accepted.end()));
+    } else {
+        core::ChannelSection section;
+        section.title = std::move(title);
+        section.results = std::move(accepted);
+        channel.sections.push_back(std::move(section));
+    }
+    return true;
+}
+
+bool append_channel_entry(
+    core::ChannelPage& channel,
+    std::unordered_set<std::string>& seen,
+    std::string inherited_title,
+    std::string_view entry,
+    const core::FilterPolicy& policy,
+    std::string& continuation,
+    bool& ambiguous_continuation,
+    bool& saw_reviewed,
+    std::string& error) {
+    if (channel_blocked_terminal(entry)) {
+        saw_reviewed = true;
+        return true;
+    }
+
+    if (const auto rich_item = field(entry, "richItemRenderer")) {
+        saw_reviewed = true;
+        const auto content = field(*rich_item, "content");
+        return !content || append_channel_entry(
+            channel, seen, std::move(inherited_title), *content, policy,
+            continuation, ambiguous_continuation, saw_reviewed, error);
+    }
+
+    if (const auto rich_section = field(entry, "richSectionRenderer")) {
+        saw_reviewed = true;
+        const auto content = field(*rich_section, "content");
+        if (!content) return true;
+        const auto title = section_title(entry);
+        if (const auto rich_shelf = field(*content, "richShelfRenderer")) {
+            const auto contents = field(*rich_shelf, "contents");
+            if (!contents) return true;
+            const auto items = array_elements(*contents);
+            if (!items) {
+                error = "Channel rich-shelf contents are malformed or exceed limits.";
+                return false;
+            }
+            for (const auto item : *items) {
+                if (!append_channel_entry(
+                        channel, seen, title, item, policy,
+                        continuation, ambiguous_continuation, saw_reviewed, error)) return false;
+            }
+            return true;
+        }
+        if (const auto shelf = field(*content, "shelfRenderer")) {
+            return append_channel_entry(
+                channel, seen, title, *shelf, policy,
+                continuation, ambiguous_continuation, saw_reviewed, error);
+        }
+        // reelShelfRenderer and all other unreviewed section payloads are terminal.
+        return true;
+    }
+
+    if (const auto item_section = field(entry, "itemSectionRenderer")) {
+        saw_reviewed = true;
+        const auto contents = field(*item_section, "contents");
+        if (!contents) return true;
+        const auto items = array_elements(*contents);
+        if (!items) {
+            error = "Channel item-section contents are malformed or exceed limits.";
+            return false;
+        }
+        const auto title = section_title(entry);
+        for (const auto item : *items) {
+            if (!append_channel_entry(
+                    channel, seen, title, item, policy,
+                    continuation, ambiguous_continuation, saw_reviewed, error)) return false;
+        }
+        return true;
+    }
+
+    if (const auto rich_shelf = field(entry, "richShelfRenderer")) {
+        saw_reviewed = true;
+        const auto contents = field(*rich_shelf, "contents");
+        if (!contents) return true;
+        const auto items = array_elements(*contents);
+        if (!items) {
+            error = "Channel rich-shelf contents are malformed or exceed limits.";
+            return false;
+        }
+        const auto title = section_title(entry).empty() ? inherited_title : section_title(entry);
+        for (const auto item : *items) {
+            if (!append_channel_entry(
+                    channel, seen, title, item, policy,
+                    continuation, ambiguous_continuation, saw_reviewed, error)) return false;
+        }
+        return true;
+    }
+
+    if (const auto shelf = field(entry, "shelfRenderer")) {
+        saw_reviewed = true;
+        std::optional<std::string_view> items;
+        if (const auto content = field(*shelf, "content")) {
+            if (const auto horizontal = field(*content, "horizontalListRenderer")) {
+                items = field(*horizontal, "items");
+            } else if (const auto expanded = field(*content, "expandedShelfContentsRenderer")) {
+                items = field(*expanded, "items");
+            }
+        }
+        if (!items) items = field(*shelf, "contents");
+        if (!items) return true;
+        const auto children = array_elements(*items);
+        if (!children) {
+            error = "Channel shelf item list is malformed or exceeds limits.";
+            return false;
+        }
+        const auto title = section_title(entry).empty() ? inherited_title : section_title(entry);
+        for (const auto child : *children) {
+            if (!append_channel_entry(
+                    channel, seen, title, child, policy,
+                    continuation, ambiguous_continuation, saw_reviewed, error)) return false;
+        }
+        return true;
+    }
+
+    for (const auto key : {
+             std::string_view{"videoRenderer"},
+             std::string_view{"channelRenderer"},
+             std::string_view{"playlistRenderer"},
+             std::string_view{"radioRenderer"},
+             std::string_view{"lockupViewModel"},
+             std::string_view{"continuationItemRenderer"},
+             std::string_view{"continuationItemViewModel"},
+             std::string_view{"continuationItemView"}}) {
+        if (field(entry, key)) {
+            saw_reviewed = true;
+            return append_channel_payload(
+                channel, seen, std::move(inherited_title), entry, policy,
+                continuation, ambiguous_continuation, error);
+        }
+    }
+
+    // Unknown wrapper: deliberately opaque. Do not recurse.
+    return true;
+}
+
+}  // namespace
+
+ChannelResponseParseResult parse_scoped_channel_response(
+    std::string_view response_body,
+    std::string_view expected_channel_id,
+    const core::FilterPolicy& policy) {
+    if (!core::is_valid_channel_id(expected_channel_id)) {
+        return channel_fail("Channel request identity is invalid.");
+    }
+    if (response_body.empty()) return channel_fail("Channel response is empty.");
+    if (response_body.size() > kMaxHomeResponseBytes) {
+        return channel_fail("Channel response is too large.");
+    }
+    if (!validate_document(response_body)) {
+        return channel_fail("Channel response is malformed or exceeds scope parser limits.");
+    }
+
+    const std::string diagnostics = channel_diagnostics(response_body);
+    const auto tabs_json = browse_tabs(response_body);
+    if (!tabs_json) {
+        return channel_fail("Channel response did not contain a recognized browse-tab scope.", diagnostics);
+    }
+    const auto tabs = array_elements(*tabs_json);
+    if (!tabs) return channel_fail("Channel tab list is malformed or exceeds limits.", diagnostics);
+
+    std::optional<std::string_view> selected_contents;
+    std::size_t selected_count = 0;
+    for (const auto tab : *tabs) {
+        const auto renderer = field(tab, "tabRenderer");
+        if (!renderer || !tab_selected(*renderer)) continue;
+        ++selected_count;
+        const auto contents = recognized_tab_contents(*renderer);
+        if (contents) selected_contents = *contents;
+    }
+    if (selected_count != 1) {
+        return channel_fail(
+            selected_count == 0
+                ? "Channel response has no provider-selected browse tab."
+                : "Channel response contains multiple selected browse tabs.",
+            diagnostics);
+    }
+    if (!selected_contents) {
+        return channel_fail("Selected Channel tab uses an unsupported content container.", diagnostics);
+    }
+
+    const auto entries = array_elements(*selected_contents);
+    if (!entries) {
+        return channel_fail("Selected Channel result container is malformed or exceeds limits.", diagnostics);
+    }
+
+    core::ChannelPage channel;
+    std::string error;
+    if (!apply_channel_metadata(response_body, expected_channel_id, channel, error)) {
+        return channel_fail(std::move(error), diagnostics);
+    }
+
+    std::unordered_set<std::string> seen;
+    seen.reserve(128);
+    std::string continuation;
+    bool ambiguous_continuation = false;
+    bool saw_reviewed = entries->empty();
+
+    for (const auto entry : *entries) {
+        if (!append_channel_entry(
+                channel,
+                seen,
+                section_title(entry),
+                entry,
+                policy,
+                continuation,
+                ambiguous_continuation,
+                saw_reviewed,
+                error)) {
+            return channel_fail(
+                error.empty() ? "Channel selected-tab scope could not be read safely." : std::move(error),
+                diagnostics);
+        }
+    }
+
+    if (!saw_reviewed && !entries->empty()) {
+        return channel_fail("Selected Channel tab uses unsupported renderer families.", diagnostics);
+    }
+    if (!ambiguous_continuation) channel.continuation = std::move(continuation);
+
+    ChannelResponseParseResult result;
+    result.page = std::move(channel);
     result.diagnostics = diagnostics;
     return result;
 }
