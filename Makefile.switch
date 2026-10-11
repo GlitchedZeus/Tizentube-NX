@@ -52,6 +52,12 @@ APP_VERSION	:=	0.1.0
 # An explicitly opt-in *separate* offline playback laboratory binary.
 # No playback/mpv dependencies are linked into the accepted M2 NRO unless
 # TTNX_M3_OFFLINE_PROBE=1 is set at build time. Never auto-enable this.
+ifeq ($(TTNX_M3_INTEGRATED),1)
+TARGET      := tizentube_nx_m3_integrated
+APP_TITLE   := TizenTube NX M3 Integrated
+TTNX_M3_MEDIA_EXPERIMENT := 1
+endif
+
 ifeq ($(TTNX_M3_OFFLINE_PROBE),1)
 TARGET      := tizentube_nx_m3_probe
 SOURCES     := switch/m3_probe
@@ -73,6 +79,9 @@ OUT_SHADERS	:=	shaders
 ifeq ($(TTNX_M3_MEDIA_EXPERIMENT),1)
 DEFINES += -DTTNX_M3_MEDIA_PLANE
 endif
+ifeq ($(TTNX_M3_INTEGRATED),1)
+DEFINES += -DTTNX_M3_INTEGRATED
+endif
 
 ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 
@@ -90,6 +99,17 @@ LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*
 # switch-curl is deliberately excluded from the NRO because the current port has
 # a known certificate-info hard-crash path (tracked by project issue #7).
 LIBS	:= -lnx
+
+ifneq ($(filter 1,$(TTNX_M3_OFFLINE_PROBE) $(TTNX_M3_INTEGRATED)),)
+# Both M3 player targets use the exact same pinned libmpv software renderer
+# API proven by the user's Nintendo Switch hardware test. The normal NRO
+# never links mpv, preserving its accepted size and networking behavior.
+MPV_STATIC_LIBS := $(shell PKG_CONFIG_LIBDIR=$(PORTLIBS)/lib/pkgconfig pkg-config --static --libs mpv 2>/dev/null)
+ifeq ($(strip $(MPV_STATIC_LIBS)),)
+$(error M3 player requires switch-libmpv; use isolated experimental CI)
+endif
+LIBS := $(MPV_STATIC_LIBS) -lnx
+endif
 
 ifeq ($(TTNX_M3_OFFLINE_PROBE),1)
 # Static devkitPro mpv dependencies are resolved by the package's .pc file.
