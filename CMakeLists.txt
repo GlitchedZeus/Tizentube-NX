@@ -30,6 +30,7 @@ add_library(tizentube_nx_core
     src/core/settings.cpp
     src/core/playback.cpp
     src/core/media_chunks.cpp
+    src/core/media_download.cpp
     src/core/extraction_wire.cpp
     src/core/sponsorblock.cpp
 )
