@@ -120,10 +120,14 @@ std::string master_text(const playback::HlsProbePlan& plan) {
     }
     const auto& s=plan.selected;
     out+="#EXT-X-STREAM-INF:BANDWIDTH="+
-         std::to_string(s.bandwidth?s.bandwidth:1500000)+
-         ",RESOLUTION="+std::to_string(s.width)+"x"+
-         std::to_string(s.height)+",FRAME-RATE="+
-         std::to_string(s.fps)+".000,CODECS=\"avc1.64001f,mp4a.40.2\"";
+         std::to_string(s.bandwidth?s.bandwidth:1500000);
+    if(!s.direct_media_playlist) {
+        out+=",RESOLUTION="+std::to_string(s.width)+"x"+
+             std::to_string(s.height)+",FRAME-RATE="+
+             std::to_string(s.fps)+".000,CODECS=\"avc1.64001f,mp4a.40.2\"";
+    }
+    // Direct media-playlist source has no master codec/size metadata.
+    // Omit unknown attributes rather than lying to the mpv demuxer.
     if(plan.audio_segments)out+=",AUDIO=\"aac\"";
     out+="\nvideo.m3u8\n";
     return out;
