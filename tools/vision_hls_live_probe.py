@@ -317,6 +317,36 @@ def first_hls_segment(playlist: bytes,variant_url: str) -> str | None:
     return None
 
 
+def select_direct_aac_audio(player_json: bytes) -> str | None:
+    try:
+        response=json.loads(player_json)
+        formats=response.get("streamingData",{}).get("adaptiveFormats",[])
+        if not isinstance(formats,list):
+            return None
+        reviewed=[]
+        for fmt in formats[:200]:
+            if not isinstance(fmt,dict):
+                continue
+            mime=fmt.get("mimeType","")
+            url=fmt.get("url")
+            if (not isinstance(mime,str) or
+                not mime.startswith("audio/mp4") or "mp4a.40." not in mime or
+                fmt.get("drmFamilies") or fmt.get("signatureCipher") or
+                fmt.get("cipher") or
+                not isinstance(url,str) or not approved_hls(url) or
+                "/videoplayback" not in url):
+                continue
+            bitrate=fmt.get("bitrate",0)
+            if not isinstance(bitrate,(int,float)) or not 0<bitrate<=512000:
+                continue
+            reviewed.append((bitrate,url))
+        # This picks a real linked AAC media URL, but does not imply
+        # full duration or audio/video synchronization has been verified.
+        return max(reviewed,key=lambda item:item[0])[1] if reviewed else None
+    except (TypeError,ValueError,KeyError,AttributeError):
+        return None
+
+
 def summarize_audio_offerings(player_json: bytes) -> str:
     """Fixed category only; do not reveal URLs, signature keys or IDs."""
     try:
@@ -415,7 +445,18 @@ def one_source(video_id: str,visitor: str) -> str:
             if 0x1b in types and any(t in types for t in (0x0f,0x11)):
                 return "HLS_MPEG_TS_H264_AAC_STREAMS_VERIFIED"
             if 0x1b in types:
-                return "HLS_MPEG_TS_H264_ONLY_"+audio_state
+                audio=select_direct_aac_audio(data)
+                if not audio:
+                    return "HLS_H264_AUDIO_SOURCE_MISSING"
+                stage="AAC_AUDIO_SAMPLE"
+                sample=get_media_sample(audio,headers={
+                    "Range":"bytes=0-65535",
+                    "Accept-Encoding":"identity",
+                    "Accept":"application/octet-stream",
+                })
+                if identify_media_container(sample)!="ISOBMFF":
+                    return "HLS_H264_AUDIO_CONTAINER_UNVERIFIED"
+                return "HLS_H264_AND_SEPARATE_AAC_MP4_BYTES_VERIFIED"
             return "HLS_MPEG_TS_CODEC_UNVERIFIED"
         return "HLS_SEGMENT_"+container+"_BYTES_OBTAINED"
     except urllib.error.HTTPError as exc:
@@ -457,6 +498,7 @@ def main() -> int:
         result=one_source(video_id,visitor)
         print(f"source={video_id} stage={result}")
         if result in {"HLS_MPEG_TS_H264_AAC_STREAMS_VERIFIED",
+                      "HLS_H264_AND_SEPARATE_AAC_MP4_BYTES_VERIFIED",
                       "HLS_SEGMENT_ISOBMFF_BYTES_OBTAINED"}:
             print("M3_VISION_HLS_LIVE_REFERENCE=PASS")
             return 0
