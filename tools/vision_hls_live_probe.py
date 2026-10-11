@@ -87,6 +87,18 @@ def get_media_sample(url: str, headers: dict) -> bytes:
         return media
 
 
+def identify_media_container(sample: bytes) -> str:
+    # Only report a fixed container label. Never output media bytes or paths.
+    if len(sample)>=376 and sample[0]==0x47 and sample[188]==0x47:
+        return "MPEG_TS"
+    if len(sample)>=12 and sample[4:8] in (
+            b"ftyp",b"styp",b"moof",b"moov",b"mdat"):
+        return "ISOBMFF"
+    if len(sample)>=3 and sample[0]==0xff and (sample[1]&0xf0)==0xf0:
+        return "ADTS_AUDIO"
+    return "UNRECOGNIZED"
+
+
 def bootstrap_visitor(payload: bytes) -> str | None:
     if not payload or len(payload)>MAX_JSON:
         return None
@@ -304,7 +316,7 @@ def one_source(video_id: str,visitor: str) -> str:
         })
         if len(sample)<12 or sample.startswith((b"<html",b"<!DOCTYPE",b"#EXTM3U")):
             return "HLS_SEGMENT_NOT_MEDIA"
-        return "HLS_SEGMENT_BYTES_OBTAINED"
+        return "HLS_SEGMENT_"+identify_media_container(sample)+"_BYTES_OBTAINED"
     except urllib.error.HTTPError as exc:
         if exc.code==403:
             return stage+"_HTTP_403"
@@ -343,7 +355,8 @@ def main() -> int:
     for video_id in ids:
         result=one_source(video_id,visitor)
         print(f"source={video_id} stage={result}")
-        if result=="HLS_SEGMENT_BYTES_OBTAINED":
+        if result in {"HLS_SEGMENT_MPEG_TS_BYTES_OBTAINED",
+                      "HLS_SEGMENT_ISOBMFF_BYTES_OBTAINED"}:
             print("M3_VISION_HLS_LIVE_REFERENCE=PASS")
             return 0
     print("M3_VISION_HLS_LIVE_REFERENCE=FAIL")
