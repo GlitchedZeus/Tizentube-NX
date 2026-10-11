@@ -239,7 +239,7 @@ private:
 class ProbeVideo : public brls::View {
 public:
     explicit ProbeVideo(OfflineMpv& player) : player_(player) {
-        setHeight(400);
+        setHeight(294);
     }
 
     // The one-image allocation is released with this dedicated NRO process.
@@ -279,7 +279,7 @@ brls::Label* add_label(brls::Box* root, const std::string& s, float font = 19) {
     auto* label = new brls::Label();
     label->setText(s);
     label->setFontSize(font);
-    label->setMarginBottom(12);
+    label->setMarginBottom(5);
     root->addView(label);
     return label;
 }
@@ -288,8 +288,10 @@ brls::Button* add_button(brls::Box* root, const std::string& name,
                           std::function<bool(brls::View*)> action) {
     auto* button = new brls::Button();
     button->setText(name);
-    button->setHeight(60);
-    button->setMarginBottom(12);
+    button->setHeight(52);
+    button->setGrow(1.0f);
+    button->setMarginRight(8);
+    button->setMarginBottom(5);
     button->registerClickAction(std::move(action));
     root->addView(button);
     return button;
@@ -300,50 +302,62 @@ public:
     explicit ProbeActivity(OfflineMpv& player) : player_(player) {}
 
     brls::View* createContentView() override {
-        auto* scroll = new brls::ScrollingFrame();
+        // A fixed two-row control pad replaces the tall ScrollingFrame that
+        // trapped hardware focus below the visible 720p viewport.
         auto* root = new brls::Box(brls::Axis::COLUMN);
-        root->setPadding(22, 26, 22, 26);
-        scroll->setContentView(root);
-        add_label(root, "TizenTube NX  |  M3 ISOLATED OFFLINE VIDEO PROBE", 26);
-        add_label(root, "Not YouTube playback. No network or account access.", 18);
+        root->setPadding(12, 20, 12, 20);
+        add_label(root, "TizenTube NX  |  M3 OFFLINE VIDEO TEST", 24);
+        add_label(root, "LOCAL MP4 ONLY  -  NO YOUTUBE / NO NETWORK", 15);
         root->addView(new ProbeVideo(player_));
-        status_ = add_label(root, player_.message(), 18);
-        decoder_ = add_label(root, "Decoder: not started", 18);
-        add_button(root, "A - Load local test video", [this](brls::View*) {
+        status_ = add_label(root, player_.message(), 17);
+        decoder_ = add_label(root, player_.stats(), 15);
+
+        auto* first = new brls::Box(brls::Axis::ROW);
+        first->setHeight(56);
+        root->addView(first);
+        add_button(first, "A - Load / Retry", [this](brls::View*) {
             player_.start();
             update_labels();
             return true;
         });
-        add_button(root, "Pause / Resume", [this](brls::View*) {
+        add_button(first, "Pause / Resume", [this](brls::View*) {
             player_.toggle_pause();
+            update_labels();
             return true;
         });
-        add_button(root, "Seek -10 seconds", [this](brls::View*) {
-            player_.seek(-10);
-            return true;
-        });
-        add_button(root, "Seek +10 seconds", [this](brls::View*) {
-            player_.seek(10);
-            return true;
-        });
-        add_button(root, "Stop playback", [this](brls::View*) {
+        add_button(first, "Stop (X)", [this](brls::View*) {
             player_.stop();
             update_labels();
             return true;
         });
+
+        auto* second = new brls::Box(brls::Axis::ROW);
+        second->setHeight(56);
+        root->addView(second);
+        add_button(second, "Seek -10s (L)", [this](brls::View*) {
+            player_.seek(-10);
+            update_labels();
+            return true;
+        });
+        add_button(second, "Seek +10s (R)", [this](brls::View*) {
+            player_.seek(10);
+            update_labels();
+            return true;
+        });
+
         root->registerAction("Pause", brls::BUTTON_Y, [this](brls::View*) {
-            player_.toggle_pause(); return true;
+            player_.toggle_pause(); update_labels(); return true;
         });
         root->registerAction("Seek -10s", brls::BUTTON_LB, [this](brls::View*) {
-            player_.seek(-10); return true;
+            player_.seek(-10); update_labels(); return true;
         });
         root->registerAction("Seek +10s", brls::BUTTON_RB, [this](brls::View*) {
-            player_.seek(10); return true;
+            player_.seek(10); update_labels(); return true;
         });
         root->registerAction("Stop", brls::BUTTON_X, [this](brls::View*) {
             player_.stop(); update_labels(); return true;
         });
-        return scroll;
+        return root;
     }
 
     void tick() {
