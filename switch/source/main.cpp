@@ -450,6 +450,7 @@ private:
 #ifdef TTNX_M3_INTEGRATED
         brls::Button* play_video{nullptr};
         brls::Label* play_status{nullptr};
+        brls::Button* cancel_video{nullptr};
 #endif
     };
     std::vector<SearchDetailRow> search_detail_rows_;
@@ -854,6 +855,13 @@ private:
                 row.play_status->setVisibility(
                     selected ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
             }
+            if (row.cancel_video) {
+                const bool playing_this = media_busy_.load() &&
+                    row.identity == "video:" + active_m3_video_id_;
+                row.cancel_video->setVisibility(
+                    selected && playing_this
+                    ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
+            }
 #endif
         }
     }
@@ -941,8 +949,22 @@ private:
             play_status = label(search_results_box_, media_feedback_, 18);
             play_status->setVisibility(brls::Visibility::GONE);
         }
+        brls::Button* cancel_video = nullptr;
+        if (play_video) {
+            cancel_video = button(search_results_box_, "Cancel video download");
+            cancel_video->setVisibility(brls::Visibility::GONE);
+            cancel_video->registerClickAction([this](brls::View*) {
+                if (media_busy_.load()) {
+                    media_cancel_requested_.store(true);
+                    media_feedback_ = "M3: cancelling the current media request...";
+                    publish_m3_feedback_on_ui(active_m3_video_id_);
+                }
+                return true;
+            });
+        }
         search_detail_rows_.push_back({
-            identity, select, detail_label, open_channel, play_video, play_status});
+            identity, select, detail_label, open_channel,
+            play_video, play_status, cancel_video});
 #else
         search_detail_rows_.push_back({identity, select, detail_label, open_channel});
 #endif
@@ -1423,6 +1445,7 @@ private:
                 row.play_status->setText(media_feedback_);
             }
         }
+        refresh_search_inline_details();
         refresh_footer();
     }
 
