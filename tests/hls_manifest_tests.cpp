@@ -76,6 +76,37 @@ void player_request() {
     check(resolved && resolved->master_playlist_url==kMaster &&
           resolved->video_id==kVideo && resolved->duration_ms==750000 &&
           http.count==1,"HLS VisionOS source validates id/status and duration");
+    const std::string vision_aac=R"JSON({
+      "playabilityStatus":{"status":"OK"},
+      "videoDetails":{"videoId":"2kD9v7Q3vec","lengthSeconds":"750",
+                      "isShort":false,"isLiveContent":false},
+      "streamingData":{
+        "hlsManifestUrl":"https://manifest.googlevideo.com/api/manifest/hls_variant/direct",
+        "adaptiveFormats":[
+          {"url":"https://accounts.nintendo.com/videoplayback",
+           "mimeType":"audio/mp4; codecs=\"mp4a.40.2\"","bitrate":256000},
+          {"url":"https://r1.googlevideo.com/videoplayback?itag=140",
+           "mimeType":"audio/mp4; codecs=\"mp4a.40.2\"","bitrate":128000},
+          {"url":"https://r2.googlevideo.com/videoplayback?itag=141",
+           "mimeType":"audio/mp4; codecs=\"mp4a.40.2\"","bitrate":192000}
+        ]
+      }
+    })JSON";
+    const auto paired=playback::parse_m3_guest_hls_source(vision_aac,kVideo);
+    check(paired && paired->external_aac_url==
+          "https://r2.googlevideo.com/videoplayback?itag=141" &&
+          paired->master_playlist_url.find("/hls_variant/")!=std::string::npos,
+          "same-video VisionOS direct HLS pairs highest reviewed signed AAC");
+    auto blocked_audio=vision_aac;
+    const auto token=blocked_audio.find("r2.googlevideo.com/videoplayback?itag=141");
+    if(token!=std::string::npos)blocked_audio.replace(
+       token,std::string("r2.googlevideo.com/videoplayback?itag=141").size(),
+       "accounts.nintendo.com/videoplayback?itag=141");
+    const auto paired_rejected=playback::parse_m3_guest_hls_source(blocked_audio,kVideo);
+    check(paired_rejected &&
+          paired_rejected->external_aac_url==
+             "https://r1.googlevideo.com/videoplayback?itag=140",
+          "unreviewed AAC host ignored without discarding safe fallback");
     http.response.response.body=player_json("LOGIN_REQUIRED");
     check(!extractor.resolve(kVideo) &&
           extractor.last_error()==playback::HlsSourceError::ResponseRejected,
