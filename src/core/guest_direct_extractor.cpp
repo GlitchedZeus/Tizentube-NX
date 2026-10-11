@@ -315,8 +315,28 @@ bool parse_streams(Json& in, ExtractionResult& data, unsigned depth) {
 
 } // namespace
 
-std::optional<ExtractionResult> parse_direct_guest_player(
-    std::string_view body, std::string_view expected_video_id) {
+const char* describe_direct_player_failure(DirectPlayerFailure reason) {
+    switch (reason) {
+        case DirectPlayerFailure::None: return "Player source ready.";
+        case DirectPlayerFailure::InvalidRequest: return "Video request rejected before HTTPS.";
+        case DirectPlayerFailure::HttpTransport: return "YouTube player HTTPS transport failed.";
+        case DirectPlayerFailure::HttpStatus: return "YouTube player returned non-200 HTTP status.";
+        case DirectPlayerFailure::MalformedResponse: return "Player JSON missing required fields or invalid.";
+        case DirectPlayerFailure::PlayabilityBlocked: return "YouTube did not permit guest playback.";
+        case DirectPlayerFailure::WrongIdentity: return "YouTube returned a different video ID.";
+        case DirectPlayerFailure::ShortsOrLive: return "Shorts/live sources blocked by current M3 policy.";
+        case DirectPlayerFailure::MissingStreamingData: return "Guest player returned no streamingData.";
+        case DirectPlayerFailure::NoSupportedDirectFormats:
+            return "No direct H.264/AAC media URLs passed the source checks.";
+    }
+    return "Unknown player source error.";
+}
+
+namespace {
+std::optional<ExtractionResult> parse_direct_guest_player_diagnosed(
+    std::string_view body, std::string_view expected_video_id,
+    DirectPlayerFailure& reason) {
+    reason = DirectPlayerFailure::MalformedResponse;
     if (body.empty() || body.size() > 1024 * 1024 ||
         !ttnx::core::is_valid_video_id(expected_video_id)) return std::nullopt;
     Json in(body);
@@ -331,29 +351,65 @@ std::optional<ExtractionResult> parse_direct_guest_player(
             return only_once(seen,2) && parse_details(in,info,d);
         if (key=="streamingData")
             return only_once(seen,4) && parse_streams(in,data,d);
-        // Ignore adPlacements/playbackTracking and every other unknown tree.
-        // Never pass ad routes to player or media transport.
         return in.skip(d);
     });
-    if (!ok || !in.done() || seen!=7 || status!="OK" ||
-        info.video_id!=expected_video_id ||
-        info.short_video || info.live ||
-        info.duration_sec==0 || info.duration_sec>7ULL*24*3600 ||
-        (data.video.empty() && data.audio.empty())) return std::nullopt;
+    if (!ok || !in.done() || !(seen & 1) || !(seen & 2))
+        return std::nullopt;
+    if (status != "OK") {
+        reason=DirectPlayerFailure::PlayabilityBlocked;
+        return std::nullopt;
+    }
+    if (info.video_id != expected_video_id) {
+        reason=DirectPlayerFailure::WrongIdentity;
+        return std::nullopt;
+    }
+    if (info.short_video || info.live) {
+        reason=DirectPlayerFailure::ShortsOrLive;
+        return std::nullopt;
+    }
+    if (info.duration_sec == 0 || info.duration_sec > 7ULL*24*3600)
+        return std::nullopt;
+    if (!(seen & 4)) {
+        reason=DirectPlayerFailure::MissingStreamingData;
+        return std::nullopt;
+    }
+    if (data.video.empty() && data.audio.empty()) {
+        reason=DirectPlayerFailure::NoSupportedDirectFormats;
+        return std::nullopt;
+    }
     data.video_id=info.video_id;
     data.duration_ms=info.duration_sec*1000;
     data.is_short=false;
     data.is_live=false;
+    reason=DirectPlayerFailure::None;
     return data;
+}
+} // namespace
+
+std::optional<ExtractionResult> parse_direct_guest_player(
+    std::string_view body, std::string_view expected_video_id) {
+    DirectPlayerFailure reason{};
+    return parse_direct_guest_player_diagnosed(body, expected_video_id, reason);
 }
 
 std::optional<ExtractionResult> GuestDirectExtractor::resolve(
     std::string_view normal_video_id) {
+    last_http_status_=0;
+    last_failure_=DirectPlayerFailure::InvalidRequest;
     const auto request=youtube::make_player_request(session_,normal_video_id);
     if (!request) return std::nullopt;
     const auto result=browse_http_.perform(*request);
-    if (!result.ok || result.response.status_code!=200) return std::nullopt;
-    return parse_direct_guest_player(result.response.body,normal_video_id);
+    if (!result.ok) {
+        last_failure_=DirectPlayerFailure::HttpTransport;
+        return std::nullopt;
+    }
+    last_http_status_=result.response.status_code;
+    if (last_http_status_!=200) {
+        last_failure_=DirectPlayerFailure::HttpStatus;
+        return std::nullopt;
+    }
+    return parse_direct_guest_player_diagnosed(result.response.body,
+                                               normal_video_id, last_failure_);
 }
 
 } // namespace ttnx::playback
