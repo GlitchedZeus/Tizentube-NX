@@ -9,6 +9,8 @@ bool HlsCacheJob::start(const HlsProbePlan& plan) {
     active_.reset();
     bytes_=0;
     muxed_audio_verified_=false;
+    aac_offset_=0;
+    aac_total_=0;
     completed_=0;
     next_segment_=0;
     track_=0;
@@ -41,17 +43,63 @@ bool HlsCacheJob::start(const HlsProbePlan& plan) {
 HlsCacheState HlsCacheJob::pump() {
     if(state_!=HlsCacheState::Fetching || !active_)return state_;
 
+    // Standalone AAC from the SAME validated visionOS player response is
+    // transferred through the already reviewed bounded CDN Range client.
+    // No libmpv socket or signed URL is ever involved.
+    if(track_==2) {
+        auto failed=[this](HlsCacheFailure reason) {
+            sink_.abort();state_=HlsCacheState::Failed;error_=reason;
+            active_.reset();return state_;
+        };
+        if(aac_total_ && aac_offset_==aac_total_) {
+            if(!sink_.publish(*active_))
+                return failed(HlsCacheFailure::UnableToPublish);
+            state_=HlsCacheState::Ready;
+            active_.reset();
+            return state_;
+        }
+        if(!aac_reader_ || active_->source.external_aac_url.empty())
+            return failed(HlsCacheFailure::MissingAudio);
+        const auto range=next_media_range(aac_offset_,aac_total_);
+        if(!range)return failed(HlsCacheFailure::MediaFetch);
+        const auto audio=aac_reader_->read(active_->source.external_aac_url,*range);
+        if(!audio.ok() || audio.bytes.empty())
+            return failed(HlsCacheFailure::MediaFetch);
+        if(audio.resource_size==0 || audio.resource_size>kMaxAacBytes ||
+           (aac_total_ && audio.resource_size!=aac_total_) ||
+           audio.bytes.size()>kMaxTotalBytes-bytes_)
+            return failed(HlsCacheFailure::TotalSizeExceeded);
+        if(aac_offset_==0) {
+            if(audio.bytes.size()<12 ||
+               std::string_view(audio.bytes).substr(4,4)!="ftyp")
+                return failed(HlsCacheFailure::MissingAudio);
+            aac_total_=audio.resource_size;
+        }
+        if(!sink_.append_external_aac(audio.bytes))
+            return failed(HlsCacheFailure::MediaWrite);
+        aac_offset_+=audio.bytes.size();
+        bytes_+=audio.bytes.size();
+        if(aac_offset_>aac_total_)
+            return failed(HlsCacheFailure::MediaFetch);
+        return state_;
+    }
+
     const auto& playlist=track_==0
         ?active_->video_segments:*active_->audio_segments;
     if(next_segment_>=playlist.segments.size() && !init_pending_) {
         if(track_==0 && !active_->audio_segments &&
-           active_->selected.direct_media_playlist &&
-           !muxed_audio_verified_) {
-            sink_.abort();
-            state_=HlsCacheState::Failed;
-            error_=HlsCacheFailure::MissingAudio;
-            active_.reset();
-            return state_;
+           active_->selected.direct_media_playlist) {
+            if(!active_->source.external_aac_url.empty() && aac_reader_) {
+                track_=2; // download, validate and attach standalone AAC
+                return state_;
+            }
+            if(!muxed_audio_verified_) {
+                sink_.abort();
+                state_=HlsCacheState::Failed;
+                error_=HlsCacheFailure::MissingAudio;
+                active_.reset();
+                return state_;
+            }
         }
         if(track_==0 && active_->audio_segments) {
             track_=1;
