@@ -108,6 +108,36 @@ int main() {
            !fs::exists(base/"previous"),
            "new complete clip replaces ready and cleans old backup");
     }
+    {
+        // In HLS without EXT-X-MAP, preserve MPEG-TS segment file names
+        // rather than pretending every stream is fragmented MP4.
+        auto ts=plan();
+        ts.selected.direct_media_playlist=true;
+        ts.selected.height=0;
+        ts.selected.width=0;
+        ts.selected.fps=0;
+        ts.video_segments.init_segment_url.reset();
+        ts.audio_segments->init_segment_url.reset();
+        switch_app::SwitchHlsCacheSink sink;
+        ck(sink.begin(ts) &&
+           sink.write_segment(false,false,0,"MPEG-TS-SAMPLE-VIDEO") &&
+           sink.write_segment(false,false,1,"MPEG-TS-SAMPLE-VIDEO") &&
+           sink.write_segment(true,false,0,"MPEG-TS-SAMPLE-AUDIO") &&
+           sink.write_segment(true,false,1,"MPEG-TS-SAMPLE-AUDIO") &&
+           sink.publish(ts),
+           "direct HLS video and AAC rendition can stage local TS segment names");
+        const auto vm=read(base/"ready/video.m3u8");
+        const auto am=read(base/"ready/audio.m3u8");
+        const auto master=read(base/"ready/master.m3u8");
+        ck(fs::exists(base/"ready/v_00000.ts") &&
+           fs::exists(base/"ready/a_00001.ts") &&
+           vm.find("v_00000.ts")!=std::string::npos &&
+           am.find("a_00001.ts")!=std::string::npos &&
+           vm.find("#EXT-X-MAP:")==std::string::npos &&
+           master.find("RESOLUTION=0x0")==std::string::npos &&
+           master.find("CODECS=")==std::string::npos,
+           "native cache uses TS extension and never invents direct-HLS codec metadata");
+    }
     fs::remove_all("/tmp/tizentube-m3-hls-test");
     if(failures)std::cerr<<failures<<" SD cache contract failures\n";
     return failures?EXIT_FAILURE:EXIT_SUCCESS;
