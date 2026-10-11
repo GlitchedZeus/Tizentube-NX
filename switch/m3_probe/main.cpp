@@ -28,16 +28,22 @@ public:
     ~OfflineMpv() { shutdown(); }
 
     bool init() {
-        if (handle_) return true;
+        // Do not report a half-initialized mpv handle as a ready renderer.
+        if (handle_) return render_ != nullptr;
         handle_ = mpv_create();
-        if (!handle_) { message_ = "mpv_create failed"; return false; }
+        if (!handle_) {
+            message_ = "INIT ERROR: mpv_create returned null";
+            return false;
+        }
         // A hard-coded SD fixture is the ONLY accepted source. No config,
         // scripts, ytdl hooks, IPC, playlists or arbitrary network streams.
         // A failure to apply a mandatory safety option is fatal, not an
         // invitation to run mpv with a permissive default configuration.
         auto require_option = [this](const char* name, const char* value) {
-            if (mpv_set_option_string(handle_, name, value) >= 0) return true;
-            message_ = std::string("Unsupported safety/player option: ") + name;
+            const int rc = mpv_set_option_string(handle_, name, value);
+            if (rc >= 0) return true;
+            message_ = std::string("INIT ERROR option ") + name + ": " +
+                       mpv_error_string(rc) + " [" + std::to_string(rc) + "]";
             return false;
         };
         if (!require_option("config", "no") ||
@@ -52,8 +58,11 @@ public:
             shutdown();
             return false;
         }
-        if (mpv_initialize(handle_) < 0) {
-            message_ = "mpv_initialize failed";
+        const int init_rc = mpv_initialize(handle_);
+        if (init_rc < 0) {
+            message_ = std::string("INIT ERROR mpv_initialize: ") +
+                       mpv_error_string(init_rc) + " [" +
+                       std::to_string(init_rc) + "]";
             shutdown();
             return false;
         }
@@ -61,8 +70,11 @@ public:
             {MPV_RENDER_PARAM_API_TYPE, const_cast<char*>(MPV_RENDER_API_TYPE_SW)},
             {MPV_RENDER_PARAM_INVALID, nullptr},
         };
-        if (mpv_render_context_create(&render_, handle_, api) < 0) {
-            message_ = "Software render context unsupported by this libmpv";
+        const int render_rc = mpv_render_context_create(&render_, handle_, api);
+        if (render_rc < 0) {
+            message_ = std::string("INIT ERROR software renderer: ") +
+                       mpv_error_string(render_rc) + " [" +
+                       std::to_string(render_rc) + "]";
             shutdown();
             return false;
         }
@@ -71,7 +83,10 @@ public:
     }
 
     bool start() {
-        if (!handle_ || !render_) { message_ = "Player not initialized"; return false; }
+        // Preserve the precise startup failure in the on-screen diagnostics.
+        // A is also a safe retry button after an SD/mount/service problem.
+        if (!render_ && !init()) return false;
+        if (!handle_ || !render_) return false;
         FILE* file = std::fopen(kFixture, "rb");
         if (!file) {
             message_ = "No m3-test.mp4 in /switch/TizenTube-NX/";
@@ -147,7 +162,7 @@ public:
     const std::string& message() const { return message_; }
 
     std::string stats() const {
-        if (!handle_) return "mpv unavailable";
+        if (!render_) return "Decoder: offline (read INIT ERROR above)";
         const char* hw = mpv_get_property_string(handle_, "hwdec-current");
         std::string decoder = hw ? hw : "unknown";
         if (hw) mpv_free(const_cast<char*>(hw));
@@ -185,7 +200,8 @@ public:
                 {MPV_RENDER_PARAM_SW_POINTER, pixels_.data()},
                 {MPV_RENDER_PARAM_INVALID, nullptr},
             };
-            if (mpv_render_context_render(render_, params) >= 0) {
+            const int frame_rc = mpv_render_context_render(render_, params);
+            if (frame_rc >= 0) {
                 // libmpv's guaranteed "rgb0" format leaves byte 3 undefined.
                 // NanoVG's RGBA upload requires fully opaque alpha.
                 for (std::size_t i = 3; i < pixels_.size(); i += 4)
@@ -194,6 +210,10 @@ public:
                 new_frame_ = true;
                 ++frame_count_;
                 mpv_render_context_report_swap(render_);
+            } else if (!render_error_seen_) {
+                message_ = std::string("RENDER ERROR: ") + mpv_error_string(frame_rc) +
+                           " [" + std::to_string(frame_rc) + "]";
+                render_error_seen_ = true;
             }
         }
         return pixels_;
@@ -213,6 +233,7 @@ private:
     bool have_frame_{false};
     bool new_frame_{false};
     std::uint64_t frame_count_{0};
+    bool render_error_seen_{false};
 };
 
 class ProbeVideo : public brls::View {
