@@ -4,6 +4,8 @@
 #include "tizentube_nx/net/service_init.hpp"
 #ifdef TTNX_M3_MEDIA_PLANE
 #include "tizentube_nx/playback/media_chunks.hpp"
+#include "tizentube_nx/playback/ump_transfer.hpp"
+
 #endif
 
 #include <string>
@@ -64,6 +66,18 @@ public:
     [[nodiscard]] bool ready() const noexcept { return services_.ready(); }
 private:
     LibnxHttpClient services_; // owns/borrows socket + Horizon SSL lifetimes
+};
+
+// Opt-in only. This POST transport repeats the same Googlevideo pre-DNS
+// allowlist and rejects any request other than a fixed two-byte UMP body
+// and a bounded one-MiB media range. Never routed into M2 guest browsing.
+class LibnxUmpChunkTransport final : public net::HttpClient {
+public:
+    LibnxUmpChunkTransport() = default;
+    net::HttpResult perform(const net::HttpRequest& request) override;
+    [[nodiscard]] bool ready() const noexcept { return services_.ready(); }
+private:
+    LibnxHttpClient services_;
 };
 #endif
 
