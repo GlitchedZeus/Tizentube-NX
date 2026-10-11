@@ -14,7 +14,7 @@ bool HlsCacheJob::start(const HlsProbePlan& plan) {
     state_=HlsCacheState::Failed;
     const auto count=plan.video_segments.segments.size()+
         (plan.audio_segments?plan.audio_segments->segments.size():0);
-    if(count==0 || count>4096 ||
+    if(plan.video_segments.segments.empty() || count>4096 ||
        !plan.selected.height || !plan.selected.fps ||
        plan.video_segments.total_duration_ms==0 ||
        (plan.audio_segments && plan.audio_segments->segments.empty()) ||
