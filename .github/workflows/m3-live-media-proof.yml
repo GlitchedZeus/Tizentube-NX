@@ -37,7 +37,6 @@ jobs:
           PYTHONUNBUFFERED: '1'
         run: |
           python tools/live_video_preflight.py \
-            --video-id f-8WL_3t5A \
             --video-id 2kD9v7Q3vec \
             --video-id 7E7lY-jUybc \
             --minimum-verified 1
