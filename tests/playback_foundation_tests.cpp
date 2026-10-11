@@ -1,5 +1,6 @@
 #include "tizentube_nx/playback/playback.hpp"
 #include "tizentube_nx/playback/sponsorblock.hpp"
+#include "tizentube_nx/playback/extraction_wire.hpp"
 #include "tizentube_nx/net/outbound_policy.hpp"
 
 #include <cstdlib>
@@ -215,6 +216,79 @@ void sponsorblock_tests() {
         std::vector<Segment>(2049, {SegmentCategory::Intro, 0, 1}), 100);
     check(engine.segments().empty(), "oversized remote segments rejected");
 }
+
+void wire_contract_tests() {
+    const std::string valid = R"JSON({
+        "video_id":"IzJ7R4EnYmI",
+        "duration_ms":120000,
+        "is_live":false,
+        "is_short":false,
+        "video":[{
+            "url":"https://r1.googlevideo.com/videoplayback?sig=abc",
+            "codec":"h264","muxed_audio":"unknown",
+            "width":1280,"height":720,"fps":30,
+            "bit_depth":8,"bitrate":2000000,
+            "hdr":false,"drm":false
+        }],
+        "audio":[{
+            "url":"https://r2.googlevideo.com/videoplayback?sig=def",
+            "codec":"aac","bitrate":128000,"drm":false
+        }]
+    })JSON";
+    auto decoded = parse_extraction_wire_response(valid);
+    check(decoded.has_value(), "strict normalized wire response parsed");
+    if (decoded) {
+        check(decoded->video_id == "IzJ7R4EnYmI" &&
+              decoded->video.size() == 1 && decoded->audio.size() == 1,
+              "parsed normalized fields match source");
+        check(select_streams(*decoded).streams.has_value(),
+              "wire response drives native policy-controlled selector");
+    }
+    auto substitute = [&](const std::string& from, const std::string& to) {
+        auto changed = valid;
+        const auto pos = changed.find(from);
+        if (pos != std::string::npos) changed.replace(pos, from.size(), to);
+        return changed;
+    };
+    check(!parse_extraction_wire_response(substitute(
+        R"("video_id":"IzJ7R4EnYmI")",
+        R"("video_id":"IzJ7R4EnYmI","video_id":"IzJ7R4EnYmI")")),
+        "duplicate security-sensitive ID rejected");
+    check(!parse_extraction_wire_response(substitute(
+        R"("duration_ms":120000)", R"("duration_ms":18446744073709551616)")),
+        "unsigned duration overflow rejected");
+    check(!parse_extraction_wire_response(substitute(
+        R"("duration_ms":120000)", R"("duration_ms":-1)")),
+        "negative duration rejected");
+    check(!parse_extraction_wire_response(substitute(
+        R"("codec":"h264")", R"("codec":"javascript")")),
+        "unknown video codec rejected");
+    check(!parse_extraction_wire_response(substitute(
+        R"("height":720)", R"("height":720,"height":720)")),
+        "duplicate stream dimensions rejected");
+    check(!parse_extraction_wire_response(substitute(
+        R"("bitrate":128000)", R"("bitrate":null)")),
+        "null stream bitrate rejected");
+    check(!parse_extraction_wire_response(substitute(
+        R"("is_short":false)", R"("is_short":"false")")),
+        "boolean type mismatch rejected");
+    check(!parse_extraction_wire_response(substitute(
+        R"("fps":30)", R"("fps":30.5)")),
+        "unexpected floating point wire field rejected");
+    check(!parse_extraction_wire_response(substitute(
+        R"("is_live":false)", R"("unknown_key":false)")),
+        "unknown root keys fail closed");
+    check(!parse_extraction_wire_response(valid + " trailing"),
+        "trailing content rejected");
+    check(!parse_extraction_wire_response(valid.substr(0, valid.size() - 4)),
+        "truncated response rejected");
+    check(!parse_extraction_wire_response(std::string(256 * 1024 + 1, 'a')),
+        "oversized response rejected before parse");
+    auto unsafe = parse_extraction_wire_response(substitute(
+        "r1.googlevideo.com", "accounts.nintendo.com"));
+    check(unsafe && !select_streams(*unsafe).streams,
+          "normalized parser cannot bypass separate media URL policy");
+}
 } // namespace
 
 int main() {
@@ -222,6 +296,7 @@ int main() {
     selector_tests();
     player_tests();
     sponsorblock_tests();
+    wire_contract_tests();
     if (failures) {
         std::cerr << failures << " M3 tests failed.\n";
         return EXIT_FAILURE;
