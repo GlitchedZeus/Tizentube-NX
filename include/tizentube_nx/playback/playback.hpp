@@ -125,4 +125,28 @@ private:
     bool is_live_{false};
 };
 
+
+// A single reviewed normal-video launch path. Use on a background worker,
+// not directly on the Borealis UI thread. It deliberately owns no HTTP client.
+enum class LaunchError {
+    None, InvalidVideoId, ExtractionFailed, IdentityMismatch,
+    StreamRejected, PlayerFailed
+};
+struct LaunchResult {
+    LaunchError error{LaunchError::None};
+    SelectionError selection_error{SelectionError::None};
+    [[nodiscard]] bool ok() const noexcept { return error == LaunchError::None; }
+};
+
+class PlaybackLauncher {
+public:
+    PlaybackLauncher(Extractor& extractor, PlaybackSession& player)
+        : extractor_(extractor), player_(player) {}
+    [[nodiscard]] LaunchResult launch(
+        std::string_view normal_video_id, const QualityPolicy& policy = {});
+private:
+    Extractor& extractor_;
+    PlaybackSession& player_;
+};
+
 } // namespace ttnx::playback
