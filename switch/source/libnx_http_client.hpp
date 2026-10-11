@@ -2,6 +2,9 @@
 
 #include "tizentube_nx/net/http.hpp"
 #include "tizentube_nx/net/service_init.hpp"
+#ifdef TTNX_M3_MEDIA_PLANE
+#include "tizentube_nx/playback/media_chunks.hpp"
+#endif
 
 #include <string>
 
@@ -48,5 +51,20 @@ private:
     bool ready_{false};
     std::string initialization_error_;
 };
+
+
+#ifdef TTNX_M3_MEDIA_PLANE
+// Distinct, experimental M3-only HTTP byte-range transport. Never enabled in
+// the accepted M2 NRO, and never passed to guest Search/Home/Channel requests.
+// Repeats a strict video-CDN host check immediately before DNS; no redirects.
+class LibnxMediaChunkTransport final : public playback::MediaChunkTransport {
+public:
+    LibnxMediaChunkTransport() = default;
+    net::HttpResult perform(const net::HttpRequest& request) override;
+    [[nodiscard]] bool ready() const noexcept { return services_.ready(); }
+private:
+    LibnxHttpClient services_; // owns/borrows socket + Horizon SSL lifetimes
+};
+#endif
 
 }  // namespace ttnx::switch_app
