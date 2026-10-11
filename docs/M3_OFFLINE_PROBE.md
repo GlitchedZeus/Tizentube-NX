@@ -21,13 +21,13 @@ Those are later hardware gates using a reviewed graphics bridge.
 
 ```bash
 # devkitPro devkitA64 environment:
-sudo dkp-pacman -S --needed switch-libmpv switch-libplacebo
+sudo dkp-pacman -S --needed switch-libmpv
 git submodule update --init --recursive
 make -f Makefile.switch TTNX_M3_OFFLINE_PROBE=1 -j2
 ```
 
 Or run the GitHub Actions workflow **M3 offline playback probe (isolated)**.
-It emits **tizentube_nx_m3_probe.nro** and exact debug symbols, separate from
+It emits **tizentube_nx_m3_probe.nro**, synthetic **m3-test.mp4**, and exact debug symbols, separate from
 the normal production NRO. The workflow currently uses devkitPro packages
 rather than a pinned mpv binary; record the package versions in hardware
 reports so build reproduction can be improved after successful compilation.
@@ -44,8 +44,8 @@ media or copyrighted content:
 ```bash
 ffmpeg -f lavfi -i 'testsrc2=size=1280x720:rate=30' \
   -f lavfi -i 'sine=frequency=440:sample_rate=48000' \
-  -t 30 -c:v libx264 -pix_fmt yuv420p -preset veryfast \
-  -c:a aac -b:a 128k -movflags +faststart m3-test.mp4
+  -t 30 -c:v libx264 -pix_fmt yuv420p -preset veryfast -crf 34 \
+  -c:a aac -b:a 96k -movflags +faststart m3-test.mp4
 ```
 
 Put the MP4 on SD at:
@@ -64,9 +64,11 @@ Keep the original `tizentube_nx.nro` untouched. Put the experimental
    moving synthetic test video appears in the video rectangle.
 5. Confirm the sine wave is audible and remains in sync.
 6. Test **Y Pause/Resume**, **L/R 10-second seek**, **X Stop**, A reload, and
-   B/+/homebrew exit. The on-screen buttons can be used instead.
-7. Record the actual `Decoder:` readout. `no` does NOT pass the hardware
-   decoder gate even if software output works.
+   +/homebrew exit. The on-screen buttons can be used instead.
+7. Record the actual `Decoder:`, `Video:`, `Audio:`, and rendered-frame
+   readouts. Frames must advance during playback and remain stable when paused.
+   `hwdec-current=no` does NOT pass the hardware decoder gate even if software
+   output works.
 8. Repeat after dock/undock and a sleep/wake cycle, recording any visual/audio
    failures. These are observations only, not presumed supported behaviors.
 9. Record exact PR head, workflow artifact, NRO SHA-256 and pass/fail notes.
@@ -76,7 +78,9 @@ Keep the original `tizentube_nx.nro` untouched. Put the experimental
 - The binary can only load the exact fixed SD test path; it has no arbitrary
   URL/text/file picker, yt-dlp login, accounts, Googlevideo transport or
   SponsorBlock fetching.
-- mpv config, scripts, ytdl and arbitrary input bindings are disabled.
+- mpv config, scripts, ytdl and arbitrary input bindings are disabled; a
+  missing mandatory safety option aborts initialization. The fixed SD fixture
+  is limited to 256 MiB.
 - The FFmpeg demuxer network protocol whitelist is restricted to `file,pipe`.
 - No approved M2 outbound-policy change is made and no Nintendo endpoint
   connectivity is introduced by application code.
