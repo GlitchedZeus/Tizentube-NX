@@ -193,7 +193,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send(401, {"error": "unauthorized"})
             return
         raw_length = self.headers.get("Content-Length", "")
-        if not raw_length.isdecimal() or not (0 < int(raw_length) <= MAX_REQUEST):
+        # Reject digit-flood Content-Length before arbitrary-sized int parsing.
+        if (len(raw_length) > 4 or not raw_length.isdecimal() or
+                not (0 < int(raw_length) <= MAX_REQUEST)):
             self._send(413, {"error": "invalid request size"})
             return
         if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
