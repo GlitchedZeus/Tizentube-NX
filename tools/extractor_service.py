@@ -8,6 +8,7 @@ ephemeral bearer-like media URLs; never write requests/responses to logs.
 from __future__ import annotations
 
 import hmac
+import math
 import json
 import os
 import re
@@ -68,8 +69,10 @@ def audio_codec(text: object) -> str:
 def bounded_int(value: object, maximum: int) -> int:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return 0
-    if value < 0 or value > maximum or int(value) != value:
+    if not math.isfinite(value) or value < 0 or value > maximum:
         return 0
+    # yt-dlp commonly reports fractional FPS / bitrate / duration. Use a
+    # bounded integer projection rather than silently discarding these formats.
     return int(value)
 
 
