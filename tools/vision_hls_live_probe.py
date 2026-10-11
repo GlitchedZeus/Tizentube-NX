@@ -34,7 +34,7 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 def approved_hls(url: object) -> bool:
     if not isinstance(url,str) or len(url)>8192 or not url.startswith("https://"):
         return False
-    if any(ord(c)<33 or ord(c)>126 for c in url):
+    if any(ord(c)<33 or ord(c)>126 for c in url) or chr(92) in url:
         return False
     try:
         p=urllib.parse.urlsplit(url)
