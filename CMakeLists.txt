@@ -31,6 +31,7 @@ add_library(tizentube_nx_core
     src/core/playback.cpp
     src/core/media_chunks.cpp
     src/core/media_download.cpp
+    src/core/guest_direct_extractor.cpp
     src/core/extraction_wire.cpp
     src/core/sponsorblock.cpp
 )
@@ -49,6 +50,10 @@ if(TTNX_BUILD_TESTS)
     add_executable(tizentube_nx_media_chunks_tests tests/media_chunks_tests.cpp)
     target_link_libraries(tizentube_nx_media_chunks_tests PRIVATE tizentube_nx_core)
     add_test(NAME media_chunks COMMAND tizentube_nx_media_chunks_tests)
+
+    add_executable(tizentube_nx_guest_direct_player_tests tests/guest_direct_player_tests.cpp)
+    target_link_libraries(tizentube_nx_guest_direct_player_tests PRIVATE tizentube_nx_core)
+    add_test(NAME guest_direct_player COMMAND tizentube_nx_guest_direct_player_tests)
 
     add_executable(tizentube_nx_media_download_tests tests/media_download_tests.cpp)
     target_link_libraries(tizentube_nx_media_download_tests PRIVATE tizentube_nx_core)
