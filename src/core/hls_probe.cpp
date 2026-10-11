@@ -1,4 +1,5 @@
 #include "tizentube_nx/playback/hls_probe.hpp"
+#include "tizentube_nx/playback/source_routes.hpp"
 
 #include <algorithm>
 #include <cctype>
