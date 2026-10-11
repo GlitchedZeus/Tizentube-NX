@@ -96,6 +96,27 @@ public:
         message_ = "Stopped.";
     }
 
+
+    void pump_events() {
+        if (!handle_) return;
+        // mpv has its own threads; no event callback ever touches Borealis.
+        // Poll only on the main UI thread, bound work per frame.
+        for (unsigned i = 0; i < 32; ++i) {
+            const mpv_event* event = mpv_wait_event(handle_, 0);
+            if (!event || event->event_id == MPV_EVENT_NONE) break;
+            if (event->event_id == MPV_EVENT_FILE_LOADED) {
+                message_ = "Local MP4 loaded. Inspect moving video/audio.";
+            } else if (event->event_id == MPV_EVENT_PLAYBACK_RESTART) {
+                message_ = "Playback active. Decoder status shown below.";
+            } else if (event->event_id == MPV_EVENT_END_FILE) {
+                auto* end = static_cast<const mpv_event_end_file*>(event->data);
+                message_ = (end && end->reason == MPV_END_FILE_REASON_ERROR)
+                    ? "Local file decoding failed (see exact build debug symbols)."
+                    : "Playback reached end/stopped.";
+            }
+        }
+    }
+
     const std::string& message() const { return message_; }
 
     std::string stats() const {
@@ -115,6 +136,7 @@ public:
     // it does NOT prove hardware decoder usage or 1080p performance.
     const std::vector<unsigned char>& render() {
         if (!render_) return pixels_;
+        new_frame_ = false;
         const auto flags = mpv_render_context_update(render_);
         if (flags & MPV_RENDER_UPDATE_FRAME) {
             int size[2]{kRenderWidth, kRenderHeight};
@@ -128,12 +150,14 @@ public:
             };
             if (mpv_render_context_render(render_, params) >= 0) {
                 have_frame_ = true;
+                new_frame_ = true;
                 mpv_render_context_report_swap(render_);
             }
         }
         return pixels_;
     }
     bool has_frame() const { return have_frame_; }
+    bool new_frame() const { return new_frame_; }
 
 private:
     void shutdown() {
@@ -145,6 +169,7 @@ private:
     std::vector<unsigned char> pixels_;
     std::string message_{"Initializing offline libmpv..."};
     bool have_frame_{false};
+    bool new_frame_{false};
 };
 
 class ProbeVideo : public brls::View {
@@ -153,12 +178,8 @@ public:
         setHeight(400);
     }
 
-    ~ProbeVideo() override {
-        if (image_ >= 0) {
-            nvgDeleteImage(brls::Application::getNVGContext(), image_);
-            image_ = -1;
-        }
-    }
+    // The one-image allocation is released with this dedicated NRO process.
+    // Never touch a global NanoVG context during uncertain app teardown.
 
     void draw(NVGcontext* vg, float x, float y, float width, float height,
               brls::Style, brls::FrameContext*) override {
@@ -166,7 +187,7 @@ public:
         if (image_ < 0) {
             image_ = nvgCreateImageRGBA(vg, kRenderWidth, kRenderHeight, 0,
                                         rgba.data());
-        } else if (player_.has_frame()) {
+        } else if (player_.new_frame()) {
             nvgUpdateImage(vg, image_, rgba.data());
         }
         nvgBeginPath(vg);
@@ -262,6 +283,7 @@ public:
     }
 
     void tick() {
+        player_.pump_events();
         if ((++frames_ % 45) == 0) update_labels();
     }
 private:
