@@ -317,6 +317,42 @@ def first_hls_segment(playlist: bytes,variant_url: str) -> str | None:
     return None
 
 
+def summarize_audio_offerings(player_json: bytes) -> str:
+    """Fixed category only; do not reveal URLs, signature keys or IDs."""
+    try:
+        info=json.loads(player_json)
+        stream=info.get("streamingData",{})
+        formats=stream.get("adaptiveFormats",[])
+        if not isinstance(formats,list):
+            return "AUDIO_FORMATS_MALFORMED"
+        direct=0
+        cipher=0
+        media_kind=0
+        for fmt in formats[:200]:
+            if not isinstance(fmt,dict):
+                continue
+            mime=fmt.get("mimeType","")
+            if not isinstance(mime,str) or not mime.startswith("audio/"):
+                continue
+            if "mp4a.40." not in mime and "opus" not in mime:
+                continue
+            media_kind+=1
+            url=fmt.get("url")
+            if isinstance(url,str) and approved_hls(url) and "/videoplayback" in url:
+                direct+=1
+            if fmt.get("signatureCipher") or fmt.get("cipher"):
+                cipher+=1
+        if direct:
+            return "AAC_OR_OPUS_DIRECT_AUDIO_URL_OFFERED"
+        if cipher:
+            return "AUDIO_SIGNATURE_DECIPHER_REQUIRED"
+        if media_kind:
+            return "AUDIO_FORMATS_NO_DIRECT_URL"
+        return "AUDIO_FORMATS_ABSENT"
+    except (ValueError,TypeError,AttributeError):
+        return "AUDIO_FORMATS_RESPONSE_MALFORMED"
+
+
 def one_source(video_id: str,visitor: str) -> str:
     stage="PLAYER"
     try:
@@ -337,6 +373,7 @@ def one_source(video_id: str,visitor: str) -> str:
             if response.status!=200:
                 return "PLAYER_HTTP_UNAVAILABLE"
             data=response.read(MAX_JSON+1)
+        audio_state=summarize_audio_offerings(data)
         manifest=vision_manifest_url(data,video_id)
         if not manifest:
             return classify_hls_source_failure(data,video_id)
@@ -378,7 +415,7 @@ def one_source(video_id: str,visitor: str) -> str:
             if 0x1b in types and any(t in types for t in (0x0f,0x11)):
                 return "HLS_MPEG_TS_H264_AAC_STREAMS_VERIFIED"
             if 0x1b in types:
-                return "HLS_MPEG_TS_H264_ONLY_AUDIO_SEPARATE"
+                return "HLS_MPEG_TS_H264_ONLY_"+audio_state
             return "HLS_MPEG_TS_CODEC_UNVERIFIED"
         return "HLS_SEGMENT_"+container+"_BYTES_OBTAINED"
     except urllib.error.HTTPError as exc:
