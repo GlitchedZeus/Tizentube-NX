@@ -1,0 +1,48 @@
+name: M3 offline playback probe (isolated)
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'switch/m3_probe/**'
+      - 'Makefile.switch'
+      - '.github/workflows/m3-offline-probe.yml'
+
+jobs:
+  isolated-mpv-probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Build isolated offline MPV proof with devkitA64
+        run: |
+          docker run --rm \
+            -v "$PWD:/work" -w /work \
+            devkitpro/devkita64@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282 \
+            bash -ec '
+              dkp-pacman -Sy --noconfirm --needed switch-libmpv switch-libplacebo
+              pkg-config --version
+              PKG_CONFIG_LIBDIR="$DEVKITPRO/portlibs/switch/lib/pkgconfig" \
+                pkg-config --modversion mpv
+              make -f Makefile.switch TTNX_M3_OFFLINE_PROBE=1 -j2
+            '
+      - name: Verify probe is distinct from production NRO
+        run: |
+          test -s tizentube_nx_m3_probe.nro
+          test ! -e tizentube_nx.nro
+          file tizentube_nx_m3_probe.nro
+          sha256sum tizentube_nx_m3_probe.nro
+      - name: Upload experimental M3 offline player
+        uses: actions/upload-artifact@v4
+        with:
+          name: tizentube-nx-m3-OFFLINE-EXPERIMENT
+          path: tizentube_nx_m3_probe.nro
+          if-no-files-found: error
+      - name: Upload exact probe debug symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: tizentube-nx-m3-OFFLINE-symbols
+          path: |
+            tizentube_nx_m3_probe.elf
+            build-switch/tizentube_nx_m3_probe.map
+          if-no-files-found: error
