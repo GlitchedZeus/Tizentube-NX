@@ -55,6 +55,47 @@ Implementation: `make_m3_visionos_player_request`,
    with the completed local `ready/master.m3u8`. mpv network access is
    not expanded. Original offline MP4 loading and controls are preserved.
 
+## October 11 — real HLS + external AAC source proof
+
+GitHub's independent visionOS guest source check **passed** for
+`dQw4w9WgXcQ`:
+
+- Actual Googlevideo HLS **MPEG-TS H.264** elementary stream bytes retrieved.
+- HLS was returned as a **direct `hls_variant` media playlist**, not the
+  older expected `hls_playlist` master URL. Source and local cache now
+  support both without inventing metadata.
+- The video segment had **no AAC track**. The same validated visionOS player
+  response provided a separate signed **`audio/mp4` AAC** stream. Actual
+  MP4 media bytes were retrieved in the reference proof.
+- The two other sampled user video IDs were guest-playability blocked in the
+  GitHub environment, so there is **no general-playback reliability claim**.
+
+Native integration now uses `parse_m3_guest_hls_source` to select a reviewed
+same-response AAC format, `MediaChunkReader` over dedicated Horizon SSL for
+bounded HTTP-206 audio ranges, and `HlsCacheJob` to download full AAC MP4
+into the **same pending SD transaction as HLS video**. The cache does not
+publish when AAC is missing, incomplete, malformed or HTTP-blocked.
+`SwitchHlsCacheSink` stores the completed file as the local-only
+`ready/external_audio.m4a`, and the isolated mpv player attaches that file
+via its local `audio-file` option. HLS MPEG-TS segments use `.ts` names;
+fragmented MP4 with `EXT-X-MAP` uses `.m4s`.
+
+This is backed by host tests for real file staging, complete ranged audio
+transfers, 403 abort, truncated AAC rollback, MPEG-TS PMT detection, and no
+token URL leakage. The normal guest/client networking contract is unchanged.
+
+**Still unverified on hardware:** local mpv external-audio option support in
+the pinned Switch libmpv, audible AAC sync across seeks and sleep/wake,
+full-video transfer throughput, startup delay, and release-quality playback.
+The full-clip SD cache is intentionally conservative and not yet a streaming
+buffer suitable for arbitrarily long videos.
+
+**CI note:** the legacy progressive yt-dlp reference was retained only as
+manual workflow_dispatch. The active independent gate is
+`m3-vision-hls-live.yml`, which exercises actual visionOS/HLS and separate
+AAC media bytes. Successful host and Switch compilation are separate from
+owner hardware acceptance. NO automatic integrated-NRO publication.
+
 ## What has actually passed?
 
 - **Already physically accepted:** offline video player, H.264/AAC, audio,
