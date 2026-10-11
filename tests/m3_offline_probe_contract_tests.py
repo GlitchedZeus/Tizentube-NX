@@ -52,7 +52,7 @@ class OfflineProbeContractTests(unittest.TestCase):
             'require_option("load-scripts", "no")',
             'require_option("ytdl", "no")',
             'require_option("input-default-bindings", "no")',
-            'require_option("demuxer-lavf-o", "protocol_whitelist=file,pipe")',
+            'require_option("demuxer-lavf-o", "protocol_whitelist=file")',
         ):
             self.assertIn(required, self.main)
         self.assertIn(
@@ -69,8 +69,9 @@ class OfflineProbeContractTests(unittest.TestCase):
         self.assertIn('std::strcmp(name, "load-scripts") == 0', self.main)
         self.assertIn('std::strcmp(name, "ytdl") == 0', self.main)
         self.assertIn('optional_script_features_missing_', self.main)
+        self.assertNotIn('protocol_whitelist=file,pipe")', self.main)
         self.assertIn('require_option("config", "no")', self.main)
-        self.assertIn('require_option("demuxer-lavf-o", "protocol_whitelist=file,pipe")', self.main)
+        self.assertIn('require_option("demuxer-lavf-o", "protocol_whitelist=file")', self.main)
 
         self.assertIn('if (!render_ && !init()) return false;', self.main)
         self.assertNotIn('message_ = "Player not initialized"', self.main)
