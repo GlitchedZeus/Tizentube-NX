@@ -22,6 +22,10 @@
 #include "media_file_sink.hpp"
 #include "tizentube_nx/playback/guest_direct_extractor.hpp"
 #include "tizentube_nx/playback/progressive_prepare.hpp"
+#include "hls_cache_sink.hpp"
+#include "tizentube_nx/playback/hls_probe.hpp"
+#include "tizentube_nx/playback/hls_segment.hpp"
+#include "tizentube_nx/playback/hls_cache.hpp"
 #endif
 #include "tizentube_nx/core/home_model.hpp"
 #include "tizentube_nx/core/channel_model.hpp"
@@ -359,6 +363,7 @@ private:
     std::atomic_bool media_done_{false};
     std::atomic_bool media_cancel_requested_{false};
     bool pending_media_success_{false};
+    bool pending_media_hls_{false};
     std::string pending_media_feedback_;
     std::string media_feedback_{"Choose a normal video, then Play video (M3)."};
     std::string active_m3_video_id_;
@@ -1462,93 +1467,80 @@ private:
         }
         if (media_worker_.joinable()) media_worker_.join();
         active_m3_video_id_ = normal_video_id;
-        const auto session = *guest_session_;
+        const auto guest = *guest_session_;
         media_cancel_requested_.store(false);
         media_done_.store(false);
         media_busy_.store(true);
         media_step_.store(0);
         media_progress_bytes_.store(0);
         media_progress_total_.store(0);
-        media_feedback_ = "M3: resolving direct H.264/AAC and downloading securely...";
+        media_feedback_ = "M3: locating approved guest HLS video/audio streams...";
         publish_m3_feedback_on_ui(normal_video_id);
 
         try {
-            media_worker_ = std::thread([this, normal_video_id, session] {
-                std::string feedback = "M3: video not available as safe muxed MP4.";
-                bool success = false;
+            media_worker_ = std::thread([this, normal_video_id, guest] {
+                std::string feedback="M3 HLS playback source unavailable.";
+                bool completed=false;
                 try {
-                    ttnx::playback::GuestDirectExtractor extractor(network_client_, session);
-                    ttnx::switch_app::LibnxMediaChunkTransport transport;
-                    if (!transport.ready()) {
-                        feedback = "M3: Horizon SSL or network unavailable.";
+                    ttnx::switch_app::LibnxHlsPlaylistTransport manifests;
+                    ttnx::switch_app::LibnxHlsSegmentTransport segments;
+                    if (!manifests.ready() || !segments.ready()) {
+                        feedback="M3: native HLS TLS service unavailable.";
+                    } else if(media_cancel_requested_.load()) {
+                        feedback="M3: video request cancelled.";
                     } else {
-                        ttnx::switch_app::SwitchMediaCacheSink sink;
-                        ttnx::playback::MediaChunkReader reader(transport);
-                        ttnx::playback::MediaDownloadJob download(reader, sink);
-                        ttnx::playback::ProgressivePrepareJob job(extractor, download);
-                        if (!media_cancel_requested_.load() && job.start(normal_video_id)) {
-                            media_step_.store(2);
-                            media_progress_bytes_.store(0);
-                            media_progress_total_.store(0);
-                            while (job.stage() == ttnx::playback::ProgressiveStage::Downloading &&
-                                   !media_cancel_requested_.load()) {
-                                (void)job.pump();
-                                media_progress_bytes_.store(job.received_bytes());
-                                media_progress_total_.store(job.total_bytes());
-                            }
-                            if (media_cancel_requested_.load()) {
-                                job.cancel();
-                                feedback = "M3: download cancelled.";
-                            } else if (job.stage() == ttnx::playback::ProgressiveStage::Ready) {
-                                success = true;
-                                feedback = "M3: verified local MP4 ready for playback.";
+                        // M2 Search retains its accepted anonymous WEB guest
+                        // session. A separate reviewed player identity reuses
+                        // that visitor only for HLS source discovery.
+                        ttnx::playback::HlsSourceProbe probe(network_client_,manifests,guest);
+                        const auto source=probe.inspect(normal_video_id,720,30);
+                        if (!source) {
+                            feedback="M3 HLS source/playlist rejected (stage "+
+                                std::to_string(static_cast<int>(probe.last_error()))+").";
+                        } else if(media_cancel_requested_.load()) {
+                            feedback="M3: video request cancelled.";
+                        } else {
+                            ttnx::playback::HlsSegmentReader reader(segments);
+                            ttnx::switch_app::SwitchHlsCacheSink cache;
+                            ttnx::playback::HlsCacheJob job(reader,cache);
+                            if(!job.start(*source)) {
+                                feedback="M3 HLS SD cache could not stage both tracks.";
                             } else {
-                                if (download.error() == ttnx::playback::MediaDownloadError::RangeFailure) {
-                                    const auto reason = download.last_chunk_failure();
-                                    const int http = download.last_http_status();
-                                    if (http != 0) {
-                                        feedback = "M3 CDN HTTP status " + std::to_string(http) +
-                                                   " (rejected range/media response).";
-                                    } else if (reason == ttnx::playback::MediaReadFailure::TransportError) {
-                                        feedback = "M3 CDN HTTPS transport failed.";
-                                    } else if (reason == ttnx::playback::MediaReadFailure::InvalidDestination) {
-                                        feedback = "M3 CDN source host blocked before network.";
-                                    } else {
-                                        feedback = "M3 CDN rejected range/headers (" +
-                                            std::to_string(static_cast<int>(reason)) + ").";
-                                    }
+                                media_step_.store(2);
+                                while(job.state()==ttnx::playback::HlsCacheState::Fetching &&
+                                      !media_cancel_requested_.load()) {
+                                    // Exactly one bounded HTTPS segment per
+                                    // loop: UI remains on the other thread.
+                                    (void)job.pump();
+                                    media_progress_bytes_.store(job.downloaded_bytes());
+                                }
+                                if(media_cancel_requested_.load()) {
+                                    job.cancel();
+                                    feedback="M3 HLS transfer cancelled.";
+                                } else if(job.state()==ttnx::playback::HlsCacheState::Ready) {
+                                    completed=true;
+                                    feedback="M3: complete HLS video/AAC locally verified.";
                                 } else {
-                                    feedback = "M3 cache failed (" +
-                                        std::to_string(static_cast<int>(download.error())) + ").";
+                                    feedback="M3 HLS cache/segment failure ("+
+                                        std::to_string(static_cast<int>(job.error()))+").";
                                 }
                             }
-                        } else if (job.error() ==
-                                       ttnx::playback::ProgressiveError::NoSafeMuxedMp4) {
-                            feedback = "M3: no directly usable muxed H.264/AAC stream.";
-                        } else if (job.error() == ttnx::playback::ProgressiveError::ResolverUnavailable) {
-                            feedback = std::string("M3: ") +
-                                ttnx::playback::describe_direct_player_failure(extractor.last_failure());
-                            if (extractor.last_http_status() != 0) {
-                                feedback += " HTTP " + std::to_string(extractor.last_http_status());
-                            }
-                        } else {
-                            feedback = "M3 prepare rejected stream (" +
-                                std::to_string(static_cast<int>(job.error())) + ").";
                         }
                     }
                 } catch (...) {
-                    feedback = "M3: media operation failed (no fallback to web player).";
+                    feedback="M3 HLS preparation failed (no ad web-player fallback).";
                 }
                 {
                     std::lock_guard<std::mutex> guard(media_mutex_);
-                    pending_media_success_ = success;
-                    pending_media_feedback_ = std::move(feedback);
+                    pending_media_success_=completed;
+                    pending_media_hls_=completed;
+                    pending_media_feedback_=std::move(feedback);
                 }
                 media_done_.store(true);
             });
         } catch (...) {
             media_busy_.store(false);
-            media_feedback_ = "M3: unable to start download worker.";
+            media_feedback_ = "M3: unable to start video preparation thread.";
             publish_m3_feedback_on_ui(normal_video_id);
         }
     }
@@ -1562,7 +1554,7 @@ private:
             if (media_step_.load() == 2) {
                 const auto current = media_progress_bytes_.load();
                 const auto total = media_progress_total_.load();
-                media_feedback_ = "M3 downloading: " +
+                media_feedback_ = "M3 HLS video+AAC caching: " +
                     std::to_string(current / 1024) + " KiB";
                 if (total) media_feedback_ += " / " + std::to_string(total / 1024) + " KiB";
                 publish_m3_feedback_on_ui(active_m3_video_id_);
@@ -1579,7 +1571,10 @@ private:
         media_busy_.store(false);
         media_done_.store(false);
         publish_m3_feedback_on_ui(active_m3_video_id_);
-        if (success) ttnx::switch_app::open_m3_completed_media();
+        if (success && pending_media_hls_)
+            ttnx::switch_app::open_m3_completed_hls();
+        else if(success)
+            ttnx::switch_app::open_m3_completed_media();
     }
 #endif
 
