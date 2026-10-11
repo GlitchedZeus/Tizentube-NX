@@ -133,6 +133,24 @@ void failure_cases() {
         FakeTransport transport;
         playback::HlsSegmentReader reader(transport);
         Sink sink;playback::HlsCacheJob job(reader,sink);
+        auto source=plan();
+        source.audio_segments.reset();
+        source.selected.audio_playlist_url.clear();
+        source.selected.direct_media_playlist=true;
+        source.selected.height=0;
+        source.selected.fps=0;
+        check(job.start(source),"direct HLS source can stage without invented resolution");
+        for(int i=0;i<8 && job.state()==playback::HlsCacheState::Fetching;++i)
+            (void)job.pump();
+        check(job.state()==playback::HlsCacheState::Failed &&
+              job.error()==playback::HlsCacheFailure::MissingAudio &&
+              sink.publishes==0 && !sink.completed,
+              "direct video-only stream must never publish silent playback");
+    }
+    {
+        FakeTransport transport;
+        playback::HlsSegmentReader reader(transport);
+        Sink sink;playback::HlsCacheJob job(reader,sink);
         auto invalid=plan();invalid.video_segments.segments.clear();
         check(!job.start(invalid) && transport.hits==0,
               "empty video tracks blocked without external I/O");
