@@ -22,7 +22,7 @@ class ProofContracts(unittest.TestCase):
         self.assertNotIn("adSignalsInfo",data)
 
     def test_bootstrap_only_accepts_correct_device_array(self):
-        data=[None,None,[[["X"]*13+["visitor-data"]]]]
+        data=[[None,None,[[["X"]*13+["visitor-data"]]]]]
         self.assertEqual(probe.bootstrap_visitor(b")]}\\n"+json.dumps(data).encode()),
                          "visitor-data")
         self.assertIsNone(probe.bootstrap_visitor(b"not-json"))
