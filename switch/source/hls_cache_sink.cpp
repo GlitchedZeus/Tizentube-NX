@@ -39,9 +39,12 @@ bool known_filename(std::string_view file) {
     if(file=="master.m3u8" || file=="video.m3u8" ||
        file=="audio.m3u8" || file=="v_init.m4s" ||
        file=="a_init.m4s")return true;
-    if(file.size()!=11)return false; // v_00000.m4s = 11 chars
+    // Recognize only our fixed numbered media names: v_00000.ts or
+    // v_00000.m4s. No user-supplied filename enters deletion.
+    if(file.size()!=10 && file.size()!=11)return false;
     if(file[0]!='v' && file[0]!='a')return false;
-    if(file[1]!='_' || file.substr(7)!=".m4s")return false;
+    if(file[1]!='_' ||
+       (file.substr(7)!=".m4s" && file.substr(7)!=".ts"))return false;
     for(std::size_t i=2;i<7;++i)
         if(file[i]<'0'||file[i]>'9')return false;
     return true;
@@ -79,15 +82,15 @@ bool persist(const std::string& path,std::string_view bytes) {
     if(!okay)(void)unlink(path.c_str());
     return okay;
 }
-std::string piece_name(bool audio,bool init,std::size_t index) {
+std::string piece_name(bool audio,bool init,std::size_t index,bool is_ts) {
     const char prefix=audio?'a':'v';
     if(init)return std::string(1,prefix)+"_init.m4s";
     char filename[32]{};
-    std::snprintf(filename,sizeof(filename),"%c_%05u.m4s",
-                  prefix,static_cast<unsigned>(index));
+    std::snprintf(filename,sizeof(filename),"%c_%05u.%s",
+                  prefix,static_cast<unsigned>(index),is_ts?"ts":"m4s");
     return filename;
 }
-std::string playlist_text(const playback::HlsMediaPlaylist& source,bool audio) {
+std::string playlist_text(const playback::HlsMediaPlaylist& source,bool audio,bool is_ts) {
     std::uint64_t max_duration=0;
     for(const auto& piece:source.segments)
         max_duration=std::max(max_duration,piece.duration_ms);
@@ -97,7 +100,7 @@ std::string playlist_text(const playback::HlsMediaPlaylist& source,bool audio) {
                     "#EXT-X-TARGETDURATION:"+std::to_string(target)+"\n"
                     "#EXT-X-MEDIA-SEQUENCE:0\n";
     if(source.init_segment_url)
-        out+="#EXT-X-MAP:URI=\""+piece_name(audio,true,0)+"\"\n";
+        out+="#EXT-X-MAP:URI=\""+piece_name(audio,true,0,false)+"\"\n";
     for(std::size_t i=0;i<source.segments.size();++i) {
         const auto ms=source.segments[i].duration_ms;
         const auto fraction=ms%1000;
@@ -106,7 +109,7 @@ std::string playlist_text(const playback::HlsMediaPlaylist& source,bool audio) {
                       static_cast<unsigned long long>(ms/1000),
                       static_cast<unsigned long long>(fraction));
         out+="#EXTINF:"+std::string(duration)+",\n"+
-             piece_name(audio,false,i)+"\n";
+             piece_name(audio,false,i,is_ts)+"\n";
     }
     out+="#EXT-X-ENDLIST\n";
     return out;
@@ -156,6 +159,9 @@ bool SwitchHlsCacheSink::begin(const playback::HlsProbePlan& plan) {
        plan.video_segments.segments.size()>4096 ||
        (plan.audio_segments && plan.audio_segments->segments.size()>4096))
         return false;
+    video_ext_=plan.video_segments.init_segment_url?"m4s":"ts";
+    audio_ext_=(plan.audio_segments &&
+                !plan.audio_segments->init_segment_url)?"ts":"m4s";
     staged_=true;
     wrote_video_=false;
     return true;
@@ -164,7 +170,8 @@ bool SwitchHlsCacheSink::write_segment(
     bool audio,bool init,std::size_t index,std::string_view bytes) {
     if(!staged_ || bytes.empty() || bytes.size()>16*1024*1024 ||
        index>=4096)return false;
-    const auto file=std::string(kPending)+"/"+piece_name(audio,init,index);
+    const bool ts=audio?audio_ext_=="ts":video_ext_=="ts";
+    const auto file=std::string(kPending)+"/"+piece_name(audio,init,index,ts);
     if(!persist(file,bytes))return false;
     if(!audio)wrote_video_=true;
     return true;
@@ -175,10 +182,10 @@ bool SwitchHlsCacheSink::publish(const playback::HlsProbePlan& plan) {
        (plan.audio_segments && plan.audio_segments->segments.empty()))
         return false;
     if(!persist(std::string(kPending)+"/video.m3u8",
-                playlist_text(plan.video_segments,false)))return false;
+                playlist_text(plan.video_segments,false,video_ext_=="ts")))return false;
     if(plan.audio_segments &&
        !persist(std::string(kPending)+"/audio.m3u8",
-                playlist_text(*plan.audio_segments,true)))return false;
+                playlist_text(*plan.audio_segments,true,audio_ext_=="ts")))return false;
     if(!persist(std::string(kPending)+"/master.m3u8",
                 master_text(plan)))return false;
 
