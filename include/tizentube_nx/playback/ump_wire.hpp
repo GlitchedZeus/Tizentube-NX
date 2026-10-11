@@ -41,4 +41,15 @@ std::string merge_ump_redirect_parameters(
     const std::string& redirect_url,
     const std::string& request_url);
 
+
+// Application safety adapter over the upstream UMP envelope parser.
+// Refuses any malformed/protection/redirect response instead of silently
+// treating non-media envelopes as playable bytes. Signed bearer URLs are
+// never included in returned diagnostics or persisted to disk.
+[[nodiscard]] std::optional<std::vector<uint8_t>> parse_bounded_ump_media(
+    const uint8_t* bytes, size_t response_size);
+[[nodiscard]] std::optional<std::string> reviewed_ump_chunk_url(
+    const std::string& signed_video_url, uint64_t offset,
+    uint64_t known_resource_size, int request_number);
+
 }  // namespace ttnx::playback
