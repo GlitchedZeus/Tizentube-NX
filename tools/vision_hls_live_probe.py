@@ -137,7 +137,13 @@ def hls_url_rejection_category(url: object) -> str:
         if not parsed.path.startswith("/api/manifest/hls_"):
             return "HLS_URL_PATH_FAMILY_UNSUPPORTED"
         if not parsed.path.startswith("/api/manifest/hls_playlist/"):
-            return "HLS_URL_MASTER_ROUTE_VARIANT"
+            # Fixed categories only: no signed path segment, video ID,
+            # visitor identifier, query parameter, or host is printed.
+            if parsed.path.startswith("/api/manifest/hls_playlist"):
+                return "HLS_MASTER_PATH_WITHOUT_SLASH"
+            if parsed.path.startswith("/api/manifest/hls_variant"):
+                return "HLS_MASTER_DIRECT_VARIANT_ROUTE"
+            return "HLS_MASTER_OTHER_HLS_ROUTE"
         if any(part.lower() in ("%2f","%2e","%5c") for part in
                re.findall(r"%[0-9A-Fa-f]{2}",parsed.path)):
             return "HLS_URL_ESCAPED_PATH_UNSUPPORTED"
