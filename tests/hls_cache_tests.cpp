@@ -57,7 +57,7 @@ struct FakeAacTransport:playback::MediaChunkTransport {
             req.headers[0].value=="bytes=0-1048575";
         out.response.status_code=out.ok?206:403;
         out.response.body=std::string(2048,'A');
-        out.response.body.replace(0,12,std::string("\0\0\0\x18ftypisom",12));
+        out.response.body.replace(0,12,std::string("\0\0\0\x18" "ftypisom",12));
         out.response.headers={
             {"Content-Type","audio/mp4"},
             {"Content-Length","2048"},
