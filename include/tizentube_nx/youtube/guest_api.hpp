@@ -45,4 +45,11 @@ struct GuestSession {
     const GuestSession& session,
     std::string_view continuation = {});
 
+// M3 reviewed guest player-metadata request, not a web-player embed.
+// Normal video IDs only; the caller must still apply the hard Shorts firewall
+// to the parsed response. No adSignalsInfo, cookies or account impersonation.
+// This endpoint remains on the already-allowed www.youtube.com:443 host.
+[[nodiscard]] std::optional<net::HttpRequest> make_player_request(
+    const GuestSession& session, std::string_view normal_video_id);
+
 }  // namespace ttnx::youtube
