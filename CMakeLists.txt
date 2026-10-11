@@ -28,6 +28,8 @@ add_library(tizentube_nx_core
     src/core/outbound_policy.cpp
     src/core/http1.cpp
     src/core/settings.cpp
+    src/core/playback.cpp
+    src/core/sponsorblock.cpp
 )
 target_include_directories(tizentube_nx_core PUBLIC include)
 target_compile_options(tizentube_nx_core PRIVATE -Wall -Wextra -Wpedantic)
@@ -149,6 +151,10 @@ if(TTNX_BUILD_TESTS)
     add_executable(tizentube_nx_request_privacy_tests tests/request_privacy_tests.cpp)
     target_link_libraries(tizentube_nx_request_privacy_tests PRIVATE tizentube_nx_core)
     add_test(NAME request_privacy COMMAND tizentube_nx_request_privacy_tests)
+
+    add_executable(tizentube_nx_playback_foundation_tests tests/playback_foundation_tests.cpp)
+    target_link_libraries(tizentube_nx_playback_foundation_tests PRIVATE tizentube_nx_core)
+    add_test(NAME playback_foundation COMMAND tizentube_nx_playback_foundation_tests)
 
     if(UNIX)
         add_executable(tizentube_nx_storage_tests tests/storage_tests.cpp switch/source/app_storage.cpp)
