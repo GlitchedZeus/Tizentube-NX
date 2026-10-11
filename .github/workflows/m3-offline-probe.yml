@@ -1,4 +1,10 @@
 name: M3 offline playback probe (isolated)
+
+# Preserve the newest build on this branch instead of burning CI workers on
+# dozens of obsolete intermediary commits from a long development tranche.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 on:
   workflow_dispatch:
   pull_request:
