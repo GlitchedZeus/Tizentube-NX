@@ -1,4 +1,6 @@
 #include "tizentube_nx/playback/guest_direct_extractor.hpp"
+#include "tizentube_nx/playback/vision_hls.hpp"
+#include "tizentube_nx/playback/source_routes.hpp"
 
 #include "tizentube_nx/core/url.hpp"
 
@@ -410,6 +412,77 @@ std::optional<ExtractionResult> GuestDirectExtractor::resolve(
     }
     return parse_direct_guest_player_diagnosed(result.response.body,
                                                normal_video_id, last_failure_);
+}
+
+
+std::optional<HlsPlayerSource> parse_m3_guest_hls_source(
+    std::string_view body, std::string_view expected_normal_video_id) {
+    if (body.empty() || body.size() > 1024*1024 ||
+        !ttnx::core::is_valid_video_id(expected_normal_video_id))
+        return std::nullopt;
+    Json parser(body);
+    std::string status, playlist_url;
+    VideoInfo info;
+    unsigned seen=0;
+    const bool success=parser.object([&](std::string_view key,unsigned depth) {
+        if (key=="playabilityStatus") {
+            return only_once(seen,1) && parse_status(parser,status,depth);
+        }
+        if (key=="videoDetails") {
+            return only_once(seen,2) && parse_details(parser,info,depth);
+        }
+        if (key=="streamingData") {
+            if (!only_once(seen,4)) return false;
+            unsigned stream_seen=0;
+            return parser.object([&](std::string_view attr,unsigned child_depth) {
+                if (attr=="hlsManifestUrl") {
+                    return only_once(stream_seen,1) &&
+                           parser.text(&playlist_url,8192);
+                }
+                return parser.skip(child_depth);
+            },depth);
+        }
+        // Never materialize ads, tracking endpoints, thumbnails or comments.
+        return parser.skip(depth);
+    });
+    if (!success || !parser.done() || seen!=7 || status!="OK" ||
+        info.video_id!=expected_normal_video_id ||
+        info.short_video || info.live ||
+        info.duration_sec==0 || info.duration_sec>7ULL*24*3600 ||
+        !is_reviewable_hls_manifest_url(playlist_url))
+        return std::nullopt;
+    HlsPlayerSource source;
+    source.video_id=info.video_id;
+    source.duration_ms=info.duration_sec*1000;
+    source.master_playlist_url=std::move(playlist_url);
+    return source;
+}
+
+std::optional<HlsPlayerSource> VisionHlsSource::resolve(
+    std::string_view normal_video_id) {
+    last_error_=HlsSourceError::InvalidRequest;
+    status_=0;
+    const auto request=youtube::make_m3_visionos_player_request(
+        web_guest_,normal_video_id);
+    if(!request)return std::nullopt;
+    const auto response=http_.perform(*request);
+    if(!response.ok) {
+        last_error_=HlsSourceError::Transport;
+        return std::nullopt;
+    }
+    status_=response.response.status_code;
+    if(status_!=200) {
+        last_error_=HlsSourceError::HttpStatus;
+        return std::nullopt;
+    }
+    const auto parsed=parse_m3_guest_hls_source(
+        response.response.body,normal_video_id);
+    if(!parsed) {
+        last_error_=HlsSourceError::ResponseRejected;
+        return std::nullopt;
+    }
+    last_error_=HlsSourceError::None;
+    return parsed;
 }
 
 } // namespace ttnx::playback
