@@ -5,6 +5,7 @@
 #ifdef TTNX_M3_MEDIA_PLANE
 #include "tizentube_nx/playback/media_chunks.hpp"
 #include "tizentube_nx/playback/ump_transfer.hpp"
+#include "tizentube_nx/playback/hls_manifest.hpp"
 
 #endif
 
@@ -74,6 +75,16 @@ private:
 class LibnxUmpChunkTransport final : public net::HttpClient {
 public:
     LibnxUmpChunkTransport() = default;
+    net::HttpResult perform(const net::HttpRequest& request) override;
+    [[nodiscard]] bool ready() const noexcept { return services_.ready(); }
+private:
+    LibnxHttpClient services_;
+};
+// Experimental playlist-only media HTTPS adapter. No redirects, no segment
+// transfer, no web-player browser fallback and no enabled default-NRO access.
+class LibnxHlsPlaylistTransport final : public net::HttpClient {
+public:
+    LibnxHlsPlaylistTransport() = default;
     net::HttpResult perform(const net::HttpRequest& request) override;
     [[nodiscard]] bool ready() const noexcept { return services_.ready(); }
 private:
