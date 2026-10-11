@@ -362,6 +362,11 @@ private:
     std::string pending_media_feedback_;
     std::string media_feedback_{"Choose a normal video, then Play video (M3)."};
     std::string active_m3_video_id_;
+    std::atomic<int> media_step_{0}; // 0 resolver, 1 media URL accepted, 2 downloading
+    std::atomic<std::uint64_t> media_progress_bytes_{0};
+    std::atomic<std::uint64_t> media_progress_total_{0};
+    std::chrono::steady_clock::time_point media_last_ui_update_ =
+        std::chrono::steady_clock::now();
     brls::Label* m3_status_label_{nullptr};
 #endif
 
@@ -1431,6 +1436,9 @@ private:
         media_cancel_requested_.store(false);
         media_done_.store(false);
         media_busy_.store(true);
+        media_step_.store(0);
+        media_progress_bytes_.store(0);
+        media_progress_total_.store(0);
         media_feedback_ = "M3: resolving direct H.264/AAC and downloading securely...";
         publish_m3_feedback_on_ui(normal_video_id);
 
@@ -1449,9 +1457,14 @@ private:
                         ttnx::playback::MediaDownloadJob download(reader, sink);
                         ttnx::playback::ProgressivePrepareJob job(extractor, download);
                         if (!media_cancel_requested_.load() && job.start(normal_video_id)) {
+                            media_step_.store(2);
+                            media_progress_bytes_.store(0);
+                            media_progress_total_.store(0);
                             while (job.stage() == ttnx::playback::ProgressiveStage::Downloading &&
                                    !media_cancel_requested_.load()) {
                                 (void)job.pump();
+                                media_progress_bytes_.store(job.received_bytes());
+                                media_progress_total_.store(job.total_bytes());
                             }
                             if (media_cancel_requested_.load()) {
                                 job.cancel();
@@ -1459,12 +1472,38 @@ private:
                             } else if (job.stage() == ttnx::playback::ProgressiveStage::Ready) {
                                 success = true;
                                 feedback = "M3: verified local MP4 ready for playback.";
-                            } else feedback = "M3: CDN range or cache transfer rejected.";
+                            } else {
+                                if (download.error() == ttnx::playback::MediaDownloadError::RangeFailure) {
+                                    const auto reason = download.last_chunk_failure();
+                                    const int http = download.last_http_status();
+                                    if (http != 0) {
+                                        feedback = "M3 CDN HTTP status " + std::to_string(http) +
+                                                   " (rejected range/media response).";
+                                    } else if (reason == ttnx::playback::MediaReadFailure::TransportError) {
+                                        feedback = "M3 CDN HTTPS transport failed.";
+                                    } else if (reason == ttnx::playback::MediaReadFailure::InvalidDestination) {
+                                        feedback = "M3 CDN source host blocked before network.";
+                                    } else {
+                                        feedback = "M3 CDN rejected range/headers (" +
+                                            std::to_string(static_cast<int>(reason)) + ").";
+                                    }
+                                } else {
+                                    feedback = "M3 cache failed (" +
+                                        std::to_string(static_cast<int>(download.error())) + ").";
+                                }
+                            }
                         } else if (job.error() ==
                                        ttnx::playback::ProgressiveError::NoSafeMuxedMp4) {
                             feedback = "M3: no directly usable muxed H.264/AAC stream.";
+                        } else if (job.error() == ttnx::playback::ProgressiveError::ResolverUnavailable) {
+                            feedback = std::string("M3: ") +
+                                ttnx::playback::describe_direct_player_failure(extractor.last_failure());
+                            if (extractor.last_http_status() != 0) {
+                                feedback += " HTTP " + std::to_string(extractor.last_http_status());
+                            }
                         } else {
-                            feedback = "M3: guest player resolution unavailable.";
+                            feedback = "M3 prepare rejected stream (" +
+                                std::to_string(static_cast<int>(job.error())) + ").";
                         }
                     }
                 } catch (...) {
@@ -1485,7 +1524,21 @@ private:
     }
 
     void pump_m3_video() {
-        if (!media_done_.load()) return;
+        if (!media_done_.load()) {
+            if (!media_busy_.load()) return;
+            const auto now = std::chrono::steady_clock::now();
+            if (now - media_last_ui_update_ < std::chrono::milliseconds(700)) return;
+            media_last_ui_update_ = now;
+            if (media_step_.load() == 2) {
+                const auto current = media_progress_bytes_.load();
+                const auto total = media_progress_total_.load();
+                media_feedback_ = "M3 downloading: " +
+                    std::to_string(current / 1024) + " KiB";
+                if (total) media_feedback_ += " / " + std::to_string(total / 1024) + " KiB";
+                publish_m3_feedback_on_ui(active_m3_video_id_);
+            }
+            return;
+        }
         if (media_worker_.joinable()) media_worker_.join();
         bool success = false;
         {
