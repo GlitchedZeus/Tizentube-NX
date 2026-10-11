@@ -1,4 +1,5 @@
 #include "tizentube_nx/playback/hls_cache.hpp"
+#include "tizentube_nx/playback/ts_streams.hpp"
 
 #include <utility>
 
@@ -7,6 +8,7 @@ bool HlsCacheJob::start(const HlsProbePlan& plan) {
     cancel();
     active_.reset();
     bytes_=0;
+    muxed_audio_verified_=false;
     completed_=0;
     next_segment_=0;
     track_=0;
@@ -42,6 +44,15 @@ HlsCacheState HlsCacheJob::pump() {
     const auto& playlist=track_==0
         ?active_->video_segments:*active_->audio_segments;
     if(next_segment_>=playlist.segments.size() && !init_pending_) {
+        if(track_==0 && !active_->audio_segments &&
+           active_->selected.direct_media_playlist &&
+           !muxed_audio_verified_) {
+            sink_.abort();
+            state_=HlsCacheState::Failed;
+            error_=HlsCacheFailure::MissingAudio;
+            active_.reset();
+            return state_;
+        }
         if(track_==0 && active_->audio_segments) {
             track_=1;
             next_segment_=0;
@@ -75,6 +86,14 @@ HlsCacheState HlsCacheJob::pump() {
         error_=HlsCacheFailure::TotalSizeExceeded;
         active_.reset();
         return state_;
+    }
+    if(track_==0 && !is_init && !active_->audio_segments &&
+       active_->selected.direct_media_playlist) {
+        const auto streams=inspect_mpeg_ts(bytes.bytes);
+        if(streams.recognized && streams.h264 && streams.aac)
+            muxed_audio_verified_=true;
+        // No AAC PMT entry -> do not publish a silent video. The caller
+        // must locate a separate reviewed audio rendition first.
     }
     if(!sink_.write_segment(track_==1,is_init,next_segment_,bytes.bytes)) {
         sink_.abort();
