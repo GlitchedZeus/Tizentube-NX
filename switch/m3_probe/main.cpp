@@ -77,7 +77,17 @@ public:
             message_ = "No m3-test.mp4 in /switch/TizenTube-NX/";
             return false;
         }
+        // A deliberately small experimental media decoder must not accept
+        // arbitrarily huge inputs. Check the SD fixture before handing it
+        // to FFmpeg (the decoder does its own format validation afterwards).
+        constexpr long kMaxFixtureBytes = 256L * 1024L * 1024L;
+        const bool sized = std::fseek(file, 0, SEEK_END) == 0;
+        const long bytes = sized ? std::ftell(file) : -1;
         std::fclose(file);
+        if (bytes < 1024 || bytes > kMaxFixtureBytes) {
+            message_ = "Offline MP4 fixture missing data or exceeds 256 MiB.";
+            return false;
+        }
         // Keep every action constrained to this known local file. The user
         // cannot supply an arbitrary URL, playlist or media host.
         const char* command[] = {"loadfile", kFixture, "replace", nullptr};
