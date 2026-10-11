@@ -113,7 +113,9 @@ def vision_manifest_url(payload: bytes,expected_id: str) -> str | None:
         if not 0<int(meta["lengthSeconds"])<=7*24*3600:
             return None
         url=root["streamingData"]["hlsManifestUrl"]
-        return url if approved_hls(url) and "/api/manifest/hls_playlist/" in url else None
+        return url if approved_hls(url) and (
+            "/api/manifest/hls_playlist/" in url or
+            "/api/manifest/hls_variant/" in url) else None
     except (TypeError,ValueError,IndexError,KeyError):
         return None
 
@@ -253,11 +255,19 @@ def one_source(video_id: str,visitor: str) -> str:
             "Accept-Encoding":"identity",
             "User-Agent":VISION_UA,
         }
-        master=get_bytes(manifest,headers=headers,cap=MAX_PLAYLIST)
-        variant=pick_hls_variant(master,manifest)
-        if not variant:
-            return "HLS_MASTER_NO_COMPATIBLE_AVC"
-        media=get_bytes(variant,headers=headers,cap=MAX_PLAYLIST)
+        manifest_bytes=get_bytes(manifest,headers=headers,cap=MAX_PLAYLIST)
+        # YouTube may return the media playlist directly as hls_variant,
+        # without a top-level master/variant resolution step.
+        if b"#EXT-X-STREAM-INF:" in manifest_bytes:
+            variant=pick_hls_variant(manifest_bytes,manifest)
+            if not variant:
+                return "HLS_MASTER_NO_COMPATIBLE_AVC"
+            media=get_bytes(variant,headers=headers,cap=MAX_PLAYLIST)
+        elif b"#EXTINF:" in manifest_bytes:
+            variant=manifest
+            media=manifest_bytes
+        else:
+            return "HLS_PLAYLIST_FORMAT_UNSUPPORTED"
         segment=first_hls_segment(media,variant)
         if not segment:
             return "HLS_VOD_SEGMENTS_UNAVAILABLE"
