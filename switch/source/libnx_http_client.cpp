@@ -717,6 +717,43 @@ net::HttpResult LibnxHlsPlaylistTransport::perform(const net::HttpRequest& reque
         return reject("M3 HLS playlist exceeded 1 MiB.");
     return result;
 }
+
+net::HttpResult LibnxHlsSegmentTransport::perform(const net::HttpRequest& request) {
+    net::HttpResult result;
+    const auto reject = [&](const char* message) {
+        result.ok=false;
+        result.failure_stage=net::HttpFailureStage::Policy;
+        result.error=message;
+        return result;
+    };
+    if(!services_.ready())return reject("M3 HLS segment SSL not initialized.");
+    if(request.method!=net::HttpMethod::Get || !request.body.empty() ||
+       request.headers.size()!=2 ||
+       request.headers[0].name!="Accept" ||
+       request.headers[0].value!="application/octet-stream" ||
+       request.headers[1].name!="Accept-Encoding" ||
+       request.headers[1].value!="identity" ||
+       !playback::is_reviewable_hls_child_url(request.url))
+        return reject("M3 HLS segment request rejected before DNS.");
+
+    const auto parsed=net::parse_https_url(request.url);
+    if(!parsed || parsed->port!=443 ||
+       !playback::is_reviewable_hls_child_url(
+           "https://"+parsed->host+parsed->target))
+        return reject("M3 HLS segment HTTPS destination rejected.");
+    // Media-host allowlist rechecked immediately before getaddrinfo.
+    // 16MiB segment cap + 64KiB envelope/header overhead prevents
+    // malicious peer memory exhaustion.
+    result=perform_single_request(request,*parsed,
+                                  normalized_timeout(request.timeout_ms),
+                                  true,16*1024*1024+64*1024);
+    if(result.response.status_code>=300 &&
+       result.response.status_code<400)
+        return reject("M3 HLS segment redirected unexpectedly.");
+    if(result.response.body.size()>16*1024*1024)
+        return reject("M3 HLS segment exceeded bounded body.");
+    return result;
+}
 #endif
 
 }  // namespace ttnx::switch_app
