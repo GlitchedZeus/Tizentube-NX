@@ -43,6 +43,8 @@ The active development branch is [`feature/m2-guest-browsing`](https://github.co
 
 The separate M3 engineering branch is [`feature/m3-playback-foundation-20261011`](https://github.com/GlitchedZeus/Tizentube-NX/tree/feature/m3-playback-foundation-20261011) (draft PR [#8](https://github.com/GlitchedZeus/Tizentube-NX/pull/8)); no working YouTube playback is claimed.
 
+An **isolated offline libmpv video probe** is now implemented on that M3 branch. It builds as `tizentube_nx_m3_probe.nro` **only** with `TTNX_M3_OFFLINE_PROBE=1`, using the independent [M3 offline probe CI workflow](https://github.com/GlitchedZeus/Tizentube-NX/actions/workflows/m3-offline-probe.yml). This is a local synthetic-MP4 experiment, not an enabled player in the normal NRO; see [`docs/M3_OFFLINE_PROBE.md`](docs/M3_OFFLINE_PROBE.md) before testing. Hardware decoder, stream networking and full playback acceptance remain outstanding.
+
 On real Atmosphère hardware, the project has already passed these gates:
 
 - native Borealis application shell with **Home, Search, Subscriptions, Library and Settings**;
