@@ -56,9 +56,16 @@ class OfflineProbeContractTests(unittest.TestCase):
         ):
             self.assertIn(required, self.main)
         self.assertIn(
-            'message_ = std::string("Unsupported safety/player option: ")',
+            'message_ = std::string("INIT ERROR option ")',
             self.main)
         self.assertIn("shutdown();", self.main)
+        self.assertIn('mpv_error_string(rc)', self.main)
+        self.assertIn('mpv_error_string(init_rc)', self.main)
+        self.assertIn('mpv_error_string(render_rc)', self.main)
+        self.assertIn('mpv_error_string(frame_rc)', self.main)
+        self.assertIn('if (!render_ && !init()) return false;', self.main)
+        self.assertNotIn('message_ = "Player not initialized"', self.main)
+
 
     def test_mpv_render_abi_and_alpha_are_explicit(self):
         self.assertIn("MPV_RENDER_API_TYPE_SW", self.main)
@@ -68,6 +75,18 @@ class OfflineProbeContractTests(unittest.TestCase):
         self.assertIn("pixels_[i] = 255;", self.main)
         self.assertIn("mpv_render_context_report_swap(render_);", self.main)
         self.assertIn("new_frame_", self.main)
+
+    def test_hardware_controls_all_visible_without_scrolling(self):
+        self.assertIn('root->setPadding(12, 20, 12, 20)', self.main)
+        self.assertIn('auto* first = new brls::Box(brls::Axis::ROW);', self.main)
+        self.assertIn('auto* second = new brls::Box(brls::Axis::ROW);', self.main)
+        self.assertIn('button->setHeight(52);', self.main)
+        self.assertNotIn('new brls::ScrollingFrame()', self.main)
+        self.assertIn('"A - Load / Retry"', self.main)
+        self.assertIn('"Pause / Resume"', self.main)
+        self.assertIn('"Seek -10s (L)"', self.main)
+        self.assertIn('"Seek +10s (R)"', self.main)
+        self.assertIn('"Stop (X)"', self.main)
 
     def test_m2_network_policy_is_still_explicit(self):
         self.assertIn(
