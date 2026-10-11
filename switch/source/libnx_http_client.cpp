@@ -4,6 +4,7 @@
 #include "tizentube_nx/net/outbound_policy.hpp"
 #ifdef TTNX_M3_MEDIA_PLANE
 #include "tizentube_nx/playback/playback.hpp"
+#include "tizentube_nx/playback/hls_manifest.hpp"
 #endif
 
 #include <switch.h>
@@ -201,7 +202,8 @@ bool write_all(SslConnection& connection, std::string_view data, std::string& er
     return true;
 }
 
-bool read_all(SslConnection& connection, std::string& raw, std::string& error) {
+bool read_all(SslConnection& connection, std::string& raw, std::string& error,
+              std::size_t cap=kMaxRawResponseBytes) {
     char buffer[32 * 1024];
     while (true) {
         u32 received = 0;
@@ -212,8 +214,8 @@ bool read_all(SslConnection& connection, std::string& raw, std::string& error) {
             return false;
         }
         if (received == 0) return true;
-        if (raw.size() > kMaxRawResponseBytes ||
-            received > kMaxRawResponseBytes - raw.size()) {
+        if (raw.size() > cap ||
+            received > cap - raw.size()) {
             error = "HTTPS response exceeded the bounded raw-response limit.";
             return false;
         }
@@ -225,7 +227,8 @@ net::HttpResult perform_single_request(
     const net::HttpRequest& request,
     const net::HttpsUrl& parsed_url,
     long timeout_ms,
-    bool media_plane = false) {
+    bool media_plane = false,
+    std::size_t response_cap=kMaxRawResponseBytes) {
     net::HttpResult result;
 
     const auto wire_request = net::build_http1_request(request, parsed_url);
@@ -342,7 +345,7 @@ net::HttpResult perform_single_request(
 
     std::string raw_response;
     raw_response.reserve(64 * 1024);
-    if (!read_all(tls.connection, raw_response, result.error)) {
+    if (!read_all(tls.connection, raw_response, result.error, response_cap)) {
         result.failure_stage = net::HttpFailureStage::Tls;
         return result;
     }
@@ -670,6 +673,48 @@ net::HttpResult LibnxUmpChunkTransport::perform(const net::HttpRequest& request)
         return reject("UMP redirected; this transport never follows redirects.");
     if (result.response.body.size()>1024*1024+128*1024)
         return reject("UMP envelope exceeds maximum bounded response size.");
+    return result;
+}
+
+net::HttpResult LibnxHlsPlaylistTransport::perform(const net::HttpRequest& request) {
+    net::HttpResult result;
+    const auto reject = [&](const char* message) {
+        result.ok = false;
+        result.failure_stage = net::HttpFailureStage::Policy;
+        result.error = message;
+        return result;
+    };
+    if (!services_.ready())return reject("M3 native HLS socket/TLS unavailable.");
+    // No authorization/cookies, arbitrary method, request body, caller-chosen
+    // headers or redirects. This does not grant libmpv direct network access.
+    if (request.method!=net::HttpMethod::Get ||
+        !request.body.empty() ||
+        request.headers.size()!=2 ||
+        request.headers[0].name!="Accept" ||
+        request.headers[0].value!="application/vnd.apple.mpegurl" ||
+        request.headers[1].name!="Accept-Encoding" ||
+        request.headers[1].value!="identity" ||
+        !(playback::is_reviewable_hls_manifest_url(request.url) ||
+          playback::is_reviewable_hls_child_url(request.url)))
+        return reject("M3 HLS path or request headers not reviewed.");
+    const auto parsed=net::parse_https_url(request.url);
+    if(!parsed || parsed->port!=443 ||
+       !(playback::is_reviewable_hls_manifest_url(
+             "https://"+parsed->host+parsed->target) ||
+         playback::is_reviewable_hls_child_url(
+             "https://"+parsed->host+parsed->target)))
+        return reject("M3 HLS host rejected by strict HTTPS parser.");
+    // Media-plane host check repeats right at tcp_connect_allowed_host,
+    // before getaddrinfo(). Limit the RAW socket read to 1 MiB + 64 KiB
+    // headers, not the browsing client's 17 MiB limit.
+    result=perform_single_request(request,*parsed,
+                                  normalized_timeout(request.timeout_ms),
+                                  true,1024*1024+64*1024);
+    if(result.response.status_code>=300 &&
+       result.response.status_code<400)
+        return reject("M3 HLS server redirect refused.");
+    if(result.response.body.size()>1024*1024)
+        return reject("M3 HLS playlist exceeded 1 MiB.");
     return result;
 }
 #endif
