@@ -361,6 +361,7 @@ private:
     bool pending_media_success_{false};
     std::string pending_media_feedback_;
     std::string media_feedback_{"Choose a normal video, then Play video (M3)."};
+    std::string active_m3_video_id_;
     brls::Label* m3_status_label_{nullptr};
 #endif
 
@@ -443,6 +444,7 @@ private:
         brls::Button* open_channel{nullptr};
 #ifdef TTNX_M3_INTEGRATED
         brls::Button* play_video{nullptr};
+        brls::Label* play_status{nullptr};
 #endif
     };
     std::vector<SearchDetailRow> search_detail_rows_;
@@ -836,6 +838,10 @@ private:
                 row.play_video->setVisibility(
                     selected ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
             }
+            if (row.play_status) {
+                row.play_status->setVisibility(
+                    selected ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
+            }
 #endif
         }
     }
@@ -880,10 +886,15 @@ private:
             return true;
         });
 
+        auto selection_text = ttnx::core::search_result_selection_display(result);
+#ifdef TTNX_M3_INTEGRATED
+        if (result.kind == ttnx::core::BrowseResultKind::Video) {
+            const auto stale = selection_text.find("\nPlayback is not enabled in this milestone.");
+            if (stale != std::string::npos) selection_text.erase(stale);
+        }
+#endif
         auto* detail_label = label(
-            search_results_box_,
-            ttnx::core::search_result_selection_display(result),
-            18);
+            search_results_box_, selection_text, 18);
         detail_label->setMarginBottom(14);
         detail_label->setVisibility(
             identity == search_model_.selected_identity()
@@ -913,8 +924,13 @@ private:
                 return true;
             });
         }
+        brls::Label* play_status = nullptr;
+        if (play_video) {
+            play_status = label(search_results_box_, media_feedback_, 18);
+            play_status->setVisibility(brls::Visibility::GONE);
+        }
         search_detail_rows_.push_back({
-            identity, select, detail_label, open_channel, play_video});
+            identity, select, detail_label, open_channel, play_video, play_status});
 #else
         search_detail_rows_.push_back({identity, select, detail_label, open_channel});
 #endif
@@ -1386,24 +1402,37 @@ private:
 
 
 #ifdef TTNX_M3_INTEGRATED
+    void publish_m3_feedback_on_ui(const std::string& video_id) {
+        // Global status is above Search results and offscreen when Play is
+        // focused. Put a diagnostic next to the actual selected video.
+        if (m3_status_label_) m3_status_label_->setText(media_feedback_);
+        for (auto& row : search_detail_rows_) {
+            if (row.play_status && row.identity == "video:" + video_id) {
+                row.play_status->setText(media_feedback_);
+            }
+        }
+        refresh_footer();
+    }
+
     void start_m3_video(std::string normal_video_id) {
         if (media_busy_.load() || !guest_session_ || !guest_session_->usable()) {
             media_feedback_ = "Connect to guest YouTube first, or wait for current download.";
-            if (m3_status_label_) m3_status_label_->setText(media_feedback_);
+            publish_m3_feedback_on_ui(normal_video_id);
             return;
         }
         if (!ttnx::core::is_valid_video_id(normal_video_id)) {
             media_feedback_ = "Invalid normal video ID (Shorts are forbidden).";
-            if (m3_status_label_) m3_status_label_->setText(media_feedback_);
+            publish_m3_feedback_on_ui(normal_video_id);
             return;
         }
         if (media_worker_.joinable()) media_worker_.join();
+        active_m3_video_id_ = normal_video_id;
         const auto session = *guest_session_;
         media_cancel_requested_.store(false);
         media_done_.store(false);
         media_busy_.store(true);
         media_feedback_ = "M3: resolving direct H.264/AAC and downloading securely...";
-        if (m3_status_label_) m3_status_label_->setText(media_feedback_);
+        publish_m3_feedback_on_ui(normal_video_id);
 
         try {
             media_worker_ = std::thread([this, normal_video_id, session] {
@@ -1451,7 +1480,7 @@ private:
         } catch (...) {
             media_busy_.store(false);
             media_feedback_ = "M3: unable to start download worker.";
-            if (m3_status_label_) m3_status_label_->setText(media_feedback_);
+            publish_m3_feedback_on_ui(normal_video_id);
         }
     }
 
@@ -1466,7 +1495,7 @@ private:
         }
         media_busy_.store(false);
         media_done_.store(false);
-        if (m3_status_label_) m3_status_label_->setText(media_feedback_);
+        publish_m3_feedback_on_ui(active_m3_video_id_);
         if (success) ttnx::switch_app::open_m3_completed_media();
     }
 #endif
