@@ -33,6 +33,7 @@ add_library(tizentube_nx_core
     src/core/media_download.cpp
     src/core/guest_direct_extractor.cpp
     src/core/hls_manifest.cpp
+    src/core/hls_probe.cpp
     src/core/progressive_prepare.cpp
     src/core/source_routes.cpp
     src/core/ump_wire.cpp
@@ -64,6 +65,10 @@ if(TTNX_BUILD_TESTS)
     add_executable(tizentube_nx_ump_wire_tests tests/ump_wire_tests.cpp)
     target_link_libraries(tizentube_nx_ump_wire_tests PRIVATE tizentube_nx_core)
     add_test(NAME ump_wire COMMAND tizentube_nx_ump_wire_tests)
+
+    add_executable(tizentube_nx_hls_probe_tests tests/hls_probe_tests.cpp)
+    target_link_libraries(tizentube_nx_hls_probe_tests PRIVATE tizentube_nx_core)
+    add_test(NAME hls_probe COMMAND tizentube_nx_hls_probe_tests)
 
     add_executable(tizentube_nx_hls_manifest_tests tests/hls_manifest_tests.cpp)
     target_link_libraries(tizentube_nx_hls_manifest_tests PRIVATE tizentube_nx_core)
