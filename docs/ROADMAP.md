@@ -148,7 +148,7 @@
 
 ## M3 — Playback + ad-free viewing
 
-### Isolated foundation PR #8 (not device accepted)
+### Isolated foundation PR #8 (offline H.264/AAC hardware checkpoint accepted; streaming NOT accepted)
 
 - [x] Provider-neutral extractor contract and typed resolved audio/video formats
 - [x] Safe structural Googlevideo URL validation independent of the M2 outbound allowlist
@@ -161,18 +161,21 @@
 - [x] Implement synthetic local MP4 video-frame preview, audio/control actions and decoder diagnostics
 - [x] Add separate devkitA64 mpv-package CI recipe and exact-artifact/debug-symbol upload workflow
 - [x] Publish synthetic fixture generation and reproducible real-Switch hardware test checklist
-- [ ] Exact-head isolated mpv-probe CI compilation passes (queued; not yet accepted)
-- [ ] Physical test passes for the offline libmpv software-frame NRO
+- [x] Exact-head offline mpv-probe build and regular Switch/host tests passed at the physically tested `2acc3b7533d0e1ede0db0517b085ffd1179cb372`
+- [x] Physical Switch screenshot confirms moving 30-second synthetic H.264 picture and audible AAC, with mpv playback active at tested `2acc3b75`
+- [x] Hardware decoder report `nvtegra-copy` observed on Switch (this does NOT mean Deko3D video-frame presentation is implemented)
+- [x] Improve quiet synthetic sine fixture: +10 dB source-level boost, peak checked, video stream unchanged; no changes to working NRO
+- [ ] Physical confirmation of controls (pause, 10-second seek, stop, restart), real-time A/V sync, and sleep/dock stability
 - [ ] Replace experimental 640x360 software output with reviewed Deko3D/nvtegra renderer bridge
 - [ ] Connect project-owned backend to real Switch libmpv/FFmpeg/Deko3D/nvtegra renderer
-- [ ] Physical hardware playback of known legal offline SDR H.264/AAC test asset
+- [x] Physical offline SDR H.264/AAC video + audio playback from exact local SD fixture (quiet original tone separately tracked)
 - [ ] Test separate remote audio/video synchronization and seek on hardware
 - [ ] Select and validate standalone-console extraction strategy without mandatory PC
 - [ ] Approve/implement actual media-network policy, redirects, HTTPS and range transport
 - [ ] Integrate real YouTube stream extraction end-to-end
 - [ ] Real Switch YouTube playback, ad-free verification and SponsorBlock integration
 
-See `docs/M3_PLAYBACK_FOUNDATION.md`. M2's accepted NRO and `www.youtube.com:443` allowlist have **not** been changed into a playback client.
+See `docs/M3_PLAYBACK_FOUNDATION.md` and `docs/M3_HARDWARE_CHECKPOINT_2026-10-11.md`. M2's accepted NRO and `www.youtube.com:443` allowlist have **not** been changed into a playback client.
 
 Playback and the ad-free experience are one milestone. **A player that deliberately shows YouTube ads is not considered finished.** See `docs/PRODUCT_PHILOSOPHY.md`.
 
