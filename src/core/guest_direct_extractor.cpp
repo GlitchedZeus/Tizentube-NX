@@ -440,6 +440,25 @@ std::optional<HlsPlayerSource> parse_m3_guest_hls_source(
                     return only_once(stream_seen,1) &&
                            parser.text(&playlist_url,8192);
                 }
+                if (attr=="adaptiveFormats") {
+                    if(!only_once(stream_seen,2))return false;
+                    unsigned count=0;
+                    return parser.array([&](unsigned entry_depth) {
+                        if(++count>200)return false;
+                        RawFormat f;
+                        if(!parse_format(parser,f,entry_depth))return false;
+                        const bool safe=f.mime.starts_with("audio/mp4") &&
+                            f.mime.find("mp4a.40.")!=std::string::npos &&
+                            !f.cipher && !f.drm && !f.color_info &&
+                            f.bitrate>0 && f.bitrate<=1'000'000 &&
+                            is_reviewable_googlevideo_https_url(f.url);
+                        if(safe && f.bitrate>aac_bitrate) {
+                            aac_bitrate=f.bitrate;
+                            aac_url=f.url;
+                        }
+                        return true;
+                    },child_depth);
+                }
                 return parser.skip(child_depth);
             },depth);
         }
