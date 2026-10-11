@@ -68,7 +68,7 @@ struct FakeTransport final : MediaChunkTransport {
         r.response.body = payload.substr(static_cast<std::size_t>(from),
                                           static_cast<std::size_t>(length));
         const auto total = advertized_total ? advertized_total : actual_size;
-        const auto reported_total = (change_total && calls > 1)
+        const auto reported_total = (change_total && calls == 1)
             ? total + 1 : total;
         r.response.headers = {
             {"Content-Type", "video/mp4"},
@@ -160,7 +160,7 @@ void negative_cases() {
               "sink finalization failure aborts");
     }
     {
-        FakeTransport fake; fake.payload="HI"; fake.advertized_total=MediaDownloadJob::kMaxFileBytes+1;
+        FakeTransport fake; fake.payload=std::string(MediaChunkReader::kMaxChunkBytes,'z'); fake.advertized_total=MediaDownloadJob::kMaxFileBytes+1;
         FakeSink sink; MediaChunkReader reader(fake); MediaDownloadJob job(reader,sink);
         check(job.start(url),"too-large resource test starts");
         check(job.pump() == MediaDownloadState::Error &&
