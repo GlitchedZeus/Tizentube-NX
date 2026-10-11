@@ -52,10 +52,24 @@ bool reviewed_hls_url(std::string_view url) {
        path.find("//")!=std::string_view::npos)return false;
     const auto end=path.find('?');
     path=path.substr(0,end);
-    constexpr std::string_view prefix="/api/manifest/hls_playlist/";
-    return path.starts_with(prefix) && path.size()>prefix.size() &&
-           path.find("/../")==std::string_view::npos &&
-           path.find("/./")==std::string_view::npos;
+    // Live reference proved that visionOS can return a *media* playlist
+    // through /hls_variant/ rather than the traditional /hls_playlist/
+    // master. Admit only these two exact path families; this is still only
+    // a URL-structure check, not permission to play arbitrary media.
+    constexpr std::string_view master="/api/manifest/hls_playlist/";
+    constexpr std::string_view variant="/api/manifest/hls_variant/";
+    const bool reviewed=(path.starts_with(master) && path.size()>master.size()) ||
+                        (path.starts_with(variant) && path.size()>variant.size());
+    if(!reviewed)return false;
+    std::string lower(path);
+    std::transform(lower.begin(),lower.end(),lower.begin(),[](unsigned char c){
+        return static_cast<char>(std::tolower(c));
+    });
+    return lower.find("/../")==std::string::npos &&
+           lower.find("/./")==std::string::npos &&
+           lower.find("%2e")==std::string::npos &&
+           lower.find("%2f")==std::string::npos &&
+           lower.find("%5c")==std::string::npos;
 }
 bool format_allowed(const SourceCandidate& c,unsigned height,unsigned fps) {
     return c.height!=0 && c.height<=height &&
