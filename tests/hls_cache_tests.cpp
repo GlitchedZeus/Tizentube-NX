@@ -61,7 +61,7 @@ struct FakeAacTransport:playback::MediaChunkTransport {
             std::min<std::uint64_t>(start+1048575,total_size-1):start;
         const auto size=end-start+1;
         const std::string expected="bytes="+std::to_string(start)+"-"+
-            std::to_string(std::min<std::uint64_t>(start+1048575,total_size-1));
+            std::to_string(requests==1?1048575:std::min<std::uint64_t>(start+1048575,total_size-1));
         out.ok=!blocked && requests!=fail_on && start<total_size &&
             req.method==net::HttpMethod::Get && req.headers.size()==3 &&
             req.headers[0].value==expected;
