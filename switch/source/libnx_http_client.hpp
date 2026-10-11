@@ -90,6 +90,17 @@ public:
 private:
     LibnxHttpClient services_;
 };
+
+// Segment bytes require a DIFFERENT fixed MIME/size gate from text playlists.
+// No user-supplied cookies, redirects, cross-origin requests or media GET in M2.
+class LibnxHlsSegmentTransport final : public net::HttpClient {
+public:
+    LibnxHlsSegmentTransport() = default;
+    net::HttpResult perform(const net::HttpRequest& request) override;
+    [[nodiscard]] bool ready() const noexcept { return services_.ready(); }
+private:
+    LibnxHttpClient services_;
+};
 #endif
 
 }  // namespace ttnx::switch_app
