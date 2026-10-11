@@ -1,5 +1,8 @@
 #include "tizentube_nx/playback/hls_cache.hpp"
 #include "tizentube_nx/playback/ts_streams.hpp"
+#include "tizentube_nx/playback/playback.hpp"
+#include "tizentube_nx/core/url.hpp"
+#include <algorithm>
 
 #include <utility>
 
@@ -18,6 +21,26 @@ bool HlsCacheJob::start(const HlsProbePlan& plan) {
     state_=HlsCacheState::Failed;
     const auto count=plan.video_segments.segments.size()+
         (plan.audio_segments?plan.audio_segments->segments.size():0);
+    // Recheck media identity/duration at the final transfer boundary, not
+    // only in the upstream probe. Reject malformed plans before any I/O.
+    const auto within_sync=[](std::uint64_t a,std::uint64_t b) {
+        if(!a || !b)return false;
+        const auto gap=a>b?a-b:b-a;
+        return gap<=std::max<std::uint64_t>(3000,std::max(a,b)/100);
+    };
+    if(!core::is_valid_video_id(plan.source.video_id) ||
+       !within_sync(plan.video_segments.total_duration_ms,
+                    plan.source.duration_ms) ||
+       (plan.audio_segments &&
+        !within_sync(plan.audio_segments->total_duration_ms,
+                     plan.video_segments.total_duration_ms)))
+        return false;
+    if(!plan.audio_segments && !plan.source.external_aac_url.empty() &&
+       (!aac_reader_ ||
+        !is_reviewable_googlevideo_https_url(plan.source.external_aac_url))) {
+        error_=HlsCacheFailure::MissingAudio;
+        return false;
+    }
     if(plan.video_segments.segments.empty() || count>4096 ||
        ((!plan.selected.direct_media_playlist) &&
           (!plan.selected.height || !plan.selected.fps)) ||
@@ -87,8 +110,7 @@ HlsCacheState HlsCacheJob::pump() {
     const auto& playlist=track_==0
         ?active_->video_segments:*active_->audio_segments;
     if(next_segment_>=playlist.segments.size() && !init_pending_) {
-        if(track_==0 && !active_->audio_segments &&
-           active_->selected.direct_media_playlist) {
+        if(track_==0 && !active_->audio_segments) {
             if(!active_->source.external_aac_url.empty() && aac_reader_) {
                 track_=2; // download, validate and attach standalone AAC
                 return state_;
@@ -135,8 +157,7 @@ HlsCacheState HlsCacheJob::pump() {
         active_.reset();
         return state_;
     }
-    if(track_==0 && !is_init && !active_->audio_segments &&
-       active_->selected.direct_media_playlist) {
+    if(track_==0 && !is_init && !active_->audio_segments) {
         const auto streams=inspect_mpeg_ts(bytes.bytes);
         if(streams.recognized && streams.h264 && streams.aac)
             muxed_audio_verified_=true;

@@ -1,5 +1,7 @@
 #include "tizentube_nx/playback/hls_cache.hpp"
 #include <cstdlib>
+#include <algorithm>
+#include <cstdint>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -49,19 +51,29 @@ struct FakeTransport:net::HttpClient {
 struct FakeAacTransport:playback::MediaChunkTransport {
     int requests{0};
     bool blocked{false};
+    int fail_on{0};
+    std::uint64_t total_size{2048};
     net::HttpResult perform(const net::HttpRequest& req) override {
         ++requests;
         net::HttpResult out;
-        out.ok=!blocked && req.method==net::HttpMethod::Get &&
-            req.headers.size()==3 &&
-            req.headers[0].value=="bytes=0-1048575";
+        const std::uint64_t start=(static_cast<std::uint64_t>(requests)-1)*1048576;
+        const auto end=start<total_size?
+            std::min<std::uint64_t>(start+1048575,total_size-1):start;
+        const auto size=end-start+1;
+        const std::string expected="bytes="+std::to_string(start)+"-"+
+            std::to_string(std::min<std::uint64_t>(start+1048575,total_size-1));
+        out.ok=!blocked && requests!=fail_on && start<total_size &&
+            req.method==net::HttpMethod::Get && req.headers.size()==3 &&
+            req.headers[0].value==expected;
         out.response.status_code=out.ok?206:403;
-        out.response.body=std::string(2048,'A');
-        out.response.body.replace(0,12,std::string("\0\0\0\x18" "ftypisom",12));
+        out.response.body=std::string(static_cast<std::size_t>(size),'A');
+        if(start==0)
+            out.response.body.replace(0,12,std::string("\0\0\0\x18" "ftypisom",12));
         out.response.headers={
             {"Content-Type","audio/mp4"},
-            {"Content-Length","2048"},
-            {"Content-Range","bytes 0-2047/2048"}
+            {"Content-Length",std::to_string(size)},
+            {"Content-Range","bytes "+std::to_string(start)+"-"+
+             std::to_string(end)+"/"+std::to_string(total_size)}
         };
         return out;
     }
@@ -217,6 +229,88 @@ void failure_cases() {
               job.error()==playback::HlsCacheFailure::MediaFetch &&
               sink.publishes==0 && sink.aborts>0,
               "AAC 403 aborts cached video, not silently published");
+    }
+    {
+        FakeTransport video;
+        FakeAacTransport audio;audio.total_size=1048600;
+        playback::HlsSegmentReader reader(video);
+        playback::MediaChunkReader aac_reader(audio);
+        Sink sink;playback::HlsCacheJob job(reader,sink,&aac_reader);
+        auto p=plan();p.audio_segments.reset();p.selected.audio_playlist_url.clear();
+        p.selected.direct_media_playlist=true;
+        p.source.external_aac_url=base+"external";
+        check(job.start(p),"large AAC multi-range transfer stages");
+        for(int i=0;i<15 && job.state()==playback::HlsCacheState::Fetching &&
+                         audio.requests==0;++i)(void)job.pump();
+        check(audio.requests==1 && sink.audio_appends==1 &&
+              job.state()==playback::HlsCacheState::Fetching,
+              "first one-MiB audio range precedes final AAC publication");
+        job.cancel();
+        (void)job.pump();
+        check(audio.requests==1 && sink.publishes==0 &&
+              sink.aborts>0 && job.state()==playback::HlsCacheState::Cancelled,
+              "audio transfer cancellation neither fetches more nor publishes");
+    }
+    {
+        FakeTransport video;
+        FakeAacTransport audio;audio.total_size=1048600;audio.fail_on=2;
+        playback::HlsSegmentReader reader(video);
+        playback::MediaChunkReader aac_reader(audio);
+        Sink sink;playback::HlsCacheJob job(reader,sink,&aac_reader);
+        auto p=plan();p.audio_segments.reset();p.selected.audio_playlist_url.clear();
+        p.selected.direct_media_playlist=true;
+        p.source.external_aac_url=base+"external";
+        check(job.start(p),"multi-range AAC failure fixture stages");
+        for(int i=0;i<15 && job.state()==playback::HlsCacheState::Fetching;++i)
+            (void)job.pump();
+        check(job.state()==playback::HlsCacheState::Failed &&
+              job.error()==playback::HlsCacheFailure::MediaFetch &&
+              sink.publishes==0 && sink.aborts>0 && audio.requests==2,
+              "403 on second AAC range rolls back fully staged HLS video");
+    }
+    {
+        FakeTransport transport;transport.fail_after=2;
+        playback::HlsSegmentReader reader(transport);
+        Sink sink;playback::HlsCacheJob job(reader,sink);
+        check(job.start(plan()),"failed transfer first attempt stages");
+        for(int i=0;i<10 && job.state()==playback::HlsCacheState::Fetching;++i)
+            (void)job.pump();
+        transport.hits=0;transport.fail_after=0;
+        check(job.start(plan()),"failed cache can retry without stale fragments");
+        for(int i=0;i<10 && job.state()==playback::HlsCacheState::Fetching;++i)
+            (void)job.pump();
+        check(job.state()==playback::HlsCacheState::Ready &&
+              sink.publishes==1 && sink.completed,
+              "successful retry only publishes complete replacement");
+    }
+    {
+        FakeTransport video;
+        playback::HlsSegmentReader reader(video);
+        Sink sink;playback::HlsCacheJob job(reader,sink);
+        auto p=plan();p.audio_segments.reset();p.selected.audio_playlist_url.clear();
+        p.selected.direct_media_playlist=true;
+        p.source.external_aac_url=base+"external";
+        check(!job.start(p) && job.error()==playback::HlsCacheFailure::MissingAudio &&
+              video.hits==0 && sink.begins==0,
+              "missing external AAC range reader fails before expensive video download");
+    }
+    {
+        FakeTransport video;
+        FakeAacTransport audio;
+        playback::HlsSegmentReader reader(video);
+        playback::MediaChunkReader aac_reader(audio);
+        Sink sink;playback::HlsCacheJob job(reader,sink,&aac_reader);
+        auto p=plan();p.source.video_id="not-a-video-id";
+        check(!job.start(p) && video.hits==0 && sink.begins==0,
+              "invalid video identity blocked before cache transaction");
+        p=plan();p.source.duration_ms=360000;
+        check(!job.start(p) && video.hits==0,
+              "manifest/source duration mismatch denied before network");
+        p=plan();p.audio_segments.reset();p.selected.audio_playlist_url.clear();
+        p.selected.direct_media_playlist=true;
+        p.source.external_aac_url="https://evil.example.com/videoplayback";
+        check(!job.start(p) && video.hits==0,
+              "unreviewed AAC host blocked before staging");
     }
     {
         FakeTransport transport;

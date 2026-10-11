@@ -218,7 +218,7 @@ bool SwitchHlsCacheSink::publish(const playback::HlsProbePlan& plan) {
         (audio_written_.size()!=plan.audio_segments->segments.size() ||
          !std::all_of(audio_written_.begin(),audio_written_.end(),[](bool b){return b;}) ||
          (audio_init_needed_ && !audio_init_written_))))return false;
-    const bool external=!plan.audio_segments && plan.selected.direct_media_playlist &&
+    const bool external=!plan.audio_segments &&
                         !plan.source.external_aac_url.empty();
     if(!external && external_audio_bytes_!=0)return false;
     if(external) {

@@ -168,3 +168,14 @@ accepts one literal path, preserving the `sdmc:` prefix instead of splitting
 it on the Unix path-list separator. The runtime selected-audio-track check
 remains mandatory. This is source-backed mpv option correctness, not a claim
 of physical Switch playback acceptance.
+
+### Second cache regression tranche
+
+A second set of range-transfer tests covers cancellation during a multi-chunk
+AAC download, HTTP 403 on a later AAC chunk, clean retries following a failed
+cache transaction, missing AAC range-transport rejection before video download,
+invalid requested media identity, unsafe AAC hosts, and source/playlist
+duration drift. Video-only HLS is no longer permitted simply because the
+origin returned a master playlist: audio must be verified in MPEG-TS metadata,
+supplied through an HLS audio rendition, or fully fetched through a reviewed
+external AAC source. All checks are fail-closed with no ad-player fallback.
