@@ -13,7 +13,7 @@ import live_video_preflight as live
 
 class FakeReply:
     def __init__(self, status=206, body=None, media_type="video/mp4",
-                 content_range="bytes 0-31/500"):
+                 content_range="bytes 0-31/32"):
         self.status = status
         self.body = body if body is not None else b"\0\0\0\x18ftypisom" + b"A" * 20
         self.headers = Message()
