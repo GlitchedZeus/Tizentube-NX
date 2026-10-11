@@ -29,6 +29,7 @@ add_library(tizentube_nx_core
     src/core/http1.cpp
     src/core/settings.cpp
     src/core/playback.cpp
+    src/core/media_chunks.cpp
     src/core/extraction_wire.cpp
     src/core/sponsorblock.cpp
 )
@@ -44,6 +45,10 @@ target_link_libraries(tizentube_nx_host PRIVATE tizentube_nx_core)
 option(TTNX_BUILD_TESTS "Build host tests" ON)
 if(TTNX_BUILD_TESTS)
     enable_testing()
+    add_executable(tizentube_nx_media_chunks_tests tests/media_chunks_tests.cpp)
+    target_link_libraries(tizentube_nx_media_chunks_tests PRIVATE tizentube_nx_core)
+    add_test(NAME media_chunks COMMAND tizentube_nx_media_chunks_tests)
+
     add_executable(tizentube_nx_core_tests tests/core_tests.cpp)
     target_link_libraries(tizentube_nx_core_tests PRIVATE tizentube_nx_core)
     add_test(NAME core COMMAND tizentube_nx_core_tests)
