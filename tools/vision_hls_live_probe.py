@@ -118,6 +118,32 @@ def vision_manifest_url(payload: bytes,expected_id: str) -> str | None:
         return None
 
 
+def classify_hls_source_failure(payload: bytes, expected_id: str) -> str:
+    # Enumerated stage only. Never output upstream messages, client tokens,
+    # visitorData, arbitrary HTML/JSON, or signed Googlevideo URLs.
+    try:
+        if len(payload)>MAX_JSON:
+            return "PLAYER_RESPONSE_OVERSIZE"
+        obj=json.loads(payload)
+        status=obj.get("playabilityStatus",{}).get("status")
+        if status!="OK":
+            return "PLAYER_PLAYABILITY_BLOCKED"
+        details=obj.get("videoDetails",{})
+        if details.get("videoId")!=expected_id:
+            return "PLAYER_IDENTITY_MISMATCH"
+        if details.get("isShort") or details.get("isLiveContent"):
+            return "SHORTS_OR_LIVE_BLOCKED"
+        streaming=obj.get("streamingData")
+        if not isinstance(streaming,dict):
+            return "NO_STREAMING_DATA"
+        url=streaming.get("hlsManifestUrl")
+        if not url:
+            return "HLS_NOT_OFFERED_BY_PLAYER"
+        return "HLS_DESTINATION_POLICY_REJECTED"
+    except (TypeError,ValueError,AttributeError,KeyError):
+        return "PLAYER_RESPONSE_UNUSABLE"
+
+
 def pick_hls_variant(master: bytes, master_url: str) -> str | None:
     if not master or len(master)>MAX_PLAYLIST:
         return None
@@ -187,7 +213,7 @@ def one_source(video_id: str,visitor: str) -> str:
             data=response.read(MAX_JSON+1)
         manifest=vision_manifest_url(data,video_id)
         if not manifest:
-            return "VISION_HLS_SOURCE_UNAVAILABLE"
+            return classify_hls_source_failure(data,video_id)
         headers={
             "Accept":"application/vnd.apple.mpegurl",
             "Accept-Encoding":"identity",
