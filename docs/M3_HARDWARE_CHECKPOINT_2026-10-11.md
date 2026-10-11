@@ -30,11 +30,18 @@ Observed app diagnostics:
 (audible); libmpv's `nvtegra-copy` decoder reported in this specific
 hardware configuration; fixed layout usability.
 
-**Not yet accepted:** specific pause/resume/seek/stop behavior, A/V sync under
-longer clips, dock/undock, sleep/wake, repeat/loop correctness, sustained
-framerate, Deko3D direct rendering, arbitrary videos, remote CDN transports,
-YouTube extraction/streaming, ads/SponsorBlock, and any installed-game or
-external writes. The renderer currently uploads 640x360 software output to
+**Additional owner-confirmed physical control PASS (same exact Fix #4 NRO):**
+pause and resume, seeking backward and forward, stopping playback, and
+reloading/replaying the local MP4 after Stop. These operations worked on the
+real Switch, beyond the earlier screenshots showing the movie playing.
+The controls acceptance does **not** imply precise sample-level seek accuracy,
+long-clip A/V synchronization, or robustness over multiple hours.
+
+**Not yet accepted:** audio loudness of the boosted replacement fixture,
+A/V sync under longer clips, dock/undock, sleep/wake, sustained framerate,
+Deko3D direct rendering, arbitrary videos, remote CDN transports, YouTube
+extraction/streaming, ads/SponsorBlock, and any installed-game or external
+writes. The renderer currently uploads 640x360 software output to
 Borealis/NanoVG even with a hardware-decoder path reported by mpv. Render-call
 counter is not a measured FPS benchmark.
 
@@ -72,7 +79,8 @@ tone on Switch**, so don't mark audio loudness resolved on hardware.
 ## Next hardware follow-ups
 
 1. Replace the synthetic tone and confirm new relative loudness is comfortable.
-2. Explicitly test pause, seek -10/+10 seconds, stop/reload, and stable exit.
+2. Verify stable exit and repeated long-run control use. Basic pause, seek
+   -10/+10 seconds, stop and reload have already passed physical testing.
 3. Validate real audio/video synchronization over a longer legal offline clip,
    undock/dock and suspend/resume.
 4. Decide if existing `nvtegra-copy` plus software presentation suffices for an
