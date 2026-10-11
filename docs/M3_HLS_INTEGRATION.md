@@ -158,3 +158,13 @@ Source reference: Switch-NewPipe's reviewed GPL-3.0 media protocol research,
 documented in `docs/THIRD_PARTY_MEDIA.md`. The imported UMP framing code
 is separately attributed. No historical upstream result is claimed as
 TizenTube NX hardware acceptance.
+
+### External AAC option correction
+
+The pinned mpv 0.36 documentation marks `audio-file` as a **CLI/config-only
+alias**, not a reliable libmpv API option. The native player now sets
+`audio-files-append` directly before `mpv_initialize`. The append operation
+accepts one literal path, preserving the `sdmc:` prefix instead of splitting
+it on the Unix path-list separator. The runtime selected-audio-track check
+remains mandatory. This is source-backed mpv option correctness, not a claim
+of physical Switch playback acceptance.

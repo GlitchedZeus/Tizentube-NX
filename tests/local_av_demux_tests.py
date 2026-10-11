@@ -96,6 +96,12 @@ class LocalAvDemuxTests(unittest.TestCase):
         self.assertEqual((self.ready / "audio_mode.txt").read_text(),
                          "external\n")
 
+    def test_native_mpv_uses_real_list_option_not_cli_only_alias(self):
+        source = (pathlib.Path(__file__).resolve().parents[1] /
+                  "switch/source/m3_player_activity.cpp").read_text()
+        self.assertIn('required("audio-files-append",', source)
+        self.assertNotIn('required("audio-file",', source)
+
     def test_audio_missing_and_torn_files_are_not_complete(self):
         path = self.ready / "external_audio.m4a"
         original = path.read_bytes()
