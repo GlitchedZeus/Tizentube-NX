@@ -77,7 +77,7 @@ void deny_unsafe_sources() {
     s.requires_auth=false;s.duration_ms=0;
     require(choose_source_route(s).failure==SourceRouteFailure::InvalidDuration,
             "unknown duration denied");
-    s.duration_ms=420000;s.video_id="a_short_url";
+    s.duration_ms=420000;s.video_id="short";
     require(choose_source_route(s).failure==SourceRouteFailure::InvalidId,
             "only canonical 11-character video IDs allowed");
     s.video_id="2kD9v7Q3vec";
