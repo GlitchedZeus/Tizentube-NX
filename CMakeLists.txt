@@ -214,6 +214,14 @@ if(TTNX_BUILD_TESTS)
     add_test(NAME playback_foundation COMMAND tizentube_nx_playback_foundation_tests)
 
     if(UNIX)
+        add_executable(tizentube_nx_hls_sd_cache_tests
+            tests/hls_sd_cache_tests.cpp switch/source/hls_cache_sink.cpp)
+        target_include_directories(tizentube_nx_hls_sd_cache_tests PRIVATE switch/source)
+        target_compile_definitions(tizentube_nx_hls_sd_cache_tests PRIVATE
+            TTNX_M3_MEDIA_PLANE=1 TTNX_M3_CACHE_HOST_TEST=1)
+        target_link_libraries(tizentube_nx_hls_sd_cache_tests PRIVATE tizentube_nx_core)
+        add_test(NAME hls_sd_cache COMMAND tizentube_nx_hls_sd_cache_tests)
+
         add_executable(tizentube_nx_storage_tests tests/storage_tests.cpp switch/source/app_storage.cpp)
         target_include_directories(tizentube_nx_storage_tests PRIVATE switch/source)
         target_link_libraries(tizentube_nx_storage_tests PRIVATE tizentube_nx_core)
