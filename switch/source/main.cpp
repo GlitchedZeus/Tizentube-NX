@@ -517,6 +517,13 @@ private:
         } else {
             text += network_summary_;
         }
+#ifdef TTNX_M3_INTEGRATED
+        // The footer stays visible even when the selected Play button is
+        // hundreds of rows below the global status label.
+        if (!active_m3_video_id_.empty()) {
+            text += " | M3: " + bounded_ui_text(media_feedback_, 100);
+        }
+#endif
         if (settings_.show_fps && last_fps_ > 0) {
             text += " | " + std::to_string(last_fps_) + " FPS";
         }
