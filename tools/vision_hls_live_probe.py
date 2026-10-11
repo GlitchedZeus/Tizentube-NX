@@ -24,7 +24,6 @@ VISION_UA="com.google.ios.youtube/1.02 (RealityDevice17,1; U; CPU visionOS 26_5 
 MAX_JSON=4*1024*1024
 MAX_PLAYLIST=1024*1024
 MAX_SAMPLE=65536
-TITLES=()
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
