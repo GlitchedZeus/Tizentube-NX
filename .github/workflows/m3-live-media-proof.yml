@@ -1,18 +1,11 @@
 name: M3 LIVE source-and-media proof (NO NRO)
 # This tests current public video extraction and actual signed MP4 bytes.
 # It is NOT the Switch native extractor and never publishes a test NRO.
+# Retired automatic gate: M3 no longer relies on legacy yt-dlp/progressive
+# MP4 from GitHub-hosted IPs. Retain as an explicit manual diagnostic only.
+# The CURRENT mandatory live source/segment check is m3-vision-hls-live.yml.
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - 'tools/live_video_preflight.py'
-      - 'tests/live_media_preflight_tests.py'
-      - '.github/workflows/m3-live-media-proof.yml'
-  pull_request:
-    paths:
-      - 'tools/live_video_preflight.py'
-      - 'tests/live_media_preflight_tests.py'
-      - '.github/workflows/m3-live-media-proof.yml'
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
