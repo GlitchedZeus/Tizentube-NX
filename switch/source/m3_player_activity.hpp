@@ -6,6 +6,7 @@ namespace ttnx::switch_app {
 // Never accepts a signed URL or user-supplied path. The launcher must first
 // pass native extraction, range transport and cache completion gates.
 void open_m3_completed_media();
+void open_m3_completed_hls();
 void tick_m3_player();
 
 } // namespace ttnx::switch_app
