@@ -15,6 +15,9 @@ struct HlsVariant {
     unsigned height{0};
     unsigned fps{0};
     std::uint64_t bandwidth{0};
+    // A directly supplied VOD media playlist does not have master CODECS,
+    // dimensions or bitrate. The decoder must identify the cached bytes.
+    bool direct_media_playlist{false};
 };
 struct HlsMaster {
     std::vector<HlsVariant> compatible;
