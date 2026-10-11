@@ -8,6 +8,7 @@
 #include <mpv/render.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <functional>
@@ -45,17 +46,26 @@ public:
             !required("audio-channels","stereo")) {
             close();return false;
         }
-        // Attach ONLY an app-owned, fully published local AAC file.
-        // This is not a URL fetch: mpv remains restricted to file://.
         if(use_hls_) {
-            std::FILE* audio=std::fopen(SwitchHlsCacheSink::kReadyExternalAac,"rb");
-            if(audio) {
-                const bool positioned=std::fseek(audio,0,SEEK_END)==0;
+            // Every atomically published HLS clip declares its audio topology.
+            char mode[24]{};
+            std::FILE* marker=std::fopen(SwitchHlsCacheSink::kReadyAudioMode,"rb");
+            const auto n=marker?std::fread(mode,1,sizeof(mode)-1,marker):0;
+            if(marker)std::fclose(marker);
+            const bool external=n==9 && std::memcmp(mode,"external\n",9)==0;
+            if(!external && !(n==9 && std::memcmp(mode,"playlist\n",9)==0) &&
+               !(n==6 && std::memcmp(mode,"muxed\n",6)==0)) {
+                status_="Published cache lacks verified audio topology";
+                close();return false;
+            }
+            if(external) {
+                std::FILE* audio=std::fopen(SwitchHlsCacheSink::kReadyExternalAac,"rb");
+                const bool positioned=audio && std::fseek(audio,0,SEEK_END)==0;
                 const long length=positioned?std::ftell(audio):-1;
-                std::fclose(audio);
+                if(audio)std::fclose(audio);
                 if(length<1024 || length>128L*1024*1024 ||
                    !required("audio-file",SwitchHlsCacheSink::kReadyExternalAac)) {
-                    status_="External AAC could not be attached to local mpv.";
+                    status_="Required external AAC missing or unsupported by mpv";
                     close();return false;
                 }
             }
@@ -126,7 +136,30 @@ public:
             const mpv_event* e=mpv_wait_event(handle_,0);
             if(!e || e->event_id==MPV_EVENT_NONE)break;
             if(e->event_id==MPV_EVENT_FILE_LOADED)status_="Local YouTube media loaded";
-            if(e->event_id==MPV_EVENT_PLAYBACK_RESTART)status_="Playing";
+            if(e->event_id==MPV_EVENT_PLAYBACK_RESTART) {
+                // A successfully set audio-file option is not proof of playback.
+                bool selected_audio=false;
+                std::int64_t count=0;
+                if(mpv_get_property(handle_,"track-list/count",MPV_FORMAT_INT64,&count)>=0) {
+                    for(std::int64_t track=0;track<count && track<32;++track) {
+                        const std::string prefix="track-list/"+std::to_string(track)+"/";
+                        char* type=mpv_get_property_string(handle_,(prefix+"type").c_str());
+                        int selected=0;
+                        const bool is_audio=type && std::strcmp(type,"audio")==0;
+                        if(type)mpv_free(type);
+                        if(is_audio &&
+                           mpv_get_property(handle_,(prefix+"selected").c_str(),
+                                            MPV_FORMAT_FLAG,&selected)>=0 && selected)
+                            selected_audio=true;
+                    }
+                }
+                if(use_hls_ && !selected_audio) {
+                    status_="HLS clip has no selected audio track; playback stopped";
+                    const char* stop_cmd[]={"stop",nullptr};
+                    (void)mpv_command(handle_,stop_cmd);
+                    have_frame_=false;
+                } else status_="Playing";
+            }
             if(e->event_id==MPV_EVENT_END_FILE) {
                 const auto* end=static_cast<const mpv_event_end_file*>(e->data);
                 status_=(end && end->reason==MPV_END_FILE_REASON_ERROR)

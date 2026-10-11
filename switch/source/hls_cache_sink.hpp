@@ -4,6 +4,7 @@
 
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace ttnx::switch_app {
 
@@ -25,11 +26,15 @@ public:
     void abort() noexcept override;
 
 #ifdef TTNX_M3_CACHE_HOST_TEST
+    static constexpr const char* kReadyAudioMode=
+        "/tmp/tizentube-m3-hls-test/switch/TizenTube-NX/media-cache/hls/ready/audio_mode.txt";
     static constexpr const char* kReadyMaster=
         "/tmp/tizentube-m3-hls-test/switch/TizenTube-NX/media-cache/hls/ready/master.m3u8";
     static constexpr const char* kReadyExternalAac=
         "/tmp/tizentube-m3-hls-test/switch/TizenTube-NX/media-cache/hls/ready/external_audio.m4a";
 #else
+    static constexpr const char* kReadyAudioMode=
+        "sdmc:/switch/TizenTube-NX/media-cache/hls/ready/audio_mode.txt";
     static constexpr const char* kReadyMaster=
         "sdmc:/switch/TizenTube-NX/media-cache/hls/ready/master.m3u8";
     static constexpr const char* kReadyExternalAac=
@@ -40,6 +45,9 @@ private:
     bool wrote_video_{false};
     std::uint64_t external_audio_bytes_{0};
     std::string video_ext_{"m4s"},audio_ext_{"m4s"};
+    std::vector<bool> video_written_,audio_written_;
+    bool video_init_needed_{false},audio_init_needed_{false};
+    bool video_init_written_{false},audio_init_written_{false};
 };
 } // namespace ttnx::switch_app
 #endif // TTNX_M3_MEDIA_PLANE

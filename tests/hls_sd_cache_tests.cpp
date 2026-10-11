@@ -70,6 +70,8 @@ int main() {
            fs::file_size(base/"ready/a_00001.m4s")==16,
            "local playlist and separate media segments are actually written");
         const auto master=read(base/"ready/master.m3u8");
+        ck(read(base/"ready/audio_mode.txt")=="playlist\n",
+           "audio rendition topology committed together with HLS playlists");
         const auto video=read(base/"ready/video.m3u8");
         const auto audio=read(base/"ready/audio.m3u8");
         ck(master.find("audio.m3u8")!=std::string::npos &&
@@ -161,6 +163,8 @@ int main() {
            fs::file_size(base/"ready/external_audio.m4a")==2048 &&
            fs::is_regular_file(base/"ready/v_00000.ts"),
            "video TS and independent AAC MP4 both complete in ready directory");
+        ck(read(base/"ready/audio_mode.txt")=="external\n",
+           "published cache declares mandatory external AAC attachment");
         ck(read(base/"ready/master.m3u8").find("googlevideo.com")==std::string::npos &&
            read(base/"ready/master.m3u8").find("RESOLUTION=0x0")==std::string::npos,
            "signed audio URL is never leaked into local mpv playlist");
@@ -183,6 +187,26 @@ int main() {
         ck(fs::is_regular_file(base/"ready/external_audio.m4a") &&
            !fs::exists(base/"pending"),
            "failed AAC staging preserves old fully published clip");
+    }
+    {
+        switch_app::SwitchHlsCacheSink sink;
+        ck(sink.begin(source) &&
+           sink.write_segment(false,true,0,"VIDEO_INIT") &&
+           sink.write_segment(false,false,0,"PART1") &&
+           !sink.publish(source),
+           "missing later video segments and AAC block atomic publish");
+        sink.abort();
+        ck(!fs::exists(base/"pending") && fs::exists(base/"ready/master.m3u8"),
+           "failed partial transaction leaves previous clip untouched");
+    }
+    {
+        switch_app::SwitchHlsCacheSink sink;
+        ck(sink.begin(source) &&
+           sink.write_segment(false,true,0,"VIDEO_INIT") &&
+           !sink.write_segment(false,true,0,"DUPLICATE") &&
+           !sink.write_segment(true,false,99,"OUT_OF_RANGE"),
+           "duplicate init and wrong media indices rejected");
+        sink.abort();
     }
     fs::remove_all("/tmp/tizentube-m3-hls-test");
     if(failures)std::cerr<<failures<<" SD cache contract failures\n";

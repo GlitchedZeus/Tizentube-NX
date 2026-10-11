@@ -38,6 +38,7 @@ bool directory(const char* path) {
 bool known_filename(std::string_view file) {
     if(file=="master.m3u8" || file=="video.m3u8" ||
        file=="audio.m3u8" || file=="external_audio.m4a" ||
+       file=="audio_mode.txt" ||
        file=="v_init.m4s" || file=="a_init.m4s")return true;
     // Recognize only our fixed numbered media names: v_00000.ts or
     // v_00000.m4s. No user-supplied filename enters deletion.
@@ -159,6 +160,11 @@ bool SwitchHlsCacheSink::begin(const playback::HlsProbePlan& plan) {
        plan.video_segments.segments.size()>4096 ||
        (plan.audio_segments && plan.audio_segments->segments.size()>4096))
         return false;
+    video_written_.assign(plan.video_segments.segments.size(),false);
+    audio_written_.assign(plan.audio_segments?plan.audio_segments->segments.size():0,false);
+    video_init_needed_=plan.video_segments.init_segment_url.has_value();
+    audio_init_needed_=plan.audio_segments && plan.audio_segments->init_segment_url.has_value();
+    video_init_written_=audio_init_written_=false;
     video_ext_=plan.video_segments.init_segment_url?"m4s":"ts";
     audio_ext_=(plan.audio_segments &&
                 !plan.audio_segments->init_segment_url)?"ts":"m4s";
@@ -171,9 +177,17 @@ bool SwitchHlsCacheSink::write_segment(
     bool audio,bool init,std::size_t index,std::string_view bytes) {
     if(!staged_ || bytes.empty() || bytes.size()>16*1024*1024 ||
        index>=4096)return false;
+    auto& written=audio?audio_written_:video_written_;
+    bool& init_written=audio?audio_init_written_:video_init_written_;
+    const bool needs_init=audio?audio_init_needed_:video_init_needed_;
+    if(init) {
+        if(!needs_init || init_written || index!=0)return false;
+    } else if(index>=written.size() || written[index])return false;
     const bool ts=audio?audio_ext_=="ts":video_ext_=="ts";
     const auto file=std::string(kPending)+"/"+piece_name(audio,init,index,ts);
     if(!persist(file,bytes))return false;
+    if(init)init_written=true;
+    else written[index]=true;
     if(!audio)wrote_video_=true;
     return true;
 }
@@ -196,11 +210,18 @@ bool SwitchHlsCacheSink::append_external_aac(std::string_view bytes) {
 
 bool SwitchHlsCacheSink::publish(const playback::HlsProbePlan& plan) {
     if(!staged_ || !wrote_video_ ||
-       plan.video_segments.segments.empty() ||
-       (plan.audio_segments && plan.audio_segments->segments.empty()))
-        return false;
-    if(plan.selected.direct_media_playlist &&
-       !plan.source.external_aac_url.empty()) {
+       video_written_.size()!=plan.video_segments.segments.size() ||
+       video_written_.empty() ||
+       !std::all_of(video_written_.begin(),video_written_.end(),[](bool b){return b;}) ||
+       (video_init_needed_ && !video_init_written_) ||
+       (plan.audio_segments &&
+        (audio_written_.size()!=plan.audio_segments->segments.size() ||
+         !std::all_of(audio_written_.begin(),audio_written_.end(),[](bool b){return b;}) ||
+         (audio_init_needed_ && !audio_init_written_))))return false;
+    const bool external=!plan.audio_segments && plan.selected.direct_media_playlist &&
+                        !plan.source.external_aac_url.empty();
+    if(!external && external_audio_bytes_!=0)return false;
+    if(external) {
         struct stat audio{};
         const std::string file=std::string(kPending)+"/external_audio.m4a";
         if(external_audio_bytes_<1024 ||
@@ -210,6 +231,10 @@ bool SwitchHlsCacheSink::publish(const playback::HlsProbePlan& plan) {
            static_cast<std::uint64_t>(audio.st_size)!=external_audio_bytes_)
             return false;
     }
+    // Same-transaction sidecar: do not silently treat a missing AAC as muxed.
+    const char* mode=external?"external\n":
+                     plan.audio_segments?"playlist\n":"muxed\n";
+    if(!persist(std::string(kPending)+"/audio_mode.txt",mode))return false;
     if(!persist(std::string(kPending)+"/video.m3u8",
                 playlist_text(plan.video_segments,false,video_ext_=="ts")))return false;
     if(plan.audio_segments &&
@@ -237,6 +262,9 @@ void SwitchHlsCacheSink::abort() noexcept {
     staged_=false;
     wrote_video_=false;
     external_audio_bytes_=0;
+    video_written_.clear();audio_written_.clear();
+    video_init_needed_=audio_init_needed_=false;
+    video_init_written_=audio_init_written_=false;
 }
 } // namespace ttnx::switch_app
 #endif // TTNX_M3_MEDIA_PLANE
