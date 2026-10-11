@@ -31,12 +31,22 @@ jobs:
             -v "$PWD:/work" -w /work \
             devkitpro/devkita64@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282 \
             bash -ec '
-              dkp-pacman -Sy --noconfirm --needed switch-libmpv
-              echo "Selected mpv and player packages:"
-              dkp-pacman -Q switch-libmpv switch-ffmpeg || true
-              pkg-config --version
-              PKG_CONFIG_LIBDIR="$DEVKITPRO/portlibs/switch/lib/pkgconfig" \
-                pkg-config --modversion mpv
+              export PKG_CONFIG_LIBDIR="$DEVKITPRO/portlibs/switch/lib/pkgconfig"
+              echo "Inspecting preinstalled media toolchain (no devkitPro mirror sync)"
+              dkp-pacman -Q switch-libmpv switch-ffmpeg switch-libplacebo || true
+              if ! pkg-config --exists mpv; then
+                echo "No preinstalled mpv.pc; using known upstream release archives"
+                BASE=https://github.com/xfangfang/wiliwili/releases/download/v0.1.0
+                curl --fail --location --retry 3 --silent --show-error \
+                  "$BASE/switch-ffmpeg-7.1-1-any.pkg.tar.zst" \
+                  -o /tmp/switch-ffmpeg.pkg.tar.zst
+                curl --fail --location --retry 3 --silent --show-error \
+                  "$BASE/switch-libmpv-0.36.0-3-any.pkg.tar.zst" \
+                  -o /tmp/switch-libmpv.pkg.tar.zst
+                dkp-pacman -U --noconfirm --needed \
+                  /tmp/switch-ffmpeg.pkg.tar.zst /tmp/switch-libmpv.pkg.tar.zst
+              fi
+              pkg-config --modversion mpv
               make -f Makefile.switch TTNX_M3_OFFLINE_PROBE=1 -j2
             '
       - name: Generate deterministic-format synthetic MP4 fixture
