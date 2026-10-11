@@ -1,4 +1,5 @@
 #include "tizentube_nx/youtube/guest_api.hpp"
+#include "tizentube_nx/core/url.hpp"
 
 #include <string>
 #include <string_view>
@@ -180,6 +181,17 @@ std::optional<net::HttpRequest> make_home_request(
     const GuestSession& session,
     std::string_view continuation) {
     return make_browse_request(session, kHomeBrowseId, continuation);
+}
+
+std::optional<net::HttpRequest> make_player_request(
+    const GuestSession& session, std::string_view normal_video_id) {
+    if (!bounded_guest_session(session) ||
+        !ttnx::core::is_valid_video_id(normal_video_id)) return std::nullopt;
+    // This asks for normalized *metadata*, not a YouTube HTML web player.
+    // Nothing here requests user-linked/account features, ad signals, autoplay,
+    // telemetry, signature deciphering, or shortcuts around content checks.
+    return innertube_post(session, "player",
+                          json_string_field("videoId", normal_video_id));
 }
 
 }  // namespace ttnx::youtube
