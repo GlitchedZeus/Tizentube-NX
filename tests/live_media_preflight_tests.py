@@ -81,7 +81,7 @@ class SafetyTests(unittest.TestCase):
     def test_truncated_and_wrong_range_rejected(self):
         for response in (
                 FakeReply(content_range="bytes 3-34/500"),
-                FakeReply(content_range="bytes 0-31/32"),
+                FakeReply(content_range="bytes 0-31/500"), # truncated before actual EOF
                 FakeReply(body=b"A" * 31),
         ):
             opener = FakeOpener(response)
