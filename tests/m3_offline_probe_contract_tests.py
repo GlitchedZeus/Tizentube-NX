@@ -63,6 +63,15 @@ class OfflineProbeContractTests(unittest.TestCase):
         self.assertIn('mpv_error_string(init_rc)', self.main)
         self.assertIn('mpv_error_string(render_rc)', self.main)
         self.assertIn('mpv_error_string(frame_rc)', self.main)
+        # Missing Lua/JS scripting knobs are tolerated only when they are
+        # absent from the compiled player; all other safety failures remain fatal.
+        self.assertIn('rc == MPV_ERROR_OPTION_NOT_FOUND', self.main)
+        self.assertIn('std::strcmp(name, "load-scripts") == 0', self.main)
+        self.assertIn('std::strcmp(name, "ytdl") == 0', self.main)
+        self.assertIn('optional_script_features_missing_', self.main)
+        self.assertIn('require_option("config", "no")', self.main)
+        self.assertIn('require_option("demuxer-lavf-o", "protocol_whitelist=file,pipe")', self.main)
+
         self.assertIn('if (!render_ && !init()) return false;', self.main)
         self.assertNotIn('message_ = "Player not initialized"', self.main)
 
