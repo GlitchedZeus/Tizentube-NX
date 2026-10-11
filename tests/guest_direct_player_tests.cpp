@@ -106,8 +106,24 @@ void normal() {
     http.succeed=false;
     check(!extractor.resolve("IzJ7R4EnYmI"),
           "failed HTTP never becomes usable source");
+    check(extractor.last_failure()==DirectPlayerFailure::HttpTransport,
+          "transport failure identified without leaking response");
+    http.succeed=true;
+    http.body=substitute(fixture,"\"status\":\"OK\"",
+                                    "\"status\":\"LOGIN_REQUIRED\"");
+    check(!extractor.resolve("IzJ7R4EnYmI") &&
+          extractor.last_failure()==DirectPlayerFailure::PlayabilityBlocked,
+          "guest playability explicitly classified");
+    http.body=substitute(fixture,"\"streamingData\":", "\"differentTree\":");
+    check(!extractor.resolve("IzJ7R4EnYmI") &&
+          extractor.last_failure()==DirectPlayerFailure::MissingStreamingData,
+          "missing stream data classified without exposing private source");
+    http.body=fixture;
+    const auto calls_before_invalid=http.calls;
     check(!extractor.resolve("https://www.youtube.com/shorts/IzJ7R4EnYmI") &&
-          http.calls==2,"arbitrary Shorts URL never makes player request");
+          http.calls==calls_before_invalid &&
+          extractor.last_failure()==DirectPlayerFailure::InvalidRequest,
+          "arbitrary Shorts URL never makes player request");
 }
 void negative() {
     check(!parse_direct_guest_player(fixture,"other_ID11"),
