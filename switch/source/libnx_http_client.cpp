@@ -140,11 +140,18 @@ int connect_one_with_timeout(const addrinfo& address, long timeout_ms) {
     return fd;
 }
 
-int tcp_connect_allowed_host(std::string_view host, long timeout_ms) {
-    // SECOND SAFETY GATE: this helper is the only place that calls getaddrinfo().
-    // Keep the allowlist check directly adjacent to DNS so future refactors
-    // cannot accidentally resolve an unapproved/Nintendo endpoint.
-    if (!net::is_allowed_outbound_host(host)) return -1;
+int tcp_connect_allowed_host(std::string_view host, long timeout_ms,
+                             bool media_plane = false) {
+    // SECOND SAFETY GATE: browser traffic is still exactly www.youtube.com.
+    // The opt-in media variant uses only approved signed video-CDN hosts.
+    if (media_plane) {
+#ifdef TTNX_M3_MEDIA_PLANE
+        const std::string proof_url = "https://" + std::string(host) + "/videoplayback";
+        if (!playback::is_reviewable_googlevideo_https_url(proof_url)) return -1;
+#else
+        return -1;
+#endif
+    } else if (!net::is_allowed_outbound_host(host)) return -1;
 
     addrinfo hints{};
     hints.ai_family = AF_INET;
@@ -214,7 +221,8 @@ bool read_all(SslConnection& connection, std::string& raw, std::string& error) {
 net::HttpResult perform_single_request(
     const net::HttpRequest& request,
     const net::HttpsUrl& parsed_url,
-    long timeout_ms) {
+    long timeout_ms,
+    bool media_plane = false) {
     net::HttpResult result;
 
     const auto wire_request = net::build_http1_request(request, parsed_url);
@@ -230,7 +238,7 @@ net::HttpResult perform_single_request(
     }
 
     TlsConnection tls;
-    tls.raw_fd = tcp_connect_allowed_host(parsed_url.host, timeout_ms);
+    tls.raw_fd = tcp_connect_allowed_host(parsed_url.host, timeout_ms, media_plane);
     if (tls.raw_fd < 0) {
         result.failure_stage = net::HttpFailureStage::Tcp;
         result.error = "TCP connection to the approved YouTube host failed.";
@@ -527,5 +535,52 @@ net::HttpResult LibnxHttpClient::perform(const net::HttpRequest& request) {
     result.error = "Unexpected redirect state.";
     return result;
 }
+
+
+#ifdef TTNX_M3_MEDIA_PLANE
+net::HttpResult LibnxMediaChunkTransport::perform(const net::HttpRequest& request) {
+    net::HttpResult result;
+    // Dedicated M3 media-only transport. No arbitrary headers, credentials,
+    // redirects, manifests, or browser data; only strict bounded GET ranges.
+    if (!services_.ready()) {
+        result.failure_stage = net::HttpFailureStage::Tls;
+        result.error = "M3 media SSL/socket services unavailable.";
+        return result;
+    }
+    if (request.method != net::HttpMethod::Get || !request.body.empty() ||
+        request.headers.size() != 3 ||
+        request.headers[0].name != "Range" ||
+        !request.headers[0].value.starts_with("bytes=") ||
+        request.headers[1].name != "Accept-Encoding" ||
+        request.headers[1].value != "identity" ||
+        request.headers[2].name != "Accept" ||
+        request.headers[2].value != "application/octet-stream" ||
+        !playback::is_reviewable_googlevideo_https_url(request.url)) {
+        result.failure_stage = net::HttpFailureStage::Policy;
+        result.error = "M3 media request rejected before network access.";
+        return result;
+    }
+    const auto parsed = net::parse_https_url(request.url);
+    if (!parsed || parsed->port != 443 ||
+        !playback::is_reviewable_googlevideo_https_url(
+            "https://" + parsed->host + parsed->target)) {
+        result.failure_stage = net::HttpFailureStage::Policy;
+        result.error = "M3 media host rejected by strict URL parser.";
+        return result;
+    }
+    // perform_single_request independently repeats media-host policy at DNS.
+    // Horizon SSL retains CA, hostname and date checks. No redirect follows.
+    result = perform_single_request(request, *parsed,
+                                    normalized_timeout(request.timeout_ms),
+                                    true);
+    if (result.response.status_code >= 300 &&
+        result.response.status_code < 400) {
+        result.ok = false;
+        result.failure_stage = net::HttpFailureStage::Policy;
+        result.error = "M3 media redirect rejected without second DNS lookup.";
+    }
+    return result;
+}
+#endif
 
 }  // namespace ttnx::switch_app
