@@ -38,7 +38,7 @@ bool directory(const char* path) {
 bool known_filename(std::string_view file) {
     if(file=="master.m3u8" || file=="video.m3u8" ||
        file=="audio.m3u8" || file=="external_audio.m4a" ||
-       file=="audio_mode.txt" ||
+       file=="audio_mode.txt" || file=="external_audio.bytes" ||
        file=="v_init.m4s" || file=="a_init.m4s")return true;
     // Recognize only our fixed numbered media names: v_00000.ts or
     // v_00000.m4s. No user-supplied filename enters deletion.
@@ -231,6 +231,10 @@ bool SwitchHlsCacheSink::publish(const playback::HlsProbePlan& plan) {
            static_cast<std::uint64_t>(audio.st_size)!=external_audio_bytes_)
             return false;
     }
+    // Commit a byte-exact external AAC length, so torn post-publish files
+    // cannot be mistaken for complete audio simply by having an MP4 header.
+    if(external && !persist(std::string(kPending)+"/external_audio.bytes",
+                            std::to_string(external_audio_bytes_)+"\n"))return false;
     // Same-transaction sidecar: do not silently treat a missing AAC as muxed.
     const char* mode=external?"external\n":
                      plan.audio_segments?"playlist\n":"muxed\n";

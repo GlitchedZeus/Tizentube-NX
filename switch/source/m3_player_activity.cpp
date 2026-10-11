@@ -63,7 +63,15 @@ public:
                 const bool positioned=audio && std::fseek(audio,0,SEEK_END)==0;
                 const long length=positioned?std::ftell(audio):-1;
                 if(audio)std::fclose(audio);
+                std::FILE* size_file=std::fopen(SwitchHlsCacheSink::kReadyExternalAacBytes,"rb");
+                unsigned long long expected=0;
+                char terminator=0;
+                const bool exact=size_file &&
+                    std::fscanf(size_file,"%llu%c",&expected,&terminator)==2 &&
+                    terminator=='\n' && std::fgetc(size_file)==EOF;
+                if(size_file)std::fclose(size_file);
                 if(length<1024 || length>128L*1024*1024 ||
+                   !exact || expected!=static_cast<unsigned long long>(length) ||
                    !required("audio-file",SwitchHlsCacheSink::kReadyExternalAac)) {
                     status_="Required external AAC missing or unsupported by mpv";
                     close();return false;

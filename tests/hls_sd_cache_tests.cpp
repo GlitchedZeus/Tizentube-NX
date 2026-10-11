@@ -163,8 +163,9 @@ int main() {
            fs::file_size(base/"ready/external_audio.m4a")==2048 &&
            fs::is_regular_file(base/"ready/v_00000.ts"),
            "video TS and independent AAC MP4 both complete in ready directory");
-        ck(read(base/"ready/audio_mode.txt")=="external\n",
-           "published cache declares mandatory external AAC attachment");
+        ck(read(base/"ready/audio_mode.txt")=="external\n" &&
+           read(base/"ready/external_audio.bytes")=="2048\n",
+           "published cache declares required AAC and its exact byte length");
         ck(read(base/"ready/master.m3u8").find("googlevideo.com")==std::string::npos &&
            read(base/"ready/master.m3u8").find("RESOLUTION=0x0")==std::string::npos,
            "signed audio URL is never leaked into local mpv playlist");

@@ -28,6 +28,8 @@ public:
 #ifdef TTNX_M3_CACHE_HOST_TEST
     static constexpr const char* kReadyAudioMode=
         "/tmp/tizentube-m3-hls-test/switch/TizenTube-NX/media-cache/hls/ready/audio_mode.txt";
+    static constexpr const char* kReadyExternalAacBytes=
+        "/tmp/tizentube-m3-hls-test/switch/TizenTube-NX/media-cache/hls/ready/external_audio.bytes";
     static constexpr const char* kReadyMaster=
         "/tmp/tizentube-m3-hls-test/switch/TizenTube-NX/media-cache/hls/ready/master.m3u8";
     static constexpr const char* kReadyExternalAac=
@@ -35,6 +37,8 @@ public:
 #else
     static constexpr const char* kReadyAudioMode=
         "sdmc:/switch/TizenTube-NX/media-cache/hls/ready/audio_mode.txt";
+    static constexpr const char* kReadyExternalAacBytes=
+        "sdmc:/switch/TizenTube-NX/media-cache/hls/ready/external_audio.bytes";
     static constexpr const char* kReadyMaster=
         "sdmc:/switch/TizenTube-NX/media-cache/hls/ready/master.m3u8";
     static constexpr const char* kReadyExternalAac=

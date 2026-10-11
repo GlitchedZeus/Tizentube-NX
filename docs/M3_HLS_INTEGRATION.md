@@ -82,7 +82,17 @@ fragmented MP4 with `EXT-X-MAP` uses `.m4s`.
 
 This is backed by host tests for real file staging, complete ranged audio
 transfers, 403 abort, truncated AAC rollback, MPEG-TS PMT detection, and no
-token URL leakage. The normal guest/client networking contract is unchanged.
+token URL leakage.
+
+**2026-10-11 hardening:** cache publication now requires all expected HLS
+segment indices and initialization pieces, adds an atomically committed
+`audio_mode.txt` marker, and records the exact complete external AAC byte
+length as `external_audio.bytes`. The player rejects a missing or changed
+AAC and checks selected audio tracks after mpv playback restarts. A copyright-free
+FFmpeg CI fixture generates real H.264 MPEG-TS + AAC MP4 and fully decodes
+the paired local tracks with file-only demux access. This demonstrates actual
+host FFmpeg demux compatibility, **not** validation of the Switch libmpv
+`audio-file` option or hardware A/V synchronization. The normal guest/client networking contract is unchanged.
 
 **Still unverified on hardware:** local mpv external-audio option support in
 the pinned Switch libmpv, audible AAC sync across seeks and sleep/wake,
