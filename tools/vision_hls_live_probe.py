@@ -66,6 +66,27 @@ def get_bytes(url: str, *, headers: dict, cap: int) -> bytes:
         return data
 
 
+def get_media_sample(url: str, headers: dict) -> bytes:
+    # Diagnostics only: a CDN may return HTTP 200 and the *entire* HLS
+    # segment even when asked for Range 0-65535. Never reject a valid
+    # media response solely because the full file is larger than a sample.
+    # Read and retain at most 64 KiB; the native player has its own strict
+    # 16 MiB full-segment cap, MIME and length validation.
+    if not approved_hls(url):
+        raise ValueError("URL_POLICY_REJECTED")
+    opener=urllib.request.build_opener(NoRedirect())
+    request=urllib.request.Request(url,headers=headers,method="GET")
+    with opener.open(request,timeout=15) as response:
+        if response.status not in (200,206):
+            raise ValueError("HTTP_STATUS_UNAVAILABLE")
+        if response.headers.get("Content-Encoding","identity").lower()!="identity":
+            raise ValueError("UNSUPPORTED_CONTENT_ENCODING")
+        media=response.read(MAX_SAMPLE)
+        if len(media)<12:
+            raise ValueError("MEDIA_SAMPLE_TOO_SHORT")
+        return media
+
+
 def bootstrap_visitor(payload: bytes) -> str | None:
     if not payload or len(payload)>MAX_JSON:
         return None
@@ -276,11 +297,11 @@ def one_source(video_id: str,visitor: str) -> str:
             return "HLS_VOD_SEGMENTS_UNAVAILABLE"
         # Only a bounded real CDN range. Never download the whole clip from CI.
         stage="HLS_SEGMENT"
-        sample=get_bytes(segment,headers={
+        sample=get_media_sample(segment,headers={
             "Range":"bytes=0-65535",
             "Accept-Encoding":"identity",
             "Accept":"application/octet-stream",
-        },cap=MAX_SAMPLE)
+        })
         if len(sample)<12 or sample.startswith((b"<html",b"<!DOCTYPE",b"#EXTM3U")):
             return "HLS_SEGMENT_NOT_MEDIA"
         return "HLS_SEGMENT_BYTES_OBTAINED"
@@ -290,7 +311,13 @@ def one_source(video_id: str,visitor: str) -> str:
         if exc.code==429:
             return stage+"_HTTP_429"
         return stage+"_HTTP_OTHER"
-    except (urllib.error.URLError,OSError,ValueError,TimeoutError):
+    except ValueError as exc:
+        if str(exc) in {"BODY_SIZE_UNAVAILABLE","MEDIA_SAMPLE_TOO_SHORT"}:
+            return stage+"_SAMPLE_SIZE_UNAVAILABLE"
+        if str(exc)=="UNSUPPORTED_CONTENT_ENCODING":
+            return stage+"_ENCODING_UNSUPPORTED"
+        return stage+"_TRANSPORT_UNAVAILABLE"
+    except (urllib.error.URLError,OSError,TimeoutError):
         return stage+"_TRANSPORT_UNAVAILABLE"
 
 
