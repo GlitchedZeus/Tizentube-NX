@@ -49,6 +49,16 @@ APP_TITLE	:=	TizenTube NX
 APP_AUTHOR	:=	GlitchedZeus
 APP_VERSION	:=	0.1.0
 
+# An explicitly opt-in *separate* offline playback laboratory binary.
+# No playback/mpv dependencies are linked into the accepted M2 NRO unless
+# TTNX_M3_OFFLINE_PROBE=1 is set at build time. Never auto-enable this.
+ifeq ($(TTNX_M3_OFFLINE_PROBE),1)
+TARGET      := tizentube_nx_m3_probe
+SOURCES     := switch/m3_probe
+APP_TITLE   := TizenTube NX M3 Offline Probe
+endif
+
+
 ROMFS				:=	resources
 BOREALIS_PATH		:=	third_party/borealis
 
@@ -74,6 +84,17 @@ LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*
 # switch-curl is deliberately excluded from the NRO because the current port has
 # a known certificate-info hard-crash path (tracked by project issue #7).
 LIBS	:= -lnx
+
+ifeq ($(TTNX_M3_OFFLINE_PROBE),1)
+# Static devkitPro mpv dependencies are resolved by the package's .pc file.
+# A missing switch-libmpv package is a hard link failure, not a fallback to
+# the regular NRO. The probe is local-file-only and performs no HTTP requests.
+MPV_STATIC_LIBS := $(shell PKG_CONFIG_LIBDIR=$(PORTLIBS)/lib/pkgconfig pkg-config --static --libs mpv 2>/dev/null)
+ifeq ($(strip $(MPV_STATIC_LIBS)),)
+$(error M3 probe requires switch-libmpv and pkg-config; use the opt-in CI workflow)
+endif
+LIBS := $(MPV_STATIC_LIBS) -lnx
+endif
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing
