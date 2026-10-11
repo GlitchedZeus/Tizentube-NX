@@ -60,7 +60,7 @@ bool valid_header(const Header& h) {
 }
 
 bool read_content_range(std::string_view s, MediaRange requested,
-                        std::uint64_t& total) {
+                        std::uint64_t& total, std::uint64_t& delivered) {
     if (!s.starts_with("bytes ")) return false;
     s.remove_prefix(6);
     const auto dash = s.find('-');
@@ -73,8 +73,13 @@ bool read_content_range(std::string_view s, MediaRange requested,
     if (!parse_uint(s.substr(0, dash), start) ||
         !parse_uint(s.substr(dash + 1, slash - dash - 1), end) ||
         !parse_uint(s.substr(slash + 1), total)) return false;
-    return start == requested.first && end == requested.last &&
-           total > requested.last && total <= kMaxResourceSize;
+    if (start != requested.first || total == 0 || total > kMaxResourceSize ||
+        end < start || end >= total) return false;
+    // A byte-range request can legitimately run off EOF. In that case
+    // servers return 206 up to exactly resource_size - 1.
+    if (end != std::min(requested.last, total - 1)) return false;
+    delivered = end - start + 1;
+    return delivered <= MediaChunkReader::kMaxChunkBytes;
 }
 
 bool media_content_type(std::string_view value) {
@@ -163,14 +168,13 @@ MediaReadResult MediaChunkReader::read(std::string_view signed_media_url,
     }
 
     std::uint64_t expected_length = 0;
-    std::uint64_t total = 0;
-    if (!parse_uint(size.value, expected_length) ||
-        expected_length != range.last - range.first + 1) {
-        out.failure = MediaReadFailure::SizeMismatch;
+    std::uint64_t total = 0, delivered = 0;
+    if (!read_content_range(content_range.value, range, total, delivered)) {
+        out.failure = MediaReadFailure::MissingOrInvalidRange;
         return out;
     }
-    if (!read_content_range(content_range.value, range, total)) {
-        out.failure = MediaReadFailure::MissingOrInvalidRange;
+    if (!parse_uint(size.value, expected_length) || expected_length != delivered) {
+        out.failure = MediaReadFailure::SizeMismatch;
         return out;
     }
     if (r.body.size() != expected_length ||
