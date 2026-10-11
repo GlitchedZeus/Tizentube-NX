@@ -148,6 +148,25 @@
 
 ## M3 — Playback + ad-free viewing
 
+### Isolated foundation PR #8 (not device accepted)
+
+- [x] Provider-neutral extractor contract and typed resolved audio/video formats
+- [x] Safe structural Googlevideo URL validation independent of the M2 outbound allowlist
+- [x] H.264/AAC-first adaptive vs muxed source selection with explicit unsupported codec rejection
+- [x] Player backend contract and deterministic play/pause/resume/seek/stop state machine
+- [x] SponsorBlock normalized category modes, overlapping-segment handling and repeat suppression
+- [x] Local-only authenticated yt-dlp research resolver, with no arbitrary URL/credential input
+- [x] Host regression coverage for playback selection, URLs, state, SponsorBlock and resolver HTTP boundary
+- [ ] Connect project-owned backend to real Switch libmpv/FFmpeg/Deko3D/nvtegra renderer
+- [ ] Physical hardware playback of known legal offline SDR H.264/AAC test asset
+- [ ] Test separate remote audio/video synchronization and seek on hardware
+- [ ] Select and validate standalone-console extraction strategy without mandatory PC
+- [ ] Approve/implement actual media-network policy, redirects, HTTPS and range transport
+- [ ] Integrate real YouTube stream extraction end-to-end
+- [ ] Real Switch YouTube playback, ad-free verification and SponsorBlock integration
+
+See `docs/M3_PLAYBACK_FOUNDATION.md`. M2's accepted NRO and `www.youtube.com:443` allowlist have **not** been changed into a playback client.
+
 Playback and the ad-free experience are one milestone. **A player that deliberately shows YouTube ads is not considered finished.** See `docs/PRODUCT_PHILOSOPHY.md`.
 
 ### Media playback
