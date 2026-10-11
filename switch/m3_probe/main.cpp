@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdio>
+#include <cstring>
 #include <cstdlib>
 #include <functional>
 #include <string>
@@ -42,6 +43,18 @@ public:
         auto require_option = [this](const char* name, const char* value) {
             const int rc = mpv_set_option_string(handle_, name, value);
             if (rc >= 0) return true;
+            // The upstream Switch mpv build may compile out its Lua/JS script
+            // subsystem entirely, removing these two script-only options.
+            // In that case there is nothing to auto-load or invoke, and the
+            // absence is *not* a reason to disable offline media decoding.
+            // Never tolerate errors from config, demuxer protocol isolation,
+            // player input, video output, or any other essential option.
+            if (rc == MPV_ERROR_OPTION_NOT_FOUND &&
+                (std::strcmp(name, "load-scripts") == 0 ||
+                 std::strcmp(name, "ytdl") == 0)) {
+                optional_script_features_missing_ = true;
+                return true;
+            }
             message_ = std::string("INIT ERROR option ") + name + ": " +
                        mpv_error_string(rc) + " [" + std::to_string(rc) + "]";
             return false;
@@ -78,7 +91,9 @@ public:
             shutdown();
             return false;
         }
-        message_ = "Ready. Copy an H.264/AAC MP4 to SD, then press A.";
+        message_ = optional_script_features_missing_
+            ? "Ready (script features absent in this mpv build). Press A."
+            : "Ready. Copy an H.264/AAC MP4 to SD, then press A.";
         return true;
     }
 
@@ -234,6 +249,7 @@ private:
     bool new_frame_{false};
     std::uint64_t frame_count_{0};
     bool render_error_seen_{false};
+    bool optional_script_features_missing_{false};
 };
 
 class ProbeVideo : public brls::View {
