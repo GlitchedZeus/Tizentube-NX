@@ -132,9 +132,9 @@ void negative_cases() {
     {
         FakeTransport fake; fake.payload = std::string(MediaChunkReader::kMaxChunkBytes+9,'b');
         FakeSink sink; MediaChunkReader reader(fake); MediaDownloadJob job(reader,sink);
+        fake.change_total=true; // first segment advertises size+1; second corrects it
         check(job.start(url),"change test starts");
         check(job.pump() == MediaDownloadState::Fetching,"first resource chunk accepted");
-        fake.change_total=true;
         check(job.pump() == MediaDownloadState::Error &&
               job.error() == MediaDownloadError::ResourceChanged &&
               sink.aborts == 1, "resource size change aborts");
