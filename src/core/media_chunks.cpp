@@ -139,6 +139,7 @@ MediaReadResult MediaChunkReader::read(std::string_view signed_media_url,
         return out;
     }
     const auto& r = fetched.response;
+    out.http_status = r.status_code;
     if (r.status_code >= 300 && r.status_code < 400) {
         out.failure = MediaReadFailure::RedirectRejected;
         return out;
