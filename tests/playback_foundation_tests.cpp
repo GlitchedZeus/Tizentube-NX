@@ -289,6 +289,49 @@ void wire_contract_tests() {
     check(unsafe && !select_streams(*unsafe).streams,
           "normalized parser cannot bypass separate media URL policy");
 }
+
+class FakeExtractor final : public Extractor {
+public:
+    std::optional<ExtractionResult> next{result()};
+    int calls{0};
+    std::optional<ExtractionResult> resolve(std::string_view) override {
+        ++calls;
+        return next;
+    }
+};
+
+void launcher_tests() {
+    FakeExtractor extractor;
+    FakePlayer backend;
+    PlaybackSession session(backend);
+    PlaybackLauncher launcher(extractor, session);
+    check(launcher.launch("IzJ7R4EnYmI").ok() &&
+          session.state() == PlayerState::Playing,
+          "validated normal video launches through one controlled path");
+    check(launcher.launch("invalid").error == LaunchError::InvalidVideoId,
+          "invalid entry blocked before extractor");
+    check(extractor.calls == 1 && session.state() == PlayerState::Playing,
+          "invalid entry does not alter accepted playback");
+    extractor.next->video_id = "Another1abc";
+    check(launcher.launch("IzJ7R4EnYmI").error == LaunchError::IdentityMismatch &&
+          session.state() == PlayerState::Idle,
+          "provider cannot swap requested video ID");
+    extractor.next = result();
+    extractor.next->is_short = true;
+    auto shorts = launcher.launch("IzJ7R4EnYmI");
+    check(shorts.error == LaunchError::StreamRejected &&
+          shorts.selection_error == SelectionError::ShortsForbidden,
+          "Shorts fail closed through launch coordinator");
+    extractor.next = std::nullopt;
+    check(launcher.launch("IzJ7R4EnYmI").error == LaunchError::ExtractionFailed,
+          "provider failure has no web/ad fallback");
+    extractor.next = result();
+    backend.load_ok = false;
+    check(launcher.launch("IzJ7R4EnYmI").error == LaunchError::PlayerFailed &&
+          session.state() == PlayerState::Error,
+          "native backend failure reported explicitly");
+}
+
 } // namespace
 
 int main() {
@@ -297,6 +340,7 @@ int main() {
     player_tests();
     sponsorblock_tests();
     wire_contract_tests();
+    launcher_tests();
     if (failures) {
         std::cerr << failures << " M3 tests failed.\n";
         return EXIT_FAILURE;
