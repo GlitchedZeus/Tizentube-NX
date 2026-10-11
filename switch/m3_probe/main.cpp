@@ -63,8 +63,12 @@ public:
             !require_option("load-scripts", "no") ||
             !require_option("ytdl", "no") ||
             !require_option("input-default-bindings", "no") ||
-            // FFmpeg must not follow nested manifests/network references.
-            !require_option("demuxer-lavf-o", "protocol_whitelist=file,pipe") ||
+            // mpv parses comma as a KEY/VALUE list separator for this option.
+            // An unescaped "file,pipe" is parsed as an invalid second key,
+            // and fails at runtime with MPV_ERROR_OPTION_ERROR (-7).
+            // A local MP4 needs only the file protocol, not pipe or network.
+            // Keep this mandatory: never drop offline transport isolation.
+            !require_option("demuxer-lavf-o", "protocol_whitelist=file") ||
             !require_option("vo", "libmpv") ||
             !require_option("hwdec", "auto") ||
             !require_option("audio-channels", "stereo")) {
