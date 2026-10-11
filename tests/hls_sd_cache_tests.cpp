@@ -138,6 +138,52 @@ int main() {
            master.find("CODECS=")==std::string::npos,
            "native cache uses TS extension and never invents direct-HLS codec metadata");
     }
+    {
+        auto paired=plan();
+        paired.selected.direct_media_playlist=true;
+        paired.selected.height=0;
+        paired.selected.width=0;
+        paired.selected.fps=0;
+        paired.audio_segments.reset();
+        paired.selected.audio_playlist_url.clear();
+        paired.video_segments.init_segment_url.reset();
+        paired.source.external_aac_url=
+            "https://r1.googlevideo.com/videoplayback?itag=140";
+        switch_app::SwitchHlsCacheSink sink;
+        const std::string signed_audio_file(2048,'A');
+        ck(sink.begin(paired) &&
+           sink.write_segment(false,false,0,"TS-VIDEO-SEGMENT-A") &&
+           sink.write_segment(false,false,1,"TS-VIDEO-SEGMENT-B") &&
+           sink.append_external_aac(signed_audio_file) &&
+           sink.publish(paired),
+           "direct HLS+external AAC stages and publishes one local transaction");
+        ck(fs::is_regular_file(base/"ready/external_audio.m4a") &&
+           fs::file_size(base/"ready/external_audio.m4a")==2048 &&
+           fs::is_regular_file(base/"ready/v_00000.ts"),
+           "video TS and independent AAC MP4 both complete in ready directory");
+        ck(read(base/"ready/master.m3u8").find("googlevideo.com")==std::string::npos &&
+           read(base/"ready/master.m3u8").find("RESOLUTION=0x0")==std::string::npos,
+           "signed audio URL is never leaked into local mpv playlist");
+    }
+    {
+        // A short AAC download must never replace the previous good clip.
+        auto paired=plan();
+        paired.selected.direct_media_playlist=true;
+        paired.audio_segments.reset();
+        paired.selected.audio_playlist_url.clear();
+        paired.source.external_aac_url=
+            "https://r1.googlevideo.com/videoplayback?itag=140";
+        switch_app::SwitchHlsCacheSink sink;
+        ck(sink.begin(paired) &&
+           sink.write_segment(false,false,0,"TS-VIDEO-SEGMENT-A") &&
+           sink.append_external_aac("AUDIO_TOO_SHORT") &&
+           !sink.publish(paired),
+           "truncated AAC file blocks cache publication");
+        sink.abort();
+        ck(fs::is_regular_file(base/"ready/external_audio.m4a") &&
+           !fs::exists(base/"pending"),
+           "failed AAC staging preserves old fully published clip");
+    }
     fs::remove_all("/tmp/tizentube-m3-hls-test");
     if(failures)std::cerr<<failures<<" SD cache contract failures\n";
     return failures?EXIT_FAILURE:EXIT_SUCCESS;
