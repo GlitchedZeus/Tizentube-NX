@@ -13,6 +13,7 @@
 #include <functional>
 #include <string>
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 namespace {
@@ -143,8 +144,18 @@ public:
         double seconds = 0.0;
         const bool has_time = mpv_get_property(handle_, "time-pos",
                                                MPV_FORMAT_DOUBLE, &seconds) >= 0;
-        return "Decoder: " + decoder + "  |  time: " +
-               (has_time ? std::to_string(static_cast<int>(seconds)) + "s" : "--");
+        const char* video = mpv_get_property_string(handle_, "video-codec");
+        const char* audio = mpv_get_property_string(handle_, "audio-codec");
+        const std::string video_name = video ? video : "--";
+        const std::string audio_name = audio ? audio : "--";
+        if (video) mpv_free(const_cast<char*>(video));
+        if (audio) mpv_free(const_cast<char*>(audio));
+        return "Decoder: " + decoder +
+               "  |  Video: " + video_name +
+               "  |  Audio: " + audio_name +
+               "  |  time: " +
+               (has_time ? std::to_string(static_cast<int>(seconds)) + "s" : "--") +
+               "  |  rendered frames: " + std::to_string(frame_count_);
     }
 
     // The pinned Borealis video context has no public Deko3D framebuffer
@@ -171,6 +182,7 @@ public:
                     pixels_[i] = 255;
                 have_frame_ = true;
                 new_frame_ = true;
+                ++frame_count_;
                 mpv_render_context_report_swap(render_);
             }
         }
@@ -190,6 +202,7 @@ private:
     std::string message_{"Initializing offline libmpv..."};
     bool have_frame_{false};
     bool new_frame_{false};
+    std::uint64_t frame_count_{0};
 };
 
 class ProbeVideo : public brls::View {
