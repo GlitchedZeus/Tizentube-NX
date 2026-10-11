@@ -34,6 +34,9 @@ public:
         mpv_set_option_string(handle_, "config", "no");
         mpv_set_option_string(handle_, "load-scripts", "no");
         mpv_set_option_string(handle_, "ytdl", "no");
+        // FFmpeg must not follow nested HLS/network/file references from a
+        // malicious local file. This proof deliberately permits file/pipe only.
+        mpv_set_option_string(handle_, "demuxer-lavf-o", "protocol_whitelist=file,pipe");
         mpv_set_option_string(handle_, "input-default-bindings", "no");
         mpv_set_option_string(handle_, "vo", "libmpv");
         mpv_set_option_string(handle_, "hwdec", "auto");
@@ -221,7 +224,7 @@ public:
         root->addView(new ProbeVideo(player_));
         status_ = add_label(root, player_.message(), 18);
         decoder_ = add_label(root, "Decoder: not started", 18);
-        auto* play = add_button(root, "A - Load local test video", [this](brls::View*) {
+        add_button(root, "A - Load local test video", [this](brls::View*) {
             player_.start();
             update_labels();
             return true;
@@ -255,7 +258,6 @@ public:
         root->registerAction("Stop", brls::BUTTON_X, [this](brls::View*) {
             player_.stop(); update_labels(); return true;
         });
-        brls::Application::giveFocus(play);
         return scroll;
     }
 
