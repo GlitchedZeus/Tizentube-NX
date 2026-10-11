@@ -229,6 +229,7 @@ def first_hls_segment(playlist: bytes,variant_url: str) -> str | None:
 
 
 def one_source(video_id: str,visitor: str) -> str:
+    stage="PLAYER"
     try:
         post=urllib.request.Request(
             PLAYER_URL,data=vision_player_body(video_id,visitor),
@@ -255,6 +256,7 @@ def one_source(video_id: str,visitor: str) -> str:
             "Accept-Encoding":"identity",
             "User-Agent":VISION_UA,
         }
+        stage="HLS_PLAYLIST"
         manifest_bytes=get_bytes(manifest,headers=headers,cap=MAX_PLAYLIST)
         # YouTube may return the media playlist directly as hls_variant,
         # without a top-level master/variant resolution step.
@@ -262,6 +264,7 @@ def one_source(video_id: str,visitor: str) -> str:
             variant=pick_hls_variant(manifest_bytes,manifest)
             if not variant:
                 return "HLS_MASTER_NO_COMPATIBLE_AVC"
+            stage="HLS_VARIANT"
             media=get_bytes(variant,headers=headers,cap=MAX_PLAYLIST)
         elif b"#EXTINF:" in manifest_bytes:
             variant=manifest
@@ -272,6 +275,7 @@ def one_source(video_id: str,visitor: str) -> str:
         if not segment:
             return "HLS_VOD_SEGMENTS_UNAVAILABLE"
         # Only a bounded real CDN range. Never download the whole clip from CI.
+        stage="HLS_SEGMENT"
         sample=get_bytes(segment,headers={
             "Range":"bytes=0-65535",
             "Accept-Encoding":"identity",
@@ -280,8 +284,14 @@ def one_source(video_id: str,visitor: str) -> str:
         if len(sample)<12 or sample.startswith((b"<html",b"<!DOCTYPE",b"#EXTM3U")):
             return "HLS_SEGMENT_NOT_MEDIA"
         return "HLS_SEGMENT_BYTES_OBTAINED"
-    except (urllib.error.HTTPError,urllib.error.URLError,OSError,ValueError,TimeoutError):
-        return "UPSTREAM_OR_CDN_UNAVAILABLE"
+    except urllib.error.HTTPError as exc:
+        if exc.code==403:
+            return stage+"_HTTP_403"
+        if exc.code==429:
+            return stage+"_HTTP_429"
+        return stage+"_HTTP_OTHER"
+    except (urllib.error.URLError,OSError,ValueError,TimeoutError):
+        return stage+"_TRANSPORT_UNAVAILABLE"
 
 
 def main() -> int:
