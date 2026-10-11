@@ -1,0 +1,64 @@
+name: M3 integrated Search-to-video candidate
+on:
+  pull_request:
+    paths:
+      - 'switch/source/**'
+      - 'src/core/**'
+      - 'include/tizentube_nx/playback/**'
+      - 'include/tizentube_nx/youtube/guest_api.hpp'
+      - 'Makefile.switch'
+      - '.github/workflows/m3-integrated-player.yml'
+  push:
+    paths:
+      - 'switch/source/**'
+      - 'src/core/**'
+      - 'include/tizentube_nx/playback/**'
+      - 'Makefile.switch'
+      - '.github/workflows/m3-integrated-player.yml'
+  workflow_dispatch:
+jobs:
+  build-integrated:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Build experimental integrated player with pinned devkitA64
+        run: |
+          docker run --rm \
+            -v "$PWD:/work" -w /work \
+            devkitpro/devkita64@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282 \
+            bash -ec '
+              export PKG_CONFIG_LIBDIR="$DEVKITPRO/portlibs/switch/lib/pkgconfig"
+              if ! pkg-config --exists mpv; then
+                BASE=https://github.com/xfangfang/wiliwili/releases/download/v0.1.0
+                curl --fail --location --retry 3 --silent --show-error \
+                  "$BASE/switch-ffmpeg-7.1-1-any.pkg.tar.zst" \
+                  -o /tmp/switch-ffmpeg.pkg.tar.zst
+                curl --fail --location --retry 3 --silent --show-error \
+                  "$BASE/switch-libmpv-0.36.0-3-any.pkg.tar.zst" \
+                  -o /tmp/switch-libmpv.pkg.tar.zst
+                dkp-pacman -U --noconfirm --needed \
+                  /tmp/switch-ffmpeg.pkg.tar.zst /tmp/switch-libmpv.pkg.tar.zst
+              fi
+              make -f Makefile.switch TTNX_M3_INTEGRATED=1 -j2
+            '
+      - name: Verify separate NRO and no default-output overwrite
+        run: |
+          test -s tizentube_nx_m3_integrated.nro
+          test -s tizentube_nx_m3_integrated.elf
+          test ! -e tizentube_nx.nro
+          file tizentube_nx_m3_integrated.nro
+          sha256sum tizentube_nx_m3_integrated.nro
+      - name: Upload complete experimental player candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: tizentube-nx-m3-REAL-VIDEO-EXPERIMENT
+          path: tizentube_nx_m3_integrated.nro
+          if-no-files-found: error
+      - name: Upload candidate symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: tizentube-nx-m3-REAL-VIDEO-symbols
+          path: tizentube_nx_m3_integrated.elf
+          if-no-files-found: error
