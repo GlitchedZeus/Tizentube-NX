@@ -36,6 +36,7 @@ add_library(tizentube_nx_core
     src/core/source_routes.cpp
     src/core/ump_wire.cpp
     src/core/ump_safety.cpp
+    src/core/ump_transfer.cpp
     src/core/extraction_wire.cpp
     src/core/sponsorblock.cpp
 )
@@ -54,6 +55,10 @@ if(TTNX_BUILD_TESTS)
     add_executable(tizentube_nx_media_chunks_tests tests/media_chunks_tests.cpp)
     target_link_libraries(tizentube_nx_media_chunks_tests PRIVATE tizentube_nx_core)
     add_test(NAME media_chunks COMMAND tizentube_nx_media_chunks_tests)
+
+    add_executable(tizentube_nx_ump_transfer_tests tests/ump_transfer_tests.cpp)
+    target_link_libraries(tizentube_nx_ump_transfer_tests PRIVATE tizentube_nx_core)
+    add_test(NAME ump_transfer COMMAND tizentube_nx_ump_transfer_tests)
 
     add_executable(tizentube_nx_ump_wire_tests tests/ump_wire_tests.cpp)
     target_link_libraries(tizentube_nx_ump_wire_tests PRIVATE tizentube_nx_core)
