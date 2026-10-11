@@ -475,6 +475,7 @@ std::optional<HlsPlayerSource> parse_m3_guest_hls_source(
     source.video_id=info.video_id;
     source.duration_ms=info.duration_sec*1000;
     source.master_playlist_url=std::move(playlist_url);
+    source.external_aac_url=std::move(aac_url);
     return source;
 }
 
