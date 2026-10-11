@@ -131,7 +131,12 @@ CPPFILES := $(filter-out curl_http_client.cpp,$(CPPFILES))
 # content height, which desynchronizes the viewport when Search appends rows.
 # stable_scrolling_frame.cpp backports an absolute-pixel implementation while
 # preserving the pinned Borealis public API.
+# The accepted M2 app supplies its own absolute-pixel scrolling frame.
+# The separate offline probe has no replacement, so compile pinned Borealis's
+# stock scrolling_frame.cpp instead of removing all its vtable definitions.
+ifneq ($(TTNX_M3_OFFLINE_PROBE),1)
 CPPFILES := $(filter-out scrolling_frame.cpp,$(CPPFILES))
+endif
 SFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
 GLSLFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.glsl)))
 BINFILES	:=	$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.*)))
