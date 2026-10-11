@@ -118,21 +118,42 @@ std::optional<HlsProbePlan> HlsSourceProbe::inspect(
 
     const auto master_bytes=fetch_playlist(source->master_playlist_url,true);
     if(!master_bytes)return std::nullopt;
-    const auto master=parse_hls_master_playlist(*master_bytes,
-                                                 source->master_playlist_url);
-    if(!master) {
-        last_error_=HlsProbeError::ManifestRejected;
-        return std::nullopt;
+    std::optional<HlsVariant> variant;
+    std::optional<HlsMediaPlaylist> video;
+    // The LIVE reference accepted a direct hls_variant VOD playlist.
+    // It has EXTINF entries but no master STREAM-INF entries. Do not
+    // erroneously try to parse/fetch a master, or silently add an audio
+    // rendition absent from the actual source metadata.
+    const std::string_view manifest(*master_bytes);
+    const bool contains_master=manifest.find("#EXT-X-STREAM-INF:")!=
+                               std::string_view::npos;
+    const bool contains_media=manifest.find("#EXTINF:")!=
+                              std::string_view::npos;
+    if(contains_master && !contains_media) {
+        const auto master=parse_hls_master_playlist(
+            manifest,source->master_playlist_url);
+        if(!master) {
+            last_error_=HlsProbeError::ManifestRejected;
+            return std::nullopt;
+        }
+        variant=choose_hls_variant(*master,max_height,max_fps);
+        if(!variant) {
+            last_error_=HlsProbeError::VariantUnavailable;
+            return std::nullopt;
+        }
+        const auto video_data=fetch_playlist(variant->playlist_url,false);
+        if(!video_data)return std::nullopt;
+        video=parse_hls_media_playlist(*video_data,variant->playlist_url);
+    } else if(contains_media && !contains_master) {
+        video=parse_hls_media_playlist(manifest,source->master_playlist_url);
+        if(video) {
+            HlsVariant direct;
+            direct.playlist_url=source->master_playlist_url;
+            direct.direct_media_playlist=true;
+            variant=std::move(direct);
+        }
     }
-    const auto variant=choose_hls_variant(*master,max_height,max_fps);
-    if(!variant) {
-        last_error_=HlsProbeError::VariantUnavailable;
-        return std::nullopt;
-    }
-    const auto video_data=fetch_playlist(variant->playlist_url,false);
-    if(!video_data)return std::nullopt;
-    auto video=parse_hls_media_playlist(*video_data,variant->playlist_url);
-    if(!video) {
+    if(!variant || !video) {
         last_error_=HlsProbeError::VideoSegmentsRejected;
         return std::nullopt;
     }
