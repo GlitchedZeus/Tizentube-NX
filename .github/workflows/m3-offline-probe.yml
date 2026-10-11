@@ -25,7 +25,9 @@ jobs:
             -v "$PWD:/work" -w /work \
             devkitpro/devkita64@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282 \
             bash -ec '
-              dkp-pacman -Sy --noconfirm --needed switch-libmpv switch-libplacebo
+              dkp-pacman -Sy --noconfirm --needed switch-libmpv
+              echo "Selected mpv and player packages:"
+              dkp-pacman -Q switch-libmpv switch-ffmpeg || true
               pkg-config --version
               PKG_CONFIG_LIBDIR="$DEVKITPRO/portlibs/switch/lib/pkgconfig" \
                 pkg-config --modversion mpv
