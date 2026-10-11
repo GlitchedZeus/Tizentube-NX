@@ -5,6 +5,7 @@
 #ifdef TTNX_M3_MEDIA_PLANE
 #include "tizentube_nx/playback/playback.hpp"
 #include "tizentube_nx/playback/hls_manifest.hpp"
+#include "tizentube_nx/playback/source_routes.hpp"
 #endif
 
 #include <switch.h>
