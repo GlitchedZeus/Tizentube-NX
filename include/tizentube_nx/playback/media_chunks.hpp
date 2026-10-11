@@ -36,6 +36,7 @@ struct MediaReadResult {
     MediaReadFailure failure{MediaReadFailure::TransportUnavailable};
     std::string bytes; // never write signed media URLs or auth values to logs
     std::uint64_t resource_size{0};
+    int http_status{0}; // status only; never reflect signed media URL
     [[nodiscard]] bool ok() const noexcept { return failure == MediaReadFailure::None; }
 };
 
