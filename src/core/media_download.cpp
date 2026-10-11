@@ -10,6 +10,8 @@ namespace ttnx::playback {
 bool MediaDownloadJob::start(std::string signed_url) {
     cancel();
     error_ = MediaDownloadError::None;
+    last_chunk_failure_ = MediaReadFailure::None;
+    last_http_status_ = 0;
     received_ = 0;
     total_ = 0;
     if (!is_reviewable_googlevideo_https_url(signed_url)) {
@@ -37,6 +39,8 @@ MediaDownloadState MediaDownloadJob::pump() {
         return state_;
     }
     const auto bytes = reader_.read(url_, *range);
+    last_chunk_failure_ = bytes.failure;
+    last_http_status_ = bytes.http_status;
     if (!bytes.ok()) {
         fail(MediaDownloadError::RangeFailure);
         return state_;
