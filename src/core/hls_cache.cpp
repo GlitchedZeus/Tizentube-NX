@@ -15,7 +15,8 @@ bool HlsCacheJob::start(const HlsProbePlan& plan) {
     const auto count=plan.video_segments.segments.size()+
         (plan.audio_segments?plan.audio_segments->segments.size():0);
     if(plan.video_segments.segments.empty() || count>4096 ||
-       !plan.selected.height || !plan.selected.fps ||
+       ((!plan.selected.direct_media_playlist) &&
+          (!plan.selected.height || !plan.selected.fps)) ||
        plan.video_segments.total_duration_ms==0 ||
        (plan.audio_segments && plan.audio_segments->segments.empty()) ||
        (!plan.selected.audio_playlist_url.empty() && !plan.audio_segments) ||
