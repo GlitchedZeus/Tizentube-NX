@@ -172,6 +172,17 @@ void response_contract() {
         test(x, MediaReadFailure::MissingOrInvalidRange, "range beyond resource denied");
     }
     {
+        fake.reply = response("END", "bytes 0-2/3");
+        auto last = chunks.read(kUrl, {0, 1048575});
+        check(last.ok() && last.bytes == "END" && last.resource_size == 3,
+              "short resource terminates requested range exactly at EOF");
+    }
+    {
+        auto x = response("BAD", "bytes 0-2/100");
+        test(x, MediaReadFailure::MissingOrInvalidRange,
+             "partial early response before actual EOF is denied");
+    }
+    {
         auto x = baseline(); x.response.headers[2].value="bytes 0-4/18446744073709551616";
         test(x, MediaReadFailure::MissingOrInvalidRange, "resource size overflow denied");
     }
