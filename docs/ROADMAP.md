@@ -171,6 +171,22 @@
 - [ ] Connect project-owned backend to real Switch libmpv/FFmpeg/Deko3D/nvtegra renderer
 - [x] Physical offline SDR H.264/AAC video + audio playback from exact local SD fixture (quiet original tone separately tracked)
 - [ ] Test separate remote audio/video synchronization and seek on hardware
+### M3 integrated media source / transfer tranche — PR #8
+- [x] Native WEB guest `/youtubei/v1/player` request builder with reviewed same-origin session fields
+- [x] Bounded native direct-stream response parser: normal video ID, playability, H.264/AAC and cipher/DRM/unsafe host rejection
+- [x] Implement strict 206-only signed Googlevideo range reader with <=1 MiB chunks and redirect/content-range/type/length checks
+- [x] Implement cancellable multi-chunk progressive transfer with total-size consistency and atomic storage-sink contract
+- [x] Add opt-in native libnx/Horizon SSL media transport, repeat CDN host policy immediately before DNS and keep M2's allowlist unchanged
+- [x] Add fixed-location private SD media cache .part staging, flush/publish and cancellation cleanup
+- [x] Connect guest source, normal ID and Shorts firewall, muxed H.264/AAC selector and progressive cache coordinator
+- [x] Add offline regression tests for request privacy, player response, CDN hostile ranges, transfer failures and end-to-end preparation
+- [ ] Exact-head native media transport/host/standard NRO CI completes successfully for integrated tranche
+- [ ] Background Search-selected normal-video -> guest player -> media cache -> libmpv UI integration
+- [ ] Physical real YouTube H.264/AAC long-video acceptance on Switch without ads or Shorts
+- [ ] Native decipher/PO-token compatibility strategy and separate adaptive audio/video playback
+
+See `docs/M3_MEDIA_INTEGRATION_2026-10-11.md`. These are implemented/tested pipeline pieces, **not** a released or hardware-accepted YouTube playback feature.
+
 - [ ] Select and validate standalone-console extraction strategy without mandatory PC
 - [ ] Approve/implement actual media-network policy, redirects, HTTPS and range transport
 - [ ] Integrate real YouTube stream extraction end-to-end
