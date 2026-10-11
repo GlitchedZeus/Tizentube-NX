@@ -29,6 +29,7 @@ add_library(tizentube_nx_core
     src/core/http1.cpp
     src/core/settings.cpp
     src/core/playback.cpp
+    src/core/extraction_wire.cpp
     src/core/sponsorblock.cpp
 )
 target_include_directories(tizentube_nx_core PUBLIC include)
