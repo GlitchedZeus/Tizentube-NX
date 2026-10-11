@@ -217,4 +217,23 @@ void PlaybackSession::stop() noexcept {
     is_live_ = false;
 }
 
+LaunchResult PlaybackLauncher::launch(
+    std::string_view normal_video_id, const QualityPolicy& policy) {
+    if (!ttnx::core::is_valid_video_id(normal_video_id))
+        return {LaunchError::InvalidVideoId, SelectionError::InvalidVideoId};
+    // Never allow an already-playing old video to survive a failed launch.
+    player_.stop();
+    const auto resolved = extractor_.resolve(normal_video_id);
+    if (!resolved)
+        return {LaunchError::ExtractionFailed, SelectionError::None};
+    if (resolved->video_id != normal_video_id)
+        return {LaunchError::IdentityMismatch, SelectionError::InvalidVideoId};
+    const auto selected = select_streams(*resolved, policy);
+    if (!selected.streams)
+        return {LaunchError::StreamRejected, selected.error};
+    if (!player_.play(*selected.streams))
+        return {LaunchError::PlayerFailed, SelectionError::None};
+    return {};
+}
+
 } // namespace ttnx::playback
