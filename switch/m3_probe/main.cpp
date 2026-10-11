@@ -10,6 +10,7 @@
 #include <array>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -245,10 +246,10 @@ public:
         root->registerAction("Pause", brls::BUTTON_Y, [this](brls::View*) {
             player_.toggle_pause(); return true;
         });
-        root->registerAction("Seek -10s", brls::BUTTON_L, [this](brls::View*) {
+        root->registerAction("Seek -10s", brls::BUTTON_LB, [this](brls::View*) {
             player_.seek(-10); return true;
         });
-        root->registerAction("Seek +10s", brls::BUTTON_R, [this](brls::View*) {
+        root->registerAction("Seek +10s", brls::BUTTON_RB, [this](brls::View*) {
             player_.seek(10); return true;
         });
         root->registerAction("Stop", brls::BUTTON_X, [this](brls::View*) {
