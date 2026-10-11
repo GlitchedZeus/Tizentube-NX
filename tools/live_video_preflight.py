@@ -101,7 +101,10 @@ def verify_media_bytes(url: str, *, timeout: float = 12.0) -> tuple[bool, str]:
             if not match:
                 return False, "MALFORMED_RANGE"
             end, total = map(int, match.groups())
-            if total <= end or total > MAX_VIDEO_BYTES or end >= MAX_RANGE_BYTES:
+            if (total <= end or total > MAX_VIDEO_BYTES or end >= MAX_RANGE_BYTES
+                    or end != min(MAX_RANGE_BYTES - 1, total - 1)):
+                # A 206 response may be short only when the actual resource
+                # ends: a partial reply before EOF would corrupt the cache.
                 return False, "INVALID_MEDIA_SIZE"
             expected = end + 1
             if int(lengths[0]) != expected:
