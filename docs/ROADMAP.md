@@ -165,7 +165,8 @@
 - [x] Physical Switch screenshot confirms moving 30-second synthetic H.264 picture and audible AAC, with mpv playback active at tested `2acc3b75`
 - [x] Hardware decoder report `nvtegra-copy` observed on Switch (this does NOT mean Deko3D video-frame presentation is implemented)
 - [x] Improve quiet synthetic sine fixture: +10 dB source-level boost, peak checked, video stream unchanged; no changes to working NRO
-- [ ] Physical confirmation of controls (pause, 10-second seek, stop, restart), real-time A/V sync, and sleep/dock stability
+- [x] Owner physically confirmed pause/resume, 10-second forward/backward seeking, Stop and reload/replay on the exact `2acc3b75` offline hardware candidate
+- [ ] Longer-form A/V synchronization, sleep/wake, dock/undock and stable-exit hardware verification
 - [ ] Replace experimental 640x360 software output with reviewed Deko3D/nvtegra renderer bridge
 - [ ] Connect project-owned backend to real Switch libmpv/FFmpeg/Deko3D/nvtegra renderer
 - [x] Physical offline SDR H.264/AAC video + audio playback from exact local SD fixture (quiet original tone separately tracked)
