@@ -44,6 +44,8 @@ public:
     void cancel() noexcept;
     [[nodiscard]] MediaDownloadState state() const noexcept { return state_; }
     [[nodiscard]] MediaDownloadError error() const noexcept { return error_; }
+    [[nodiscard]] MediaReadFailure last_chunk_failure() const noexcept { return last_chunk_failure_; }
+    [[nodiscard]] int last_http_status() const noexcept { return last_http_status_; }
     [[nodiscard]] std::uint64_t bytes_received() const noexcept { return received_; }
     [[nodiscard]] std::uint64_t total_bytes() const noexcept { return total_; }
 private:
@@ -53,6 +55,8 @@ private:
     std::string url_; // ephemeral bearer-like URL, never serialized
     MediaDownloadState state_{MediaDownloadState::Idle};
     MediaDownloadError error_{MediaDownloadError::None};
+    MediaReadFailure last_chunk_failure_{MediaReadFailure::None};
+    int last_http_status_{0};
     std::uint64_t received_{0};
     std::uint64_t total_{0};
     bool sink_open_{false};
