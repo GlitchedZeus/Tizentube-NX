@@ -1484,7 +1484,9 @@ private:
                 try {
                     ttnx::switch_app::LibnxHlsPlaylistTransport manifests;
                     ttnx::switch_app::LibnxHlsSegmentTransport segments;
-                    if (!manifests.ready() || !segments.ready()) {
+                    ttnx::switch_app::LibnxMediaChunkTransport audio_transport;
+                    if (!manifests.ready() || !segments.ready() ||
+                        !audio_transport.ready()) {
                         feedback="M3: native HLS TLS service unavailable.";
                     } else if(media_cancel_requested_.load()) {
                         feedback="M3: video request cancelled.";
@@ -1501,8 +1503,9 @@ private:
                             feedback="M3: video request cancelled.";
                         } else {
                             ttnx::playback::HlsSegmentReader reader(segments);
+                            ttnx::playback::MediaChunkReader audio_reader(audio_transport);
                             ttnx::switch_app::SwitchHlsCacheSink cache;
-                            ttnx::playback::HlsCacheJob job(reader,cache);
+                            ttnx::playback::HlsCacheJob job(reader,cache,&audio_reader);
                             if(!job.start(*source)) {
                                 feedback="M3 HLS SD cache could not stage both tracks.";
                             } else {
