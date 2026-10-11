@@ -125,6 +125,15 @@ bool SwitchHlsCacheSink::begin(const playback::HlsProbePlan& plan) {
     abort();
     if(!directory(kParent) || !directory(kMediaDir) ||
        !directory(kRoot))return false;
+    // Recover a completed old clip after a power loss between moving
+    // ready -> previous and pending -> ready. Never throw away that old
+    // completed media until ready has been restored.
+    struct stat current{},backup{};
+    const bool ready_exists=lstat(kReady,&current)==0;
+    const bool backup_exists=lstat(kPrevious,&backup)==0;
+    if(backup_exists && !S_ISDIR(backup.st_mode))return false;
+    if(!ready_exists && backup_exists &&
+       rename(kPrevious,kReady)!=0)return false;
     // Clear only our known app-owned failed/old scratch files, never arbitrary
     // SD-card content, and never the currently published "ready" directory.
     if(!discard_known_directory(kPending) ||
