@@ -157,6 +157,13 @@
 - [x] SponsorBlock normalized category modes, overlapping-segment handling and repeat suppression
 - [x] Local-only authenticated yt-dlp research resolver, with no arbitrary URL/credential input
 - [x] Host regression coverage for playback selection, URLs, state, SponsorBlock and resolver HTTP boundary
+- [x] Develop a distinct, opt-in libmpv offline-video NRO source and Makefile build mode
+- [x] Implement synthetic local MP4 video-frame preview, audio/control actions and decoder diagnostics
+- [x] Add separate devkitA64 mpv-package CI recipe and exact-artifact/debug-symbol upload workflow
+- [x] Publish synthetic fixture generation and reproducible real-Switch hardware test checklist
+- [ ] Exact-head isolated mpv-probe CI compilation passes (queued; not yet accepted)
+- [ ] Physical test passes for the offline libmpv software-frame NRO
+- [ ] Replace experimental 640x360 software output with reviewed Deko3D/nvtegra renderer bridge
 - [ ] Connect project-owned backend to real Switch libmpv/FFmpeg/Deko3D/nvtegra renderer
 - [ ] Physical hardware playback of known legal offline SDR H.264/AAC test asset
 - [ ] Test separate remote audio/video synchronization and seek on hardware
