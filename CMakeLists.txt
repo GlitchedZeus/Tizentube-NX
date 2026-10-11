@@ -50,6 +50,10 @@ if(TTNX_BUILD_TESTS)
     target_link_libraries(tizentube_nx_media_chunks_tests PRIVATE tizentube_nx_core)
     add_test(NAME media_chunks COMMAND tizentube_nx_media_chunks_tests)
 
+    add_executable(tizentube_nx_media_download_tests tests/media_download_tests.cpp)
+    target_link_libraries(tizentube_nx_media_download_tests PRIVATE tizentube_nx_core)
+    add_test(NAME media_download COMMAND tizentube_nx_media_download_tests)
+
     add_executable(tizentube_nx_core_tests tests/core_tests.cpp)
     target_link_libraries(tizentube_nx_core_tests PRIVATE tizentube_nx_core)
     add_test(NAME core COMMAND tizentube_nx_core_tests)
