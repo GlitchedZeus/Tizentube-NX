@@ -23,8 +23,13 @@ public:
     bool publish(const playback::HlsProbePlan& plan) override;
     void abort() noexcept override;
 
+#ifdef TTNX_M3_CACHE_HOST_TEST
+    static constexpr const char* kReadyMaster=
+        "/tmp/tizentube-m3-hls-test/switch/TizenTube-NX/media-cache/hls/ready/master.m3u8";
+#else
     static constexpr const char* kReadyMaster=
         "sdmc:/switch/TizenTube-NX/media-cache/hls/ready/master.m3u8";
+#endif
 private:
     bool staged_{false};
     bool wrote_video_{false};
