@@ -421,7 +421,8 @@ std::optional<HlsPlayerSource> parse_m3_guest_hls_source(
         !ttnx::core::is_valid_video_id(expected_normal_video_id))
         return std::nullopt;
     Json parser(body);
-    std::string status, playlist_url;
+    std::string status, playlist_url, aac_url;
+    std::uint64_t aac_bitrate=0;
     VideoInfo info;
     unsigned seen=0;
     const bool success=parser.object([&](std::string_view key,unsigned depth) {
