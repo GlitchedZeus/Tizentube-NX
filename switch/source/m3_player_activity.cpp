@@ -1,6 +1,7 @@
 #ifdef TTNX_M3_INTEGRATED
 #include "m3_player_activity.hpp"
 #include "media_file_sink.hpp"
+#include "hls_cache_sink.hpp"
 
 #include <borealis.hpp>
 #include <mpv/client.h>
@@ -18,7 +19,7 @@ namespace {
 constexpr int kWidth=640, kHeight=360;
 class CachedMpv {
 public:
-    CachedMpv():pixels_(kWidth*kHeight*4,0){}
+    explicit CachedMpv(bool hls=false):pixels_(kWidth*kHeight*4,0),use_hls_(hls){}
     ~CachedMpv() { close(); }
     bool init() {
         if (handle_) return renderer_!=nullptr;
@@ -63,14 +64,18 @@ public:
     }
     bool play() {
         if (!renderer_ && !init())return false;
-        const char* path=SwitchMediaCacheSink::kComplete;
+        const char* path=use_hls_
+            ? SwitchHlsCacheSink::kReadyMaster
+            : SwitchMediaCacheSink::kComplete;
         std::FILE* file=std::fopen(path,"rb");
         if (!file) {status_="Cache missing: retry video from Search";return false;}
         bool ok=std::fseek(file,0,SEEK_END)==0;
         const long bytes=ok?std::ftell(file):-1;
         std::fclose(file);
-        if (bytes<1024 || bytes>static_cast<long>(512L*1024*1024)) {
-            status_="Cached video empty or exceeds size limit";
+        const long max_size=use_hls_?1024L*1024:512L*1024*1024;
+        const long minimum=use_hls_?20:1024;
+        if (bytes<minimum || bytes>max_size) {
+            status_="Completed local media missing or exceeds bounds";
             return false;
         }
         const char* cmd[]={"loadfile",path,"replace",nullptr};
@@ -78,7 +83,8 @@ public:
         if (mpv_command(handle_,cmd)<0) {
             status_="mpv rejected completed cache";return false;
         }
-        status_="Loading completed local MP4...";
+        status_=use_hls_?"Opening fully cached HLS + AAC playlists...":
+                          "Loading completed local MP4...";
         return true;
     }
     void pause() {
@@ -165,6 +171,7 @@ private:
     mpv_handle* handle_{nullptr};
     mpv_render_context* renderer_{nullptr};
     std::vector<unsigned char> pixels_;
+    bool use_hls_{false};
     std::string status_{"Starting libmpv..."};
     bool have_frame_{false},new_frame_{false};
     unsigned long long frames_{0};
@@ -205,13 +212,15 @@ void add_button(brls::Box* row,const char* title,std::function<void()> action) {
 }
 class M3Activity final:public brls::Activity {
 public:
-    M3Activity(){active_=this;}
+    explicit M3Activity(bool hls):player_(hls),hls_(hls){active_=this;}
     ~M3Activity() override {active_=nullptr;player_.stop();}
     brls::View* createContentView() override {
         auto* root=new brls::Box(brls::Axis::COLUMN);
         root->setPadding(12,20,12,20);
-        label(root,"TizenTube NX | M3 Normal Video",24);
-        label(root,"Ad-free direct stream, played from verified SD cache",15);
+        label(root,hls_?"TizenTube NX | M3 HLS Playback":
+                        "TizenTube NX | M3 Normal Video",24);
+        label(root,hls_?"Completed offline HLS segments + synchronized AAC":
+                        "Self-contained H.264/AAC MP4 from verified SD cache",15);
         root->addView(new VideoFrame(player_));
         status_=label(root,player_.status(),17);
         info_=label(root,player_.stats(),15);
@@ -254,6 +263,7 @@ private:
     }
     static M3Activity* active_;
     CachedMpv player_;
+    bool hls_{false};
     brls::Label* status_{nullptr};
     brls::Label* info_{nullptr};
     unsigned ticks_{0};
@@ -262,7 +272,10 @@ M3Activity* M3Activity::active_=nullptr;
 } // namespace
 
 void open_m3_completed_media(){
-    brls::Application::pushActivity(new M3Activity());
+    brls::Application::pushActivity(new M3Activity(false));
+}
+void open_m3_completed_hls(){
+    brls::Application::pushActivity(new M3Activity(true));
 }
 void tick_m3_player(){M3Activity::tick_current();}
 } // namespace ttnx::switch_app
