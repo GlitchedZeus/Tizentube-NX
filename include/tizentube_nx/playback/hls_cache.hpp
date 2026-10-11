@@ -25,7 +25,7 @@ public:
 enum class HlsCacheState { Idle, Fetching, Ready, Failed, Cancelled };
 enum class HlsCacheFailure {
     None, InvalidPlaylist, UnableToStage, MediaFetch, MediaWrite,
-    TotalSizeExceeded, UnableToPublish
+    TotalSizeExceeded, UnableToPublish, MissingAudio
 };
 
 // Fetches ONE independently verified HTTPS HLS segment per call. The caller
@@ -57,6 +57,7 @@ private:
     std::size_t next_segment_{0};
     unsigned track_{0}; // 0 video, 1 separate audio, 2 complete
     bool init_pending_{false};
+    bool muxed_audio_verified_{false};
 };
 
 } // namespace ttnx::playback
