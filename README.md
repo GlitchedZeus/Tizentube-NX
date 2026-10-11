@@ -41,6 +41,8 @@ TizenTube NX uses different projects for different kinds of guidance:
 
 The active development branch is [`feature/m2-guest-browsing`](https://github.com/GlitchedZeus/Tizentube-NX/tree/feature/m2-guest-browsing) with draft PR [#6](https://github.com/GlitchedZeus/Tizentube-NX/pull/6).
 
+The separate M3 engineering branch is [`feature/m3-playback-foundation-20261011`](https://github.com/GlitchedZeus/Tizentube-NX/tree/feature/m3-playback-foundation-20261011) (draft PR [#8](https://github.com/GlitchedZeus/Tizentube-NX/pull/8)); no working YouTube playback is claimed.
+
 On real Atmosphère hardware, the project has already passed these gates:
 
 - native Borealis application shell with **Home, Search, Subscriptions, Library and Settings**;
@@ -53,7 +55,7 @@ On real Atmosphère hardware, the project has already passed these gates:
 - full sidebar traversal after Search without the earlier blank-page/focus regression;
 - explicit **Load more** continuation that has successfully fetched and appended more results on hardware.
 
-The continuation data path works. The current M2 gate is the controller focus/scroll behavior after pagination; the latest focus fix is awaiting physical acceptance.
+The Search pagination focus/scroll gate passed hardware testing at `428497c90be6e768c607e45c68171827d74f0faf`. Guest Home request handling has been physically observed, while Channel first-page support is host-validated and still needs its own device gate.
 
 For exact accepted/rejected hardware checkpoints, see the active-branch [`HARDWARE_GATES.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/HARDWARE_GATES.md).
 
@@ -84,7 +86,7 @@ More detail: [`NETWORK_SAFETY.md`](https://github.com/GlitchedZeus/Tizentube-NX/
 | **M0 — Foundation** | ✅ Complete | Repository, host tests, clean URL handling, no-Shorts invariant, first NRO |
 | **M1 — Switch shell** | ✅ Complete | Borealis UI, controller/touch navigation, storage, real-hardware shell acceptance |
 | **M2 — Guest browsing** | 🚧 In progress | Safe guest networking, Search, pagination, Home/channel/playlist guest surfaces |
-| **M3 — Playback + ad-free viewing** | ⏳ Planned | Media pipeline, no YouTube-served ads, SponsorBlock + settings, quality/captions/audio/seek/resume |
+| **M3 — Playback + ad-free viewing** | 🚧 Foundation only (no playback) | Media pipeline, no YouTube-served ads, SponsorBlock + settings, quality/captions/audio/seek/resume |
 | **M4 — Local profiles** | ⏳ Planned | Local subscriptions/follows, playlists, Watch Later, likes/favorites, history, multiple profiles |
 | **M5 — Morphe-inspired enhancements** | ⏳ Planned | DeArrow-style metadata, Return YouTube Dislike, player cleanup and selected quality-of-life ideas |
 | **M6 — Daily-driver polish / v1** | ⏳ Planned | Stability, caching/retry, dock/undock, applet/title-takeover testing, release packaging |
@@ -96,9 +98,9 @@ The detailed checklist lives in the active-branch [`docs/ROADMAP.md`](https://gi
 
 Guest bootstrap, startup recovery, first-page live Search, inline result details and full sidebar traversal are physically accepted on a real Switch.
 
-`Load more` has also proven that continuation requests can fetch and append additional normalized results. The remaining pagination gate is UI-focused: keep the selector visible, preserve natural Up/Down movement around the last result / `Load more` boundary, and keep the accepted Search/sidebar lifecycle intact.
+`Load more` now has physically accepted focus/navigation. The Home guest endpoint has also been exercised on real hardware; for that guest it returned an empty normal-content state. Channel first-page parsing/UI is host-tested but requires its own Switch acceptance, and playlist browsing remains outstanding.
 
-After that, M2 continues with guest Home browsing, channel pages and playlist pages before moving into M3 playback + ad-free viewing.
+An isolated **M3 playback foundation** is being developed in draft PR [#8](https://github.com/GlitchedZeus/Tizentube-NX/pull/8), based on M2, without enabling media networking or video playback. See [M3 foundation details](docs/M3_PLAYBACK_FOUNDATION.md).
 
 ## Planned player philosophy
 
