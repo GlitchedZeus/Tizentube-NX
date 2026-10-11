@@ -45,6 +45,21 @@ public:
             !required("audio-channels","stereo")) {
             close();return false;
         }
+        // Attach ONLY an app-owned, fully published local AAC file.
+        // This is not a URL fetch: mpv remains restricted to file://.
+        if(use_hls_) {
+            std::FILE* audio=std::fopen(SwitchHlsCacheSink::kReadyExternalAac,"rb");
+            if(audio) {
+                const bool positioned=std::fseek(audio,0,SEEK_END)==0;
+                const long length=positioned?std::ftell(audio):-1;
+                std::fclose(audio);
+                if(length<1024 || length>128L*1024*1024 ||
+                   !required("audio-file",SwitchHlsCacheSink::kReadyExternalAac)) {
+                    status_="External AAC could not be attached to local mpv.";
+                    close();return false;
+                }
+            }
+        }
         const int init_result=mpv_initialize(handle_);
         if (init_result<0) {
             status_=std::string("mpv initialize: ")+mpv_error_string(init_result);
