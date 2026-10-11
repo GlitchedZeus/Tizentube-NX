@@ -1978,6 +1978,9 @@ int main(int, char**) {
         }
         handle_touch(shell);
         shell->tick();
+#ifdef TTNX_M3_INTEGRATED
+        ttnx::switch_app::tick_m3_player();
+#endif
     }
 
     // Do not let a request worker survive application shutdown. The client is
