@@ -52,4 +52,11 @@ struct GuestSession {
 [[nodiscard]] std::optional<net::HttpRequest> make_player_request(
     const GuestSession& session, std::string_view normal_video_id);
 
+// Isolated M3 video source experiment, using the already verified WEB
+// visitorData but a separate visionOS client identity. Unlike make_player_request
+// this never affects M2 Search/Home or its guest WEB session. A HTTP 200 here
+// does NOT demonstrate playable streams; response and media require checks.
+[[nodiscard]] std::optional<net::HttpRequest> make_m3_visionos_player_request(
+    const GuestSession& web_guest, std::string_view normal_video_id);
+
 }  // namespace ttnx::youtube
