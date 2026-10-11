@@ -2,6 +2,9 @@
 
 #include "tizentube_nx/net/http1.hpp"
 #include "tizentube_nx/net/outbound_policy.hpp"
+#ifdef TTNX_M3_MEDIA_PLANE
+#include "tizentube_nx/playback/playback.hpp"
+#endif
 
 #include <switch.h>
 
