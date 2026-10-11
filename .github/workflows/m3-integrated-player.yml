@@ -16,6 +16,12 @@ on:
       - 'Makefile.switch'
       - '.github/workflows/m3-integrated-player.yml'
   workflow_dispatch:
+    inputs:
+      publish_hardware_candidate:
+        description: 'Only after independent LIVE CDN and native readiness evidence'
+        required: false
+        default: false
+        type: boolean
 jobs:
   build-integrated:
     runs-on: ubuntu-latest
@@ -50,13 +56,17 @@ jobs:
           test ! -e tizentube_nx.nro
           file tizentube_nx_m3_integrated.nro
           sha256sum tizentube_nx_m3_integrated.nro
+      # Build and native-link success is NOT a successful video. Do not
+      # automatically release another unverified Switch NRO on every commit.
       - name: Upload complete experimental player candidate
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_hardware_candidate }}
         uses: actions/upload-artifact@v4
         with:
           name: tizentube-nx-m3-REAL-VIDEO-EXPERIMENT
           path: tizentube_nx_m3_integrated.nro
           if-no-files-found: error
       - name: Upload candidate symbols
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_hardware_candidate }}
         uses: actions/upload-artifact@v4
         with:
           name: tizentube-nx-m3-REAL-VIDEO-symbols
