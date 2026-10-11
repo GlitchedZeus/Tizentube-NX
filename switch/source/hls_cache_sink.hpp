@@ -20,19 +20,25 @@ public:
     bool begin(const playback::HlsProbePlan& plan) override;
     bool write_segment(bool audio,bool init,
                        std::size_t index,std::string_view bytes) override;
+    bool append_external_aac(std::string_view bytes) override;
     bool publish(const playback::HlsProbePlan& plan) override;
     void abort() noexcept override;
 
 #ifdef TTNX_M3_CACHE_HOST_TEST
     static constexpr const char* kReadyMaster=
         "/tmp/tizentube-m3-hls-test/switch/TizenTube-NX/media-cache/hls/ready/master.m3u8";
+    static constexpr const char* kReadyExternalAac=
+        "/tmp/tizentube-m3-hls-test/switch/TizenTube-NX/media-cache/hls/ready/external_audio.m4a";
 #else
     static constexpr const char* kReadyMaster=
         "sdmc:/switch/TizenTube-NX/media-cache/hls/ready/master.m3u8";
+    static constexpr const char* kReadyExternalAac=
+        "sdmc:/switch/TizenTube-NX/media-cache/hls/ready/external_audio.m4a";
 #endif
 private:
     bool staged_{false};
     bool wrote_video_{false};
+    std::uint64_t external_audio_bytes_{0};
     std::string video_ext_{"m4s"},audio_ext_{"m4s"};
 };
 } // namespace ttnx::switch_app
