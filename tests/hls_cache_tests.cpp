@@ -46,8 +46,31 @@ struct FakeTransport:net::HttpClient {
         return out;
     }
 };
+struct FakeAacTransport:playback::MediaChunkTransport {
+    int requests{0};
+    bool blocked{false};
+    net::HttpResult perform(const net::HttpRequest& req) override {
+        ++requests;
+        net::HttpResult out;
+        out.ok=!blocked && req.method==net::HttpMethod::Get &&
+            req.headers.size()==3 &&
+            req.headers[0].value=="bytes=0-1048575";
+        out.response.status_code=out.ok?206:403;
+        out.response.body=std::string(2048,'A');
+        out.response.body.replace(0,12,std::string("\0\0\0\x18ftypisom",12));
+        out.response.headers={
+            {"Content-Type","audio/mp4"},
+            {"Content-Length","2048"},
+            {"Content-Range","bytes 0-2047/2048"}
+        };
+        return out;
+    }
+};
+
 struct Sink:playback::HlsCacheSink {
     int begins{0},writes{0},publishes{0},aborts{0};
+    int audio_appends{0};
+    std::size_t aac_bytes{0};
     bool reject_write{false},reject_publish{false};
     bool completed{false};
     std::vector<std::string> written;
@@ -61,6 +84,11 @@ struct Sink:playback::HlsCacheSink {
               (init?"-init":"-segment"+std::to_string(i))+":"+
               std::to_string(data.size()));
         return true;
+    }
+    bool append_external_aac(std::string_view data) override {
+        ++audio_appends;
+        aac_bytes+=data.size();
+        return !reject_write;
     }
     bool publish(const playback::HlsProbePlan&) override {
         ++publishes;
@@ -146,6 +174,49 @@ void failure_cases() {
               job.error()==playback::HlsCacheFailure::MissingAudio &&
               sink.publishes==0 && !sink.completed,
               "direct video-only stream must never publish silent playback");
+    }
+    {
+        FakeTransport video;
+        FakeAacTransport audio;
+        playback::HlsSegmentReader video_reader(video);
+        playback::MediaChunkReader audio_reader(audio);
+        Sink sink;
+        playback::HlsCacheJob job(video_reader,sink,&audio_reader);
+        auto p=plan();
+        p.audio_segments.reset();
+        p.selected.audio_playlist_url.clear();
+        p.selected.direct_media_playlist=true;
+        p.selected.height=0;p.selected.fps=0;
+        p.source.external_aac_url=
+            "https://r2.googlevideo.com/videoplayback?expire=1&itag=140";
+        check(job.start(p),"separate AAC+direct HLS plan stages");
+        for(int i=0;i<12 && job.state()==playback::HlsCacheState::Fetching;++i)
+            (void)job.pump();
+        check(job.state()==playback::HlsCacheState::Ready &&
+              sink.audio_appends==1 && sink.aac_bytes==2048 &&
+              sink.publishes==1 && audio.requests==1,
+              "AAC fully fetched with 206 range before video/audio commit");
+    }
+    {
+        FakeTransport video;
+        FakeAacTransport audio;audio.blocked=true;
+        playback::HlsSegmentReader video_reader(video);
+        playback::MediaChunkReader audio_reader(audio);
+        Sink sink;
+        playback::HlsCacheJob job(video_reader,sink,&audio_reader);
+        auto p=plan();
+        p.audio_segments.reset();
+        p.selected.audio_playlist_url.clear();
+        p.selected.direct_media_playlist=true;
+        p.source.external_aac_url=
+            "https://r2.googlevideo.com/videoplayback?expire=1&itag=140";
+        check(job.start(p),"403 AAC failure fixture stages");
+        for(int i=0;i<12 && job.state()==playback::HlsCacheState::Fetching;++i)
+            (void)job.pump();
+        check(job.state()==playback::HlsCacheState::Failed &&
+              job.error()==playback::HlsCacheFailure::MediaFetch &&
+              sink.publishes==0 && sink.aborts>0,
+              "AAC 403 aborts cached video, not silently published");
     }
     {
         FakeTransport transport;
