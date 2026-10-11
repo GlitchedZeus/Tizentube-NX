@@ -13,12 +13,21 @@
 
 namespace ttnx::switch_app {
 namespace {
+#ifdef TTNX_M3_CACHE_HOST_TEST
+constexpr const char* kParent="/tmp/tizentube-m3-hls-test/switch/TizenTube-NX";
+constexpr const char* kMediaDir="/tmp/tizentube-m3-hls-test/switch/TizenTube-NX/media-cache";
+constexpr const char* kRoot="/tmp/tizentube-m3-hls-test/switch/TizenTube-NX/media-cache/hls";
+constexpr const char* kPending="/tmp/tizentube-m3-hls-test/switch/TizenTube-NX/media-cache/hls/pending";
+constexpr const char* kReady="/tmp/tizentube-m3-hls-test/switch/TizenTube-NX/media-cache/hls/ready";
+constexpr const char* kPrevious="/tmp/tizentube-m3-hls-test/switch/TizenTube-NX/media-cache/hls/previous";
+#else
 constexpr const char* kParent="sdmc:/switch/TizenTube-NX";
 constexpr const char* kMediaDir="sdmc:/switch/TizenTube-NX/media-cache";
 constexpr const char* kRoot="sdmc:/switch/TizenTube-NX/media-cache/hls";
 constexpr const char* kPending="sdmc:/switch/TizenTube-NX/media-cache/hls/pending";
 constexpr const char* kReady="sdmc:/switch/TizenTube-NX/media-cache/hls/ready";
 constexpr const char* kPrevious="sdmc:/switch/TizenTube-NX/media-cache/hls/previous";
+#endif
 
 bool directory(const char* path) {
     if(mkdir(path,0700)==0)return true;
