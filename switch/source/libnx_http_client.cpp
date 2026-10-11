@@ -584,6 +584,94 @@ net::HttpResult LibnxMediaChunkTransport::perform(const net::HttpRequest& reques
     }
     return result;
 }
+
+net::HttpResult LibnxUmpChunkTransport::perform(const net::HttpRequest& request) {
+    net::HttpResult result;
+    auto reject = [&](const char* message) {
+        result.ok = false;
+        result.failure_stage = net::HttpFailureStage::Policy;
+        result.error = message; // constant text: never include signed URLs
+        return result;
+    };
+    if (!services_.ready()) return reject("Experimental UMP transport offline.");
+    if (request.method != net::HttpMethod::Post ||
+        request.body.size() != 2 ||
+        static_cast<unsigned char>(request.body[0]) != 0x78 ||
+        request.body[1] != '\0' ||
+        request.headers.size() != 3 ||
+        request.headers[0].name != "Content-Type" ||
+        request.headers[0].value != "application/x-protobuf" ||
+        request.headers[1].name != "Accept-Encoding" ||
+        request.headers[1].value != "identity" ||
+        request.headers[2].name != "Accept" ||
+        request.headers[2].value != "application/octet-stream" ||
+        !playback::is_reviewable_googlevideo_https_url(request.url))
+        return reject("UMP request shape or source rejected before DNS.");
+
+    // Confirm the original bounded media range and protocol parameters,
+    // rather than letting arbitrary callers send POSTs through this socket.
+    auto read_param = [&](std::string_view name) -> std::optional<std::string> {
+        const auto q = request.url.find('?');
+        if (q == std::string::npos) return std::nullopt;
+        std::string_view params(request.url.data()+q+1,
+                                request.url.size()-q-1);
+        std::optional<std::string> value;
+        while (!params.empty()) {
+            const auto amp = params.find('&');
+            const auto item = params.substr(0,amp);
+            const auto eq = item.find('=');
+            if (eq != std::string_view::npos && item.substr(0,eq)==name) {
+                if (value) return std::nullopt; // duplicate parameter
+                value=std::string(item.substr(eq+1));
+            }
+            if (amp == std::string_view::npos) break;
+            params.remove_prefix(amp+1);
+        }
+        return value;
+    };
+    const auto range=read_param("range");
+    if (read_param("ump")!=std::optional<std::string>{"1"} ||
+        read_param("srfvp")!=std::optional<std::string>{"1"} ||
+        read_param("alr")!=std::optional<std::string>{"yes"} ||
+        !read_param("rn") || !range)
+        return reject("UMP required protocol markers missing or duplicated.");
+    const auto dash=range->find('-');
+    if (dash==std::string::npos || dash==0 || dash+1>=range->size())
+        return reject("UMP byte range malformed.");
+    auto parse_u64=[](std::string_view digits,std::uint64_t& n) {
+        if (digits.empty() || digits.size()>20) return false;
+        n=0;
+        for(const unsigned char c:digits) {
+            if(c<'0'||c>'9')return false;
+            const auto d=static_cast<unsigned>(c-'0');
+            if(n>(UINT64_MAX-d)/10)return false;
+            n=n*10+d;
+        }
+        return true;
+    };
+    std::uint64_t begin=0,end=0,sequence=0;
+    if (!parse_u64(std::string_view(*range).substr(0,dash),begin) ||
+        !parse_u64(std::string_view(*range).substr(dash+1),end) ||
+        !parse_u64(*read_param("rn"),sequence) ||
+        end<begin || end-begin>=1024*1024 ||
+        end>=512ULL*1024*1024 || sequence==0 || sequence>4096)
+        return reject("UMP range exceeds reviewed byte and resource limits.");
+
+    const auto parsed=net::parse_https_url(request.url);
+    if (!parsed || parsed->port!=443 ||
+        !playback::is_reviewable_googlevideo_https_url(
+            "https://"+parsed->host+parsed->target))
+        return reject("UMP target rejected by strict HTTPS parser.");
+    result=perform_single_request(request,*parsed,
+                                  normalized_timeout(request.timeout_ms),true);
+    // UMP POST requires HTTP 200; never follow Location (or SABR redirects).
+    // A separate checked UMP wrapper parses MEDIA, redirect and protection.
+    if (result.response.status_code >=300 && result.response.status_code<400)
+        return reject("UMP redirected; this transport never follows redirects.");
+    if (result.response.body.size()>1024*1024+128*1024)
+        return reject("UMP envelope exceeds maximum bounded response size.");
+    return result;
+}
 #endif
 
 }  // namespace ttnx::switch_app
