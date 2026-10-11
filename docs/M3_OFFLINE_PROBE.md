@@ -81,7 +81,7 @@ Keep the original `tizentube_nx.nro` untouched. Put the experimental
 - mpv config, scripts, ytdl and arbitrary input bindings are disabled; a
   missing mandatory safety option aborts initialization. The fixed SD fixture
   is limited to 256 MiB.
-- The FFmpeg demuxer network protocol whitelist is restricted to `file,pipe`.
+- The FFmpeg demuxer protocol whitelist is restricted to `file` only.
 - No approved M2 outbound-policy change is made and no Nintendo endpoint
   connectivity is introduced by application code.
 - Linkage of third-party player dependencies is confined to the opt-in binary.
