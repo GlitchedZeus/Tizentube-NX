@@ -383,6 +383,36 @@ def summarize_audio_offerings(player_json: bytes) -> str:
         return "AUDIO_FORMATS_RESPONSE_MALFORMED"
 
 
+def classify_vision_audio_candidates(payload: bytes) -> str:
+    # Report a constant source-class enum only; never any signed URL,
+    # signatureCipher, CDN host, visitor cookie, or upstream messages.
+    try:
+        info=json.loads(payload)
+        streaming=info.get("streamingData",{})
+        formats=streaming.get("adaptiveFormats",[])
+        if not isinstance(formats,list):
+            return "AUDIO_FORMAT_LIST_INVALID"
+        has_aac=False
+        has_cipher=False
+        for f in formats[:200]:
+            if not isinstance(f,dict):
+                continue
+            mime=f.get("mimeType","")
+            if not isinstance(mime,str) or not mime.startswith("audio/mp4") or "mp4a.40." not in mime:
+                continue
+            has_aac=True
+            url=f.get("url")
+            if approved_hls(url):
+                return "AUDIO_AAC_SIGNED_CDN_URL_AVAILABLE"
+            if isinstance(f.get("signatureCipher"),str):
+                has_cipher=True
+        if has_cipher:
+            return "AUDIO_AAC_CIPHER_ONLY"
+        return "AUDIO_AAC_NO_USABLE_URL" if has_aac else "AUDIO_AAC_NOT_LISTED"
+    except (TypeError,KeyError,ValueError,AttributeError):
+        return "AUDIO_LIST_UNAVAILABLE"
+
+
 def one_source(video_id: str,visitor: str) -> str:
     stage="PLAYER"
     try:
@@ -404,6 +434,7 @@ def one_source(video_id: str,visitor: str) -> str:
                 return "PLAYER_HTTP_UNAVAILABLE"
             data=response.read(MAX_JSON+1)
         audio_state=summarize_audio_offerings(data)
+        print("M3_AUDIO_SOURCE_CLASS="+classify_vision_audio_candidates(data))
         manifest=vision_manifest_url(data,video_id)
         if not manifest:
             return classify_hls_source_failure(data,video_id)
