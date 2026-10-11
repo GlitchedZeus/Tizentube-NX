@@ -37,11 +37,16 @@ real Switch, beyond the earlier screenshots showing the movie playing.
 The controls acceptance does **not** imply precise sample-level seek accuracy,
 long-clip A/V synchronization, or robustness over multiple hours.
 
-**Not yet accepted:** audio loudness of the boosted replacement fixture,
-A/V sync under longer clips, dock/undock, sleep/wake, sustained framerate,
-Deko3D direct rendering, arbitrary videos, remote CDN transports, YouTube
-extraction/streaming, ads/SponsorBlock, and any installed-game or external
-writes. The renderer currently uploads 640x360 software output to
+**Additional owner-confirmed Switch PASS:** boosted AAC test fixture has
+comfortable audible volume. Entering sleep and waking the console works with
+the experimental player running. These tests were performed after the accepted
+Fix #4 baseline and are reported by the owner; no new video NRO was needed
+for the volume check.
+
+**Not yet accepted:** long-clip A/V synchronization, dock/undock, multi-hour
+playback stability, Deko3D direct rendering, arbitrary video formats, remote
+CDN transport, full native YouTube extraction/streaming, ads/SponsorBlock, and
+any installed-game or external writes. The renderer currently uploads 640x360 software output to
 Borealis/NanoVG even with a hardware-decoder path reported by mpv. Render-call
 counter is not a measured FPS benchmark.
 
@@ -63,8 +68,8 @@ Exact louder local test MP4 SHA-256:
 `18f1b0e3f98c5fb73e2bb830c84b977e7050c5cf4580f4139dacda68a5f3cbf0`.
 
 CI now generates an amplified synthetic tone for subsequent experimental
-artifacts, with a peak-level gate. **The owner has not yet retested the boosted
-tone on Switch**, so don't mark audio loudness resolved on hardware.
+artifacts, with a peak-level gate. **The owner subsequently confirmed that
+the boosted fixture volume is good on the physical Switch.**
 
 ## Engineering boundaries
 
@@ -78,13 +83,14 @@ tone on Switch**, so don't mark audio loudness resolved on hardware.
 
 ## Next hardware follow-ups
 
-1. Replace the synthetic tone and confirm new relative loudness is comfortable.
-2. Verify stable exit and repeated long-run control use. Basic pause, seek
-   -10/+10 seconds, stop and reload have already passed physical testing.
-3. Validate real audio/video synchronization over a longer legal offline clip,
-   undock/dock and suspend/resume.
-4. Decide if existing `nvtegra-copy` plus software presentation suffices for an
-   interim 720p target or whether a reviewed Deko3D bridge is necessary.
-5. Continue standalone stream extraction and policy-reviewed transport work
-   independently; no networking is required to preserve the accepted offline
-   checkpoint.
+1. Keep the passed Fix #4 NRO as the immutable offline H.264/AAC baseline:
+   video, audible boosted audio, pause/resume, forward/back seek, stop/reload
+   and sleep/wake have all been physically accepted.
+2. Integrate a reviewed M3 network media/cache path and on-console guest
+   extractor; do not enable remote hosts in the accepted M2 browsing NRO.
+3. Test a longer *real YouTube* video on hardware only after complete normal-
+   video identity, Shorts rejection, direct stream resolution and CDN policy
+   gates are in place; also verify long-form A/V sync.
+4. Test dock/undock and longer session stability. Sleep/wake is already a PASS.
+5. Evaluate direct Deko3D rendering only if performance requires it; the
+   current player already reports `nvtegra-copy` and visibly renders output.
