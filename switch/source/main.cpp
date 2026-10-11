@@ -17,6 +17,12 @@
 
 #include "app_storage.hpp"
 #include "libnx_http_client.hpp"
+#ifdef TTNX_M3_INTEGRATED
+#include "m3_player_activity.hpp"
+#include "media_file_sink.hpp"
+#include "tizentube_nx/playback/guest_direct_extractor.hpp"
+#include "tizentube_nx/playback/progressive_prepare.hpp"
+#endif
 #include "tizentube_nx/core/home_model.hpp"
 #include "tizentube_nx/core/channel_model.hpp"
 #include "tizentube_nx/core/url.hpp"
@@ -292,6 +298,9 @@ public:
         pump_home_result();
         pump_search_result();
         pump_channel_result();
+#ifdef TTNX_M3_INTEGRATED
+        pump_m3_video();
+#endif
         update_frame_rate();
     }
 
@@ -300,6 +309,12 @@ public:
         if (home_worker_.joinable()) home_worker_.join();
         if (search_worker_.joinable()) search_worker_.join();
         if (channel_worker_.joinable()) channel_worker_.join();
+#ifdef TTNX_M3_INTEGRATED
+        media_cancel_requested_.store(true);
+        if (media_worker_.joinable()) media_worker_.join();
+        media_busy_.store(false);
+        media_done_.store(false);
+#endif
         network_busy_.store(false);
         home_busy_.store(false);
         home_worker_done_.store(false);
@@ -336,6 +351,18 @@ private:
     std::string network_detail_{
         "No YouTube connection has been attempted. Networking starts only when you choose the test action."};
     std::optional<ttnx::youtube::GuestSession> guest_session_;
+#ifdef TTNX_M3_INTEGRATED
+    // Worker-only media service; never let a signed URL enter UI labels or logs.
+    std::thread media_worker_;
+    std::mutex media_mutex_;
+    std::atomic_bool media_busy_{false};
+    std::atomic_bool media_done_{false};
+    std::atomic_bool media_cancel_requested_{false};
+    bool pending_media_success_{false};
+    std::string pending_media_feedback_;
+    std::string media_feedback_{"Choose a normal video, then Play video (M3)."};
+    brls::Label* m3_status_label_{nullptr};
+#endif
 
     // HomeModel is UI-thread-only. The explicit Home worker publishes normalized
     // HomePage data plus the captured generation and never touches Borealis Views.
@@ -414,6 +441,9 @@ private:
         brls::Button* button{nullptr};
         brls::Label* detail{nullptr};
         brls::Button* open_channel{nullptr};
+#ifdef TTNX_M3_INTEGRATED
+        brls::Button* play_video{nullptr};
+#endif
     };
     std::vector<SearchDetailRow> search_detail_rows_;
 
@@ -801,6 +831,12 @@ private:
                 row.open_channel->setVisibility(
                     selected ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
             }
+#ifdef TTNX_M3_INTEGRATED
+            if (row.play_video) {
+                row.play_video->setVisibility(
+                    selected ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
+            }
+#endif
         }
     }
 
@@ -865,7 +901,23 @@ private:
                 return true;
             });
         }
+#ifdef TTNX_M3_INTEGRATED
+        brls::Button* play_video = nullptr;
+        if (result.kind == ttnx::core::BrowseResultKind::Video &&
+            ttnx::core::is_valid_video_id(result.id)) {
+            play_video = button(search_results_box_, "Play video (M3 experimental)");
+            play_video->setVisibility(brls::Visibility::GONE);
+            const auto video_id = result.id;
+            play_video->registerClickAction([this, video_id](brls::View*) {
+                start_m3_video(video_id);
+                return true;
+            });
+        }
+        search_detail_rows_.push_back({
+            identity, select, detail_label, open_channel, play_video});
+#else
         search_detail_rows_.push_back({identity, select, detail_label, open_channel});
+#endif
 
         const auto metadata = ttnx::core::search_result_metadata_display(result);
         if (!metadata.empty()) {
@@ -1332,6 +1384,93 @@ private:
         }
     }
 
+
+#ifdef TTNX_M3_INTEGRATED
+    void start_m3_video(std::string normal_video_id) {
+        if (media_busy_.load() || !guest_session_ || !guest_session_->usable()) {
+            media_feedback_ = "Connect to guest YouTube first, or wait for current download.";
+            if (m3_status_label_) m3_status_label_->setText(media_feedback_);
+            return;
+        }
+        if (!ttnx::core::is_valid_video_id(normal_video_id)) {
+            media_feedback_ = "Invalid normal video ID (Shorts are forbidden).";
+            if (m3_status_label_) m3_status_label_->setText(media_feedback_);
+            return;
+        }
+        if (media_worker_.joinable()) media_worker_.join();
+        const auto session = *guest_session_;
+        media_cancel_requested_.store(false);
+        media_done_.store(false);
+        media_busy_.store(true);
+        media_feedback_ = "M3: resolving direct H.264/AAC and downloading securely...";
+        if (m3_status_label_) m3_status_label_->setText(media_feedback_);
+
+        try {
+            media_worker_ = std::thread([this, normal_video_id, session] {
+                std::string feedback = "M3: video not available as safe muxed MP4.";
+                bool success = false;
+                try {
+                    ttnx::playback::GuestDirectExtractor extractor(network_client_, session);
+                    ttnx::switch_app::LibnxMediaChunkTransport transport;
+                    if (!transport.ready()) {
+                        feedback = "M3: Horizon SSL or network unavailable.";
+                    } else {
+                        ttnx::switch_app::SwitchMediaCacheSink sink;
+                        ttnx::playback::MediaChunkReader reader(transport);
+                        ttnx::playback::MediaDownloadJob download(reader, sink);
+                        ttnx::playback::ProgressivePrepareJob job(extractor, download);
+                        if (!media_cancel_requested_.load() && job.start(normal_video_id)) {
+                            while (job.stage() == ttnx::playback::ProgressiveStage::Downloading &&
+                                   !media_cancel_requested_.load()) {
+                                (void)job.pump();
+                            }
+                            if (media_cancel_requested_.load()) {
+                                job.cancel();
+                                feedback = "M3: download cancelled.";
+                            } else if (job.stage() == ttnx::playback::ProgressiveStage::Ready) {
+                                success = true;
+                                feedback = "M3: verified local MP4 ready for playback.";
+                            } else feedback = "M3: CDN range or cache transfer rejected.";
+                        } else if (job.error() ==
+                                       ttnx::playback::ProgressiveError::NoSafeMuxedMp4) {
+                            feedback = "M3: no directly usable muxed H.264/AAC stream.";
+                        } else {
+                            feedback = "M3: guest player resolution unavailable.";
+                        }
+                    }
+                } catch (...) {
+                    feedback = "M3: media operation failed (no fallback to web player).";
+                }
+                {
+                    std::lock_guard<std::mutex> guard(media_mutex_);
+                    pending_media_success_ = success;
+                    pending_media_feedback_ = std::move(feedback);
+                }
+                media_done_.store(true);
+            });
+        } catch (...) {
+            media_busy_.store(false);
+            media_feedback_ = "M3: unable to start download worker.";
+            if (m3_status_label_) m3_status_label_->setText(media_feedback_);
+        }
+    }
+
+    void pump_m3_video() {
+        if (!media_done_.load()) return;
+        if (media_worker_.joinable()) media_worker_.join();
+        bool success = false;
+        {
+            std::lock_guard<std::mutex> guard(media_mutex_);
+            success = pending_media_success_;
+            media_feedback_ = std::move(pending_media_feedback_);
+        }
+        media_busy_.store(false);
+        media_done_.store(false);
+        if (m3_status_label_) m3_status_label_->setText(media_feedback_);
+        if (success) ttnx::switch_app::open_m3_completed_media();
+    }
+#endif
+
     void start_search() {
         if (search_busy_.load()) return;
         if (home_busy_.load() || channel_busy_.load() || network_busy_.load()) {
@@ -1589,6 +1728,9 @@ private:
         home_detail_rows_.clear();
         search_query_label_ = nullptr;
         search_status_label_ = nullptr;
+#ifdef TTNX_M3_INTEGRATED
+        m3_status_label_ = nullptr;
+#endif
         search_action_button_ = nullptr;
         search_load_more_button_ = nullptr;
         search_results_box_ = nullptr;
@@ -1673,6 +1815,9 @@ private:
             });
 
             search_status_label_ = label(content, "", 20);
+#ifdef TTNX_M3_INTEGRATED
+            m3_status_label_ = label(content, media_feedback_, 18);
+#endif
             label(content,
                   "Press A on any result to toggle its normalized ID and clean canonical URL. Channel results also reveal an explicit Open channel action.",
                   18);
