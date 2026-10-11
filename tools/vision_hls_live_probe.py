@@ -118,6 +118,34 @@ def vision_manifest_url(payload: bytes,expected_id: str) -> str | None:
         return None
 
 
+def hls_url_rejection_category(url: object) -> str:
+    # Exact privacy-preserving source diagnostics, not signed URL logging.
+    if not isinstance(url,str):
+        return "HLS_URL_TYPE_UNSUPPORTED"
+    if len(url)>8192:
+        return "HLS_URL_LENGTH_UNSUPPORTED"
+    if not url.startswith("https://"):
+        return "HLS_URL_SCHEME_UNSUPPORTED"
+    if chr(92) in url or any(ord(c)<33 or ord(c)>126 for c in url):
+        return "HLS_URL_INVALID_CHARACTERS"
+    try:
+        parsed=urllib.parse.urlsplit(url)
+        if not (parsed.hostname or "").endswith(".googlevideo.com"):
+            return "HLS_URL_HOST_POLICY_UNSUPPORTED"
+        if parsed.username or parsed.password or parsed.fragment or parsed.port not in (None,443):
+            return "HLS_URL_AUTHORITY_UNSUPPORTED"
+        if not parsed.path.startswith("/api/manifest/hls_"):
+            return "HLS_URL_PATH_FAMILY_UNSUPPORTED"
+        if not parsed.path.startswith("/api/manifest/hls_playlist/"):
+            return "HLS_URL_MASTER_ROUTE_VARIANT"
+        if any(part.lower() in ("%2f","%2e","%5c") for part in
+               re.findall(r"%[0-9A-Fa-f]{2}",parsed.path)):
+            return "HLS_URL_ESCAPED_PATH_UNSUPPORTED"
+        return "HLS_URL_OTHER_STRUCTURAL_REJECTION"
+    except (TypeError,ValueError,AttributeError):
+        return "HLS_URL_PARSE_FAILED"
+
+
 def classify_hls_source_failure(payload: bytes, expected_id: str) -> str:
     # Enumerated stage only. Never output upstream messages, client tokens,
     # visitorData, arbitrary HTML/JSON, or signed Googlevideo URLs.
@@ -139,7 +167,7 @@ def classify_hls_source_failure(payload: bytes, expected_id: str) -> str:
         url=streaming.get("hlsManifestUrl")
         if not url:
             return "HLS_NOT_OFFERED_BY_PLAYER"
-        return "HLS_DESTINATION_POLICY_REJECTED"
+        return hls_url_rejection_category(url)
     except (TypeError,ValueError,AttributeError,KeyError):
         return "PLAYER_RESPONSE_UNUSABLE"
 
