@@ -12,6 +12,9 @@ namespace ttnx::playback {
 struct HlsPlayerSource {
     std::string video_id;
     std::string master_playlist_url;
+    // Same player response and video identity; approved CDN audio/mp4 AAC
+    // only. Never persist the signed URL in a local HLS manifest/log.
+    std::string external_aac_url;
     std::uint64_t duration_ms{0};
 };
 
