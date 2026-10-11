@@ -1,6 +1,11 @@
 name: M3 offline playback probe (isolated)
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - 'switch/m3_probe/**'
+      - 'Makefile.switch'
+      - '.github/workflows/m3-offline-probe.yml'
   push:
     paths:
       - 'switch/m3_probe/**'
