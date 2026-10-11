@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <functional>
 #include <string>
+#include <cstddef>
 #include <vector>
 
 namespace {
@@ -140,15 +141,19 @@ public:
         const auto flags = mpv_render_context_update(render_);
         if (flags & MPV_RENDER_UPDATE_FRAME) {
             int size[2]{kRenderWidth, kRenderHeight};
-            int stride = kRenderWidth * 4;
+            std::size_t stride = static_cast<std::size_t>(kRenderWidth) * 4;
             mpv_render_param params[] = {
                 {MPV_RENDER_PARAM_SW_SIZE, size},
-                {MPV_RENDER_PARAM_SW_FORMAT, const_cast<char*>("rgba")},
+                {MPV_RENDER_PARAM_SW_FORMAT, const_cast<char*>("rgb0")},
                 {MPV_RENDER_PARAM_SW_STRIDE, &stride},
                 {MPV_RENDER_PARAM_SW_POINTER, pixels_.data()},
                 {MPV_RENDER_PARAM_INVALID, nullptr},
             };
             if (mpv_render_context_render(render_, params) >= 0) {
+                // libmpv's guaranteed "rgb0" format leaves byte 3 undefined.
+                // NanoVG's RGBA upload requires fully opaque alpha.
+                for (std::size_t i = 3; i < pixels_.size(); i += 4)
+                    pixels_[i] = 255;
                 have_frame_ = true;
                 new_frame_ = true;
                 mpv_render_context_report_swap(render_);
