@@ -37,8 +37,8 @@ bool directory(const char* path) {
 }
 bool known_filename(std::string_view file) {
     if(file=="master.m3u8" || file=="video.m3u8" ||
-       file=="audio.m3u8" || file=="v_init.m4s" ||
-       file=="a_init.m4s")return true;
+       file=="audio.m3u8" || file=="external_audio.m4a" ||
+       file=="v_init.m4s" || file=="a_init.m4s")return true;
     // Recognize only our fixed numbered media names: v_00000.ts or
     // v_00000.m4s. No user-supplied filename enters deletion.
     if(file.size()!=10 && file.size()!=11)return false;
@@ -164,6 +164,7 @@ bool SwitchHlsCacheSink::begin(const playback::HlsProbePlan& plan) {
                 !plan.audio_segments->init_segment_url)?"ts":"m4s";
     staged_=true;
     wrote_video_=false;
+    external_audio_bytes_=0;
     return true;
 }
 bool SwitchHlsCacheSink::write_segment(
@@ -176,11 +177,39 @@ bool SwitchHlsCacheSink::write_segment(
     if(!audio)wrote_video_=true;
     return true;
 }
+bool SwitchHlsCacheSink::append_external_aac(std::string_view bytes) {
+    if(!staged_ || bytes.empty() ||
+       bytes.size()>playback::MediaChunkReader::kMaxChunkBytes ||
+       external_audio_bytes_>128ULL*1024*1024 ||
+       bytes.size()>128ULL*1024*1024-external_audio_bytes_)
+        return false;
+    const std::string file=std::string(kPending)+"/external_audio.m4a";
+    auto* out=std::fopen(file.c_str(),"ab");
+    if(!out)return false;
+    const bool okay=std::fwrite(bytes.data(),1,bytes.size(),out)==bytes.size() &&
+                    std::fflush(out)==0 && fsync(fileno(out))==0;
+    const bool closed=std::fclose(out)==0;
+    if(!okay || !closed)return false;
+    external_audio_bytes_+=bytes.size();
+    return true;
+}
+
 bool SwitchHlsCacheSink::publish(const playback::HlsProbePlan& plan) {
     if(!staged_ || !wrote_video_ ||
        plan.video_segments.segments.empty() ||
        (plan.audio_segments && plan.audio_segments->segments.empty()))
         return false;
+    if(plan.selected.direct_media_playlist &&
+       !plan.source.external_aac_url.empty()) {
+        struct stat audio{};
+        const std::string file=std::string(kPending)+"/external_audio.m4a";
+        if(external_audio_bytes_<1024 ||
+           external_audio_bytes_>128ULL*1024*1024 ||
+           lstat(file.c_str(),&audio)!=0 ||
+           !S_ISREG(audio.st_mode) ||
+           static_cast<std::uint64_t>(audio.st_size)!=external_audio_bytes_)
+            return false;
+    }
     if(!persist(std::string(kPending)+"/video.m3u8",
                 playlist_text(plan.video_segments,false,video_ext_=="ts")))return false;
     if(plan.audio_segments &&
@@ -207,6 +236,7 @@ void SwitchHlsCacheSink::abort() noexcept {
     if(staged_)(void)discard_known_directory(kPending);
     staged_=false;
     wrote_video_=false;
+    external_audio_bytes_=0;
 }
 } // namespace ttnx::switch_app
 #endif // TTNX_M3_MEDIA_PLANE
