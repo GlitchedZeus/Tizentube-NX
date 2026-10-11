@@ -32,16 +32,25 @@ public:
         if (!handle_) { message_ = "mpv_create failed"; return false; }
         // A hard-coded SD fixture is the ONLY accepted source. No config,
         // scripts, ytdl hooks, IPC, playlists or arbitrary network streams.
-        mpv_set_option_string(handle_, "config", "no");
-        mpv_set_option_string(handle_, "load-scripts", "no");
-        mpv_set_option_string(handle_, "ytdl", "no");
-        // FFmpeg must not follow nested HLS/network/file references from a
-        // malicious local file. This proof deliberately permits file/pipe only.
-        mpv_set_option_string(handle_, "demuxer-lavf-o", "protocol_whitelist=file,pipe");
-        mpv_set_option_string(handle_, "input-default-bindings", "no");
-        mpv_set_option_string(handle_, "vo", "libmpv");
-        mpv_set_option_string(handle_, "hwdec", "auto");
-        mpv_set_option_string(handle_, "audio-channels", "stereo");
+        // A failure to apply a mandatory safety option is fatal, not an
+        // invitation to run mpv with a permissive default configuration.
+        auto require_option = [this](const char* name, const char* value) {
+            if (mpv_set_option_string(handle_, name, value) >= 0) return true;
+            message_ = std::string("Unsupported safety/player option: ") + name;
+            return false;
+        };
+        if (!require_option("config", "no") ||
+            !require_option("load-scripts", "no") ||
+            !require_option("ytdl", "no") ||
+            !require_option("input-default-bindings", "no") ||
+            // FFmpeg must not follow nested manifests/network references.
+            !require_option("demuxer-lavf-o", "protocol_whitelist=file,pipe") ||
+            !require_option("vo", "libmpv") ||
+            !require_option("hwdec", "auto") ||
+            !require_option("audio-channels", "stereo")) {
+            shutdown();
+            return false;
+        }
         if (mpv_initialize(handle_) < 0) {
             message_ = "mpv_initialize failed";
             shutdown();
@@ -68,7 +77,11 @@ public:
             return false;
         }
         std::fclose(file);
+        // Keep every action constrained to this known local file. The user
+        // cannot supply an arbitrary URL, playlist or media host.
         const char* command[] = {"loadfile", kFixture, "replace", nullptr};
+        have_frame_ = false;
+        new_frame_ = false;
         if (mpv_command(handle_, command) < 0) {
             message_ = "Local playback command failed";
             return false;
@@ -94,6 +107,8 @@ public:
         if (!handle_) return;
         const char* command[] = {"stop", nullptr};
         mpv_command(handle_, command);
+        have_frame_ = false;
+        new_frame_ = false;
         message_ = "Stopped.";
     }
 
