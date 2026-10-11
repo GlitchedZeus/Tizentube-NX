@@ -99,6 +99,62 @@ def identify_media_container(sample: bytes) -> str:
     return "UNRECOGNIZED"
 
 
+def detect_ts_stream_types(sample: bytes) -> set[int]:
+    """Read MPEG-TS PAT+PMT stream type numbers from a 64 KiB sample.
+
+    We do not log packet contents/PIDs or raw video data. A missing/truncated
+    PSI table fails the format proof instead of guessing the codecs.
+    """
+    if identify_media_container(sample)!="MPEG_TS":
+        return set()
+    pmt_pid=None
+    types:set[int]=set()
+    for offset in range(0,len(sample)-187,188):
+        packet=sample[offset:offset+188]
+        if packet[0]!=0x47:
+            return set()
+        pid=((packet[1]&0x1f)<<8)|packet[2]
+        pusi=(packet[1]&0x40)!=0
+        afc=(packet[3]>>4)&3
+        if afc not in (1,3):
+            continue
+        start=4
+        if afc==3:
+            if start>=188:
+                continue
+            start+=1+packet[start]
+        if not pusi or start+1>=188:
+            continue
+        pointer=packet[start]
+        start+=1+pointer
+        if start+3>188:
+            continue
+        payload=packet[start:]
+        section_len=((payload[1]&0x0f)<<8)|payload[2]
+        if section_len<9 or section_len>1021 or len(payload)<3+section_len:
+            continue
+        section=payload[:3+section_len]
+        if pid==0 and section[0]==0 and pmt_pid is None:
+            end=len(section)-4
+            for i in range(8,end-3,4):
+                program=(section[i]<<8)|section[i+1]
+                if program:
+                    pmt_pid=((section[i+2]&0x1f)<<8)|section[i+3]
+                    break
+        elif pid==pmt_pid and section[0]==2:
+            if len(section)<16:
+                continue
+            prog_info=((section[10]&0x0f)<<8)|section[11]
+            pos=12+prog_info
+            end=len(section)-4
+            while pos+5<=end:
+                types.add(section[pos])
+                es_info=((section[pos+3]&0x0f)<<8)|section[pos+4]
+                pos+=5+es_info
+            return types
+    return types
+
+
 def bootstrap_visitor(payload: bytes) -> str | None:
     if not payload or len(payload)>MAX_JSON:
         return None
@@ -316,7 +372,15 @@ def one_source(video_id: str,visitor: str) -> str:
         })
         if len(sample)<12 or sample.startswith((b"<html",b"<!DOCTYPE",b"#EXTM3U")):
             return "HLS_SEGMENT_NOT_MEDIA"
-        return "HLS_SEGMENT_"+identify_media_container(sample)+"_BYTES_OBTAINED"
+        container=identify_media_container(sample)
+        if container=="MPEG_TS":
+            types=detect_ts_stream_types(sample)
+            if 0x1b in types and any(t in types for t in (0x0f,0x11)):
+                return "HLS_MPEG_TS_H264_AAC_STREAMS_VERIFIED"
+            if 0x1b in types:
+                return "HLS_MPEG_TS_H264_ONLY_AUDIO_SEPARATE"
+            return "HLS_MPEG_TS_CODEC_UNVERIFIED"
+        return "HLS_SEGMENT_"+container+"_BYTES_OBTAINED"
     except urllib.error.HTTPError as exc:
         if exc.code==403:
             return stage+"_HTTP_403"
@@ -355,7 +419,7 @@ def main() -> int:
     for video_id in ids:
         result=one_source(video_id,visitor)
         print(f"source={video_id} stage={result}")
-        if result in {"HLS_SEGMENT_MPEG_TS_BYTES_OBTAINED",
+        if result in {"HLS_MPEG_TS_H264_AAC_STREAMS_VERIFIED",
                       "HLS_SEGMENT_ISOBMFF_BYTES_OBTAINED"}:
             print("M3_VISION_HLS_LIVE_REFERENCE=PASS")
             return 0
