@@ -1,6 +1,7 @@
 #include "tizentube_nx/playback/hls_probe.hpp"
 
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <string>
 #include <string_view>
@@ -17,6 +18,8 @@ constexpr const char* kMaster=
     "https://manifest.googlevideo.com/api/manifest/hls_playlist/expiry/123";
 constexpr const char* kVideo=
     "https://manifest.googlevideo.com/api/manifest/hls_variant/video720.m3u8";
+constexpr const char* kDirect=
+    "https://manifest.googlevideo.com/api/manifest/hls_variant/direct-vod";
 constexpr const char* kAudio=
     "https://manifest.googlevideo.com/api/manifest/hls_variant/audio140.m3u8";
 constexpr const char* kSegmentBase=
@@ -43,12 +46,16 @@ std::string media(std::string_view track) {
 struct GuestHttp:net::HttpClient {
     int hits{0};
     bool blocked{false};
+    bool direct{false};
     net::HttpResult perform(const net::HttpRequest& r) override {
         ++hits;
         net::HttpResult response;
         response.ok=true;
         response.response.status_code=blocked?403:200;
-        response.response.body=kPlayer;
+        response.response.body=direct
+            ? std::string(kPlayer).replace(
+                  std::string(kPlayer).find(kMaster),std::strlen(kMaster),kDirect)
+            : kPlayer;
         if(r.method!=net::HttpMethod::Post ||
            r.url!="https://www.youtube.com/youtubei/v1/player?prettyPrint=false")
             response.ok=false;
@@ -74,6 +81,7 @@ struct MediaHttp:net::HttpClient {
             out.ok=false;
         if(hits==fail_on)out.ok=false;
         if(r.url==kMaster)out.response.body=kMasterData;
+        else if(r.url==kDirect)out.response.body=media("v");
         else if(r.url==kVideo) {
             out.response.body=media("v");
             if(protect_video) {
@@ -118,6 +126,23 @@ void full_path() {
     check(yt.hits==1 && cdn.hits==3,
           "one guest player plus three media manifests, no arbitrary network calls");
 }
+void direct_media_vod() {
+    GuestHttp yt;
+    yt.direct=true;
+    MediaHttp cdn;
+    auto session=guest();
+    playback::HlsSourceProbe probe(yt,cdn,session);
+    const auto result=probe.inspect(kId);
+    check(result && result->selected.direct_media_playlist &&
+          result->selected.playlist_url==kDirect &&
+          !result->audio_segments && cdn.hits==1 &&
+          result->video_segments.segments.size()==2,
+          "live-proven direct variant media playlist skips false master GET");
+    check(result && result->selected.width==0 &&
+          result->selected.height==0 && result->selected.fps==0,
+          "direct HLS does not invent dimensions or codec metadata");
+}
+
 void blocked() {
     auto session=guest();
     {
@@ -162,7 +187,7 @@ void blocked() {
 } // namespace
 
 int main() {
-    full_path();blocked();
+    full_path();direct_media_vod();blocked();
     if(errors)std::cerr<<errors<<" HLS source plan failures\n";
     return errors?EXIT_FAILURE:EXIT_SUCCESS;
 }
