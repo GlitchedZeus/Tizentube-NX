@@ -19,6 +19,8 @@ jobs:
         run: python3 -m unittest discover -s tests -p extractor_service_tests.py -v
       - name: Offline live-source preflight safety checks (no network)
         run: python3 -m unittest discover -s tests -p live_media_preflight_tests.py -v
+      - name: Offline VisionOS HLS live-proof safety contracts
+        run: python3 -m unittest discover -s tests -p vision_hls_live_probe_tests.py -v
       - name: Verify isolated M3 offline-probe security contract
         run: python3 -m unittest discover -s tests -p m3_offline_probe_contract_tests.py -v
       - name: Configure
