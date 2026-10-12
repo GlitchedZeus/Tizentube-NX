@@ -117,6 +117,32 @@ int main(){
           "corrupted MP4 container cannot publish even when length plausible");
     check(!stage(Slot::AdaptiveAudio,{}),
           "empty or cancelled audio can never become verified");
+    // Session cache must not accumulate past videos (or interrupted .part
+    // and .previous copies), including after a failed second download.
+    check(SwitchMediaCacheSink::discard_session_media() &&
+          !fs::exists(SwitchMediaCacheSink::kAdaptiveAudio) &&
+          !fs::exists(SwitchMediaCacheSink::kAdaptiveVideo) &&
+          !fs::exists(SwitchMediaCacheSink::kAdaptiveMarker),
+          "clean exit discards both adaptive media files and marker");
+    const fs::path folder=SwitchMediaCacheSink::kFolder;
+    fs::create_directories(folder);
+    {
+        std::ofstream(folder/"active.mp4.part")<<"partial";
+        std::ofstream(folder/"adaptive_audio.m4a.previous")<<"old";
+        std::ofstream(folder/"unrelated-settings.ini")<<"keep";
+        fs::create_directories(folder/"do-not-delete");
+        ttnx::playback::HlsPlaybackLease active;
+        check(active.acquire() &&
+              !SwitchMediaCacheSink::discard_session_media() &&
+              fs::exists(folder/"active.mp4.part"),
+              "active player lease blocks even cleanup of partial media");
+    }
+    check(SwitchMediaCacheSink::discard_session_media() &&
+          !fs::exists(folder/"active.mp4.part") &&
+          !fs::exists(folder/"adaptive_audio.m4a.previous") &&
+          fs::exists(folder/"unrelated-settings.ini") &&
+          fs::exists(folder/"do-not-delete"),
+          "restart sweep removes crash leftovers, preserves unrelated files");
     fs::remove_all("/tmp/ttnx-adaptive-cache-test");
     return errors?EXIT_FAILURE:EXIT_SUCCESS;
 }

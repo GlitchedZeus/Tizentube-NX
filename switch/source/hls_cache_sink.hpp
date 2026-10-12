@@ -26,6 +26,9 @@ public:
                              std::size_t prefix_count) override;
     bool publish(const playback::HlsProbePlan& plan) override;
     void abort() noexcept override;
+    // Delete only our own fixed HLS ready/pending/previous directories,
+    // and only after all libmpv descriptors are closed.
+    [[nodiscard]] static bool discard_session_media() noexcept;
 
 #ifdef TTNX_M3_CACHE_HOST_TEST
     static constexpr const char* kReadyAudioMode=

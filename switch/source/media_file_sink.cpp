@@ -98,6 +98,40 @@ const char* SwitchMediaCacheSink::backup() const noexcept {
 #endif
     return kComplete;
 }
+bool SwitchMediaCacheSink::discard_session_media() noexcept {
+    if(playback::HlsPlaybackLease::is_active())return false;
+    // Never enumerate arbitrary SD contents, remove unknown filenames,
+    // follow symlinks, or touch configuration, logs or emulators.
+    static constexpr const char* names[]={
+        kComplete,kPartial,
+        kAdaptiveVideo,kAdaptiveAudio,kAdaptiveMarker,
+#ifdef TTNX_M3_CACHE_HOST_TEST
+        "/tmp/ttnx-adaptive-cache-test/switch/TizenTube-NX/media-cache/active.mp4.previous",
+        "/tmp/ttnx-adaptive-cache-test/switch/TizenTube-NX/media-cache/adaptive_video.mp4.part",
+        "/tmp/ttnx-adaptive-cache-test/switch/TizenTube-NX/media-cache/adaptive_video.mp4.previous",
+        "/tmp/ttnx-adaptive-cache-test/switch/TizenTube-NX/media-cache/adaptive_audio.m4a.part",
+        "/tmp/ttnx-adaptive-cache-test/switch/TizenTube-NX/media-cache/adaptive_audio.m4a.previous",
+        "/tmp/ttnx-adaptive-cache-test/switch/TizenTube-NX/media-cache/adaptive_verified.txt.part"
+#else
+        "sdmc:/switch/TizenTube-NX/media-cache/active.mp4.previous",
+        "sdmc:/switch/TizenTube-NX/media-cache/adaptive_video.mp4.part",
+        "sdmc:/switch/TizenTube-NX/media-cache/adaptive_video.mp4.previous",
+        "sdmc:/switch/TizenTube-NX/media-cache/adaptive_audio.m4a.part",
+        "sdmc:/switch/TizenTube-NX/media-cache/adaptive_audio.m4a.previous",
+        "sdmc:/switch/TizenTube-NX/media-cache/adaptive_verified.txt.part"
+#endif
+    };
+    bool okay=true;
+    for(const char* path:names) {
+        struct stat entry{};
+        if(lstat(path,&entry)!=0) {
+            if(errno!=ENOENT)okay=false;
+            continue;
+        }
+        if(!S_ISREG(entry.st_mode) || unlink(path)!=0)okay=false;
+    }
+    return okay;
+}
 void SwitchMediaCacheSink::invalidate_adaptive_pair() noexcept {
     // Refuse to invalidate a published marker while libmpv might still
     // use either file. This also protects Replay from a second Search.

@@ -55,6 +55,11 @@ bool known_filename(std::string_view file) {
     return true;
 }
 bool discard_known_directory(const char* path) {
+    // opendir() follows symlinks by default. Verify the target is an actual
+    // directory before touching any path found below it.
+    struct stat root{};
+    if(lstat(path,&root)!=0)return errno==ENOENT;
+    if(!S_ISDIR(root.st_mode))return false;
     auto* directory_stream=opendir(path);
     if(!directory_stream) return errno==ENOENT;
     bool okay=true;
@@ -167,6 +172,21 @@ std::string master_text(const playback::HlsProbePlan& plan) {
 }
 } // namespace
 
+bool SwitchHlsCacheSink::discard_session_media() noexcept {
+    if(playback::HlsPlaybackLease::is_active())return false;
+    // This whitelist is deliberately narrower than the overall app folder.
+    // Do not remove a file/dir with an unexpected name or type.
+    const bool pending=discard_known_directory(kPending);
+    const bool previous=discard_known_directory(kPrevious);
+    const bool ready=discard_known_directory(kReady);
+    if(pending && previous && ready) {
+        // Remove our now-empty HLS root if possible, but never interpret
+        // a non-empty root as permission to recurse outside known entries.
+        if(rmdir(kRoot)!=0 && errno!=ENOENT && errno!=ENOTEMPTY)
+            return false;
+    }
+    return pending && previous && ready;
+}
 bool SwitchHlsCacheSink::begin(const playback::HlsProbePlan& plan) {
     if(playback::HlsPlaybackLease::is_active())return false;
     abort();

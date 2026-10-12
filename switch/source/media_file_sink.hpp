@@ -59,6 +59,10 @@ public:
 #endif
     // Multi-file pair is published only after BOTH downloads completed and
     // each MP4 box structure passed. Never open a partial .part pair.
+    // Session-only media. Fail closed if an active player owns its file
+    // descriptors. Delete only a fixed whitelist of our own temporary
+    // video/audio/marker files (including crashed .part/.previous files).
+    [[nodiscard]] static bool discard_session_media() noexcept;
     static void invalidate_adaptive_pair() noexcept;
     [[nodiscard]] static bool publish_adaptive_pair() noexcept;
     [[nodiscard]] static bool adaptive_pair_valid() noexcept;
