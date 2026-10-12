@@ -78,10 +78,9 @@ HlsCacheState HlsCacheJob::pump() {
             active_.reset();return state_;
         };
         if(aac_total_ && aac_offset_==aac_total_) {
-            if(!sink_.publish(*active_))
-                return failed(HlsCacheFailure::UnableToPublish);
-            state_=HlsCacheState::Ready;
-            active_.reset();
+            // The audio is ready, but no public cache exists until ALL
+            // remaining video segments have been fetched and validated.
+            track_=0;
             return state_;
         }
         if(!aac_reader_ || active_->source.external_aac_url.empty())
@@ -124,11 +123,15 @@ HlsCacheState HlsCacheJob::pump() {
             return state_;
         }
         if(track_==0 && !active_->audio_segments) {
-            if(!active_->source.external_aac_url.empty() && aac_reader_) {
-                track_=2; // download, validate and attach standalone AAC
-                return state_;
-            }
-            if(!muxed_audio_verified_) {
+            if(!active_->source.external_aac_url.empty()) {
+                if(!aac_total_ || aac_offset_!=aac_total_) {
+                    sink_.abort();
+                    state_=HlsCacheState::Failed;
+                    error_=HlsCacheFailure::MissingAudio;
+                    active_.reset();
+                    return state_;
+                }
+            } else if(!muxed_audio_verified_) {
                 sink_.abort();
                 state_=HlsCacheState::Failed;
                 error_=HlsCacheFailure::MissingAudio;
@@ -190,6 +193,22 @@ HlsCacheState HlsCacheJob::pump() {
     bytes_+=bytes.bytes.size();
     if(is_init)init_pending_=false;
     else {++next_segment_;++completed_;}
+    // Validate one real video segment first. If a separately signed AAC
+    // rendition is needed, fetch it before downloading the ENTIRE HLS VOD.
+    // A 403/expired AAC thus aborts after at most the video init + first
+    // segment, not after minutes of useless video and SD writes.
+    if(track_==0 && !is_init && next_segment_==1 &&
+       !active_->audio_segments && aac_total_==0 &&
+       !active_->source.external_aac_url.empty()) {
+        if(!active_->video_segments.init_segment_url && !video_codec_verified_) {
+            sink_.abort();
+            state_=HlsCacheState::Failed;
+            error_=HlsCacheFailure::UnsupportedVideo;
+            active_.reset();
+            return state_;
+        }
+        track_=2;
+    }
     return state_;
 }
 

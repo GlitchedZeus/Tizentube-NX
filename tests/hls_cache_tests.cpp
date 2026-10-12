@@ -188,7 +188,7 @@ void failure_cases() {
             (void)job.pump();
         check(job.state()==playback::HlsCacheState::Failed &&
               job.error()==playback::HlsCacheFailure::UnsupportedVideo &&
-              audio.requests==0 && sink.publishes==0,
+              video.hits==1 && audio.requests==0 && sink.publishes==0,
               "unverified H.264 direct TS rejected before downloading AAC");
     }
     {
@@ -261,6 +261,15 @@ void failure_cases() {
         p.source.external_aac_url=
             "https://r2.googlevideo.com/videoplayback?expire=1&itag=140";
         check(job.start(p),"separate AAC+direct HLS plan stages");
+        (void)job.pump();  // HLS initialization
+        (void)job.pump();  // first video segment (no public cache)
+        check(video.hits==2 && audio.requests==0 &&
+              job.downloading_external_aac() && sink.publishes==0,
+              "same-response AAC is scheduled immediately after first video segment");
+        (void)job.pump();  // first separate AAC range
+        check(audio.requests==1 && video.hits==2 &&
+              sink.audio_appends==1 && sink.publishes==0,
+              "signed AAC fetched before remaining video, never prematurely published");
         for(int i=0;i<12 && job.state()==playback::HlsCacheState::Fetching;++i)
             (void)job.pump();
         check(job.state()==playback::HlsCacheState::Ready &&
@@ -286,8 +295,8 @@ void failure_cases() {
             (void)job.pump();
         check(job.state()==playback::HlsCacheState::Failed &&
               job.error()==playback::HlsCacheFailure::MediaFetch &&
-              sink.publishes==0 && sink.aborts>0,
-              "AAC 403 aborts cached video, not silently published");
+              video.hits==2 && sink.publishes==0 && sink.aborts>0,
+              "AAC 403 aborts after only video init+first segment, no wasted full clip");
     }
     {
         FakeTransport video;
@@ -327,7 +336,7 @@ void failure_cases() {
         check(job.state()==playback::HlsCacheState::Failed &&
               job.error()==playback::HlsCacheFailure::MediaFetch &&
               sink.publishes==0 && sink.aborts>0 && audio.requests==2,
-              "403 on second AAC range rolls back fully staged HLS video");
+              "403 on second AAC range cancels before full-video acquisition");
     }
     {
         FakeTransport transport;transport.fail_after=2;

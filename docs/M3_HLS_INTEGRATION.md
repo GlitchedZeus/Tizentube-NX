@@ -262,3 +262,16 @@ observation. A long suspend counts as at most one bounded tick, while
 roughly four seconds of active missing-audio observations still fail
 closed. Host regressions cover clock regression, long suspend, delayed
 AAC selection, failure latching and stop/replay reset.
+
+### Efficient separately signed AAC acquisition
+
+For the real-world direct HLS video-only path, the cache now validates the
+video init and first media segment, then fetches the independently signed
+AAC MP4 **before** downloading the remainder of the video. The old ordering
+waited until all HLS video segments were downloaded to find out that
+external audio was blocked or expired. An early AAC 403 now rolls back
+with at most one video media segment and its optional init downloaded,
+without wasting a full clip. The cache still publishes only after every
+remaining H.264 video segment and the complete AAC are present. A TS
+codec mismatch still fails before opening the AAC URL. Tests verify the
+transfer ordering, cancellation, late failures and no premature publish.
