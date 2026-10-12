@@ -2,6 +2,7 @@
 #include "hls_cache_sink.hpp"
 #include "tizentube_nx/playback/hls_event_playlist.hpp"
 #include "tizentube_nx/playback/hls_playback_lease.hpp"
+#include "tizentube_nx/playback/aac_mp4_structure.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -74,6 +75,31 @@ bool discard_known_directory(const char* path) {
     }
     closedir(directory_stream);
     return okay && rmdir(path)==0;
+}
+// A completed HTTP 206 transfer and exact file length do not prove that
+// external AAC is a usable MP4 container. Stream bounded top-level boxes
+// from the closed SD file before the entire HLS clip becomes visible.
+// This intentionally does not claim codec decode or A/V synchronization.
+bool valid_external_aac(const std::string& path,std::uint64_t expected) {
+    playback::AacMp4Structure structure;
+    if(!structure.begin(expected,128ULL*1024*1024))return false;
+    auto* file=std::fopen(path.c_str(),"rb");
+    if(!file)return false;
+    char buffer[65536];
+    std::uint64_t total=0;
+    bool valid=true;
+    while(total<expected) {
+        const auto wanted=static_cast<std::size_t>(
+            std::min<std::uint64_t>(sizeof(buffer),expected-total));
+        const auto got=std::fread(buffer,1,wanted,file);
+        if(got!=wanted ||
+           !structure.append(std::string_view(buffer,got))) {
+            valid=false;break;
+        }
+        total+=got;
+    }
+    if(std::fclose(file)!=0)valid=false;
+    return valid && total==expected && structure.complete();
 }
 bool persist(const std::string& path,std::string_view bytes) {
     auto* handle=std::fopen(path.c_str(),"wb");
@@ -260,7 +286,8 @@ bool SwitchHlsCacheSink::publish(const playback::HlsProbePlan& plan) {
            external_audio_bytes_>128ULL*1024*1024 ||
            lstat(file.c_str(),&audio)!=0 ||
            !S_ISREG(audio.st_mode) ||
-           static_cast<std::uint64_t>(audio.st_size)!=external_audio_bytes_)
+           static_cast<std::uint64_t>(audio.st_size)!=external_audio_bytes_ ||
+           !valid_external_aac(file,external_audio_bytes_))
             return false;
     }
     // The incomplete/event timeline is never exposed as a finished VOD.

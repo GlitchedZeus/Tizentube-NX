@@ -43,6 +43,23 @@ std::string read(const fs::path& file) {
     return std::string(std::istreambuf_iterator<char>(stream),
                        std::istreambuf_iterator<char>());
 }
+std::string valid_external_aac() {
+    // Structurally complete synthetic container. This deliberately makes
+    // no claim about real encoded AAC payload or mpv's decoding ability.
+    std::string bytes(2048,'A');
+    auto box=[&](std::size_t at,std::uint32_t size,const char* tag) {
+        for(int i=3;i>=0;--i) {
+            bytes[at+i]=static_cast<char>(size&255);
+            size>>=8;
+        }
+        bytes.replace(at+4,4,tag);
+    };
+    box(0,24,"ftyp");
+    bytes.replace(8,4,"isom");
+    box(24,16,"moov");
+    box(40,2008,"mdat");
+    return bytes;
+}
 bool fully_stage(switch_app::SwitchHlsCacheSink& sink,
                  const playback::HlsProbePlan& p) {
     if(!sink.begin(p))return false;
@@ -153,7 +170,7 @@ int main() {
         paired.source.external_aac_url=
             "https://r1.googlevideo.com/videoplayback?itag=140";
         switch_app::SwitchHlsCacheSink sink;
-        const std::string signed_audio_file(2048,'A');
+        const auto signed_audio_file=valid_external_aac();
         ck(sink.begin(paired) &&
            sink.write_segment(false,false,0,"TS-VIDEO-SEGMENT-A") &&
            sink.write_segment(false,false,1,"TS-VIDEO-SEGMENT-B") &&
@@ -182,7 +199,7 @@ int main() {
         paired.source.external_aac_url=
             "https://r1.googlevideo.com/videoplayback?itag=140";
         switch_app::SwitchHlsCacheSink sink;
-        const std::string aac(2048,'A');
+        const auto aac=valid_external_aac();
         ck(sink.begin(paired) &&
            sink.write_segment(false,false,0,"TS-FIRST") &&
            sink.append_external_aac(aac) &&
@@ -207,6 +224,31 @@ int main() {
            fs::exists(base/"ready/master.m3u8") &&
            !fs::exists(base/"pending"),
            "partial event timeline stripped before publishing final VOD");
+    }
+    {
+        // A full-length cache file can still contain corrupted MP4 framing.
+        // Reject it without replacing the previously published A/V clip.
+        auto paired=plan();
+        paired.selected.direct_media_playlist=true;
+        paired.audio_segments.reset();
+        paired.selected.audio_playlist_url.clear();
+        paired.video_segments.init_segment_url.reset();
+        paired.source.external_aac_url=
+            "https://r1.googlevideo.com/videoplayback?itag=140";
+        auto corrupted=valid_external_aac();
+        corrupted.replace(28,4,"free"); // moov replaced; length unchanged
+        switch_app::SwitchHlsCacheSink sink;
+        ck(sink.begin(paired) &&
+           sink.write_segment(false,false,0,"TS-VIDEO-SEGMENT-A") &&
+           sink.write_segment(false,false,1,"TS-VIDEO-SEGMENT-B") &&
+           sink.append_external_aac(corrupted) &&
+           !sink.publish(paired),
+           "complete-length but malformed AAC never becomes playable");
+        sink.abort();
+        ck(read(base/"ready/audio_mode.txt")=="external\\n" &&
+           read(base/"ready/external_audio.m4a")==valid_external_aac() &&
+           !fs::exists(base/"pending"),
+           "corrupt replacement leaves prior verified AAC and clip intact");
     }
     {
         // A short AAC download must never replace the previous good clip.
