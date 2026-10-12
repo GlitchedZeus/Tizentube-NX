@@ -9,7 +9,7 @@ enum class M3Stage {
 };
 enum class M3Event {
     Start, Ready, Pass, Fail, Refused, Selected, Begin, End, Cancel,
-    Retry, Status, Progress, Loaded, Restart, NoVideo, NoAudio,
+    Retry, Status, Progress, Redirect, Loaded, Restart, NoVideo, NoAudio,
     Frame, Blank, Presented, Draw, Seek, Pause, Stop, Error, Warning
 };
 class M3Diagnostics {

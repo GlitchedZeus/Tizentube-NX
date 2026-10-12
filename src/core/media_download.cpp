@@ -14,7 +14,7 @@ bool MediaDownloadJob::start(std::string signed_url) {
     last_http_status_ = 0;
     received_ = 0;
     total_ = 0;
-    transient_attempts_=retry_delay_ms_=0;
+    transient_attempts_=retry_delay_ms_=redirect_hops_total_=0;
     if (!is_reviewable_googlevideo_https_url(signed_url)) {
         error_ = MediaDownloadError::UnsafeUrl;
         state_ = MediaDownloadState::Error;
@@ -42,6 +42,7 @@ MediaDownloadState MediaDownloadJob::pump() {
     const auto bytes = reader_.read(url_, *range);
     last_chunk_failure_ = bytes.failure;
     last_http_status_ = bytes.http_status;
+    redirect_hops_total_ += bytes.redirect_hops;
     if (!bytes.ok()) {
         // Signed URLs are never logged or altered on retry. Only a dropped
         // transport, throttling or explicitly transient 5xx HTTP may retry.

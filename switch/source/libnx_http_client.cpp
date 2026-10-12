@@ -588,18 +588,13 @@ net::HttpResult LibnxMediaChunkTransport::perform(const net::HttpRequest& reques
         result.error = "M3 media host rejected by strict URL parser.";
         return result;
     }
-    // perform_single_request independently repeats media-host policy at DNS.
-    // Horizon SSL retains CA, hostname and date checks. No redirect follows.
-    result = perform_single_request(request, *parsed,
-                                    normalized_timeout(request.timeout_ms),
-                                    true);
-    if (result.response.status_code >= 300 &&
-        result.response.status_code < 400) {
-        result.ok = false;
-        result.failure_stage = net::HttpFailureStage::Policy;
-        result.error = "M3 media redirect rejected without second DNS lookup.";
-    }
-    return result;
+    // Each call is a single TLS request and repeats pre-DNS media host
+    // checks, hostname/CA verification and response size caps. Never auto-
+    // follow Location here: MediaChunkReader decides whether the next
+    // approved request is permissible and preserves the original Range.
+    return perform_single_request(request, *parsed,
+                                  normalized_timeout(request.timeout_ms),
+                                  true);
 }
 
 net::HttpResult LibnxUmpChunkTransport::perform(const net::HttpRequest& request) {

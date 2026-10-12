@@ -51,6 +51,7 @@ public:
     [[nodiscard]] std::uint64_t total_bytes() const noexcept { return total_; }
     [[nodiscard]] unsigned retry_delay_ms() const noexcept {return retry_delay_ms_;}
     [[nodiscard]] unsigned transient_attempts() const noexcept {return transient_attempts_;}
+    [[nodiscard]] unsigned redirect_hops_total() const noexcept {return redirect_hops_total_;}
 private:
     void fail(MediaDownloadError error) noexcept;
     MediaChunkReader& reader_;
@@ -64,6 +65,7 @@ private:
     std::uint64_t total_{0};
     bool sink_open_{false};
     unsigned transient_attempts_{0},retry_delay_ms_{0};
+    unsigned redirect_hops_total_{0};
 };
 
 } // namespace ttnx::playback

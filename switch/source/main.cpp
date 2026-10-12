@@ -1603,6 +1603,7 @@ private:
                                         ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Cache,job.state()==ttnx::playback::MediaDownloadState::Complete?ttnx::switch_app::M3Event::Pass:ttnx::switch_app::M3Event::Fail,phase,static_cast<int>(sink.last_storage_error()),sink.last_storage_errno());
                                         ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Transfer,ttnx::switch_app::M3Event::End,phase,static_cast<int>(job.error())*1000+job.last_http_status(),static_cast<std::int64_t>(job.bytes_received()));
                                         ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Transfer,ttnx::switch_app::M3Event::Status,phase,static_cast<int>(job.last_chunk_failure()),static_cast<std::int64_t>(job.total_bytes()));
+                                        ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Transfer,ttnx::switch_app::M3Event::Redirect,phase,job.redirect_hops_total(),0);
                                         return job.state()==
                                             ttnx::playback::MediaDownloadState::Complete;
                                     };

@@ -39,6 +39,7 @@ const char* event_name(M3Event code) noexcept {
         case M3Event::End:return "END";
         case M3Event::Cancel:return "CANCEL";
         case M3Event::Retry:return "RETRY";
+        case M3Event::Redirect:return "REDIRECT";
         case M3Event::Status:return "STATUS";
         case M3Event::Progress:return "PROGRESS";
         case M3Event::Loaded:return "LOADED";
