@@ -26,6 +26,9 @@ def run(video: pathlib.Path,audio: pathlib.Path)->bool:
     mpv.mpv_get_property.argtypes=[
         ctypes.c_void_p,ctypes.c_char_p,ctypes.c_int,ctypes.c_void_p]
     mpv.mpv_get_property.restype=ctypes.c_int
+    mpv.mpv_get_property_string.argtypes=[ctypes.c_void_p,ctypes.c_char_p]
+    mpv.mpv_get_property_string.restype=ctypes.c_void_p
+    mpv.mpv_free.argtypes=[ctypes.c_void_p]
     mpv.mpv_terminate_destroy.argtypes=[ctypes.c_void_p]
     handle=mpv.mpv_create()
     if not handle:return False
@@ -62,12 +65,16 @@ def run(video: pathlib.Path,audio: pathlib.Path)->bool:
         audio_selected=False
         for i in range(min(count.value,16)):
             prefix=f"track-list/{i}/"
+            raw=mpv.mpv_get_property_string(handle,(prefix+"type").encode())
+            if not raw:continue
+            try:
+                is_audio=ctypes.string_at(raw)==b"audio"
+            finally:
+                mpv.mpv_free(raw)
             sel=ctypes.c_int()
             rc=mpv.mpv_get_property(handle,(prefix+"selected").encode(),3,
                                     ctypes.byref(sel))
-            if rc>=0 and sel.value:
-                # Host proof also requires ffprobe to identify one video
-                # and one AAC audio source in the calling integration test.
+            if is_audio and rc>=0 and sel.value:
                 audio_selected=True
         if not audio_selected or command("seek","30","absolute")<0:return False
         if command("cycle","pause")<0:return False
