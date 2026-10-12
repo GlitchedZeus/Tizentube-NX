@@ -135,7 +135,13 @@ MediaReadResult MediaChunkReader::read(std::string_view signed_media_url,
     // policy at socket-connect time. NEVER inject the M2 browse-only client.
     auto fetched = transport_.perform(request);
     if (!fetched.ok) {
-        out.failure = MediaReadFailure::TransportError;
+        // A backend may classify an upstream 403/429/503 as !ok. Preserve
+        // only the numeric HTTP category so retries can distinguish a
+        // permanent refusal from a dropped socket, without leaking tokens.
+        out.http_status = fetched.response.status_code;
+        out.failure = out.http_status>=400
+            ?MediaReadFailure::UnexpectedStatus
+            :MediaReadFailure::TransportError;
         return out;
     }
     const auto& r = fetched.response;

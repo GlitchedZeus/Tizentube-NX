@@ -115,6 +115,19 @@ void response_contract() {
         test(x, MediaReadFailure::TransportError, "network errors fail without URL leak");
     }
     {
+        auto x=baseline();x.ok=false;x.response.status_code=403;
+        test(x,MediaReadFailure::UnexpectedStatus,
+             "HTTP 403 passed through !ok is permanent, not a dropped socket");
+    }
+    {
+        auto x=baseline();x.ok=false;x.response.status_code=503;
+        fake.reply=x;
+        const auto out=chunks.read(kUrl,{0,4});
+        check(!out.ok() && out.failure==MediaReadFailure::UnexpectedStatus &&
+              out.http_status==503,
+              "HTTP 503 preserved numerically for bounded transient retry");
+    }
+    {
         auto x = baseline(); x.response.status_code = 302;
         x.response.headers.push_back({"Location","https://accounts.nintendo.com"});
         test(x, MediaReadFailure::RedirectRejected, "redirect denied (even if response body looks like data)");

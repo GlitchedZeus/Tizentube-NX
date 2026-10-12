@@ -366,3 +366,9 @@ A failed retry sequence aborts staged media and preserves the previous
 published clip. Host regressions cover one-off socket drops, AAC throttling,
 permanent refusals and exhausted 503 budgets. An expired signed URL
 still requires a fresh authorized source; no token bypass is attempted.
+
+The ranged-AAC transport also preserves the numeric HTTP status when its
+socket adapter reports `!ok`. This prevents a backend-reported 403 from
+being misclassified as a dropped connection, while allowing a bounded
+retry on an actual 503. Numeric status is never accompanied by the
+signed CDN URL in the UI or logs.
