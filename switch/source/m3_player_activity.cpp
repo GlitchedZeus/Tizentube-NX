@@ -28,7 +28,8 @@ std::uint64_t playback_clock_ms() {
 }
 class CachedMpv {
 public:
-    explicit CachedMpv(bool hls=false):pixels_(kWidth*kHeight*4,0),use_hls_(hls){}
+    explicit CachedMpv(bool hls=false,bool adaptive=false):
+        pixels_(kWidth*kHeight*4,0),use_hls_(hls),use_adaptive_(adaptive){}
     ~CachedMpv() { close(); }
     bool init() {
         if (handle_) return renderer_!=nullptr;
@@ -62,6 +63,13 @@ public:
             !required("audio-channels","stereo")) {
             close();return false;
         }
+        if(use_adaptive_) {
+            if(!SwitchMediaCacheSink::adaptive_pair_valid() ||
+               !attach_external_aac(SwitchMediaCacheSink::kAdaptiveAudio)) {
+                status_="Adaptive H.264/AAC files incomplete or unverified";
+                close();return false;
+            }
+        }
         if(use_hls_) {
             // Every atomically published HLS clip declares its audio topology.
             char mode[24]{};
@@ -88,7 +96,7 @@ public:
                 if(size_file)std::fclose(size_file);
                 if(length<1024 || length>128L*1024*1024 ||
                    !exact || expected!=static_cast<unsigned long long>(length) ||
-                   !attach_external_aac()) {
+                   !attach_external_aac(SwitchHlsCacheSink::kReadyExternalAac)) {
                     status_="Required external AAC missing or unsupported by mpv";
                     close();return false;
                 }
@@ -111,12 +119,12 @@ public:
         status_="Ready: local verified cache";
         return true;
     }
-    bool attach_external_aac() {
+    bool attach_external_aac(const char* path) {
         // No pseudo-option suffixes: use a typed array so sdmc:/ remains
         // ONE literal local path, not a colon-delimited list.
         mpv_node one{};
         one.format=MPV_FORMAT_STRING;
-        one.u.string=const_cast<char*>(SwitchHlsCacheSink::kReadyExternalAac);
+        one.u.string=const_cast<char*>(path);
         mpv_node_list elements{};
         elements.num=1;
         elements.values=&one;
@@ -134,7 +142,8 @@ public:
         if (!renderer_ && !init())return false;
         const char* path=use_hls_
             ? SwitchHlsCacheSink::kReadyMaster
-            : SwitchMediaCacheSink::kComplete;
+            : use_adaptive_?SwitchMediaCacheSink::kAdaptiveVideo:
+                           SwitchMediaCacheSink::kComplete;
         std::FILE* file=std::fopen(path,"rb");
         if (!file) {status_="Cache missing: retry video from Search";return false;}
         bool ok=std::fseek(file,0,SEEK_END)==0;
@@ -154,6 +163,7 @@ public:
             status_="mpv rejected completed cache";return false;
         }
         status_=use_hls_?"Opening fully cached HLS + AAC playlists...":
+            use_adaptive_?"Opening video MP4 plus verified AAC file...":
                           "Loading completed local MP4...";
         return true;
     }
@@ -204,14 +214,14 @@ public:
             const mpv_event* e=mpv_wait_event(handle_,0);
             if(!e || e->event_id==MPV_EVENT_NONE)break;
             if(e->event_id==MPV_EVENT_FILE_LOADED) {
-                if(use_hls_ && audio_gate_.state()==
+                if((use_hls_||use_adaptive_) && audio_gate_.state()==
                    playback::AudioSelectionGate::State::Idle)
                     audio_gate_.begin(playback_clock_ms());
                 status_="Local media loaded; validating selected AAC audio...";
-                if(!use_hls_)status_="Local MP4 loaded";
+                if(!use_hls_&&!use_adaptive_)status_="Local MP4 loaded";
             }
             if(e->event_id==MPV_EVENT_PLAYBACK_RESTART) {
-                if(use_hls_) {
+                if(use_hls_||use_adaptive_) {
                     if(audio_gate_.state()!=
                        playback::AudioSelectionGate::State::Checking)
                         audio_gate_.begin(playback_clock_ms());
@@ -227,12 +237,13 @@ public:
                          "Video stopped or finished";
             }
         }
-        if(use_hls_ && audio_gate_.state()==
+        if((use_hls_||use_adaptive_) && audio_gate_.state()==
                        playback::AudioSelectionGate::State::Checking) {
             const auto outcome=audio_gate_.observe(
                 selected_audio_track(),playback_clock_ms());
             if(outcome==playback::AudioSelectionGate::State::Ready) {
-                status_="Playing: HLS video with selected AAC track";
+                status_=use_adaptive_?"Playing: H.264 MP4 with selected AAC":
+                                      "Playing: HLS video with selected AAC track";
             } else if(outcome==playback::AudioSelectionGate::State::Missing) {
                 audio_failure_latched_=true;
                 status_="No selected AAC audio after initialization; playback stopped";
@@ -296,7 +307,7 @@ private:
     mpv_handle* handle_{nullptr};
     mpv_render_context* renderer_{nullptr};
     std::vector<unsigned char> pixels_;
-    bool use_hls_{false};
+    bool use_hls_{false},use_adaptive_{false};
     std::string status_{"Starting libmpv..."};
     bool have_frame_{false},new_frame_{false};
     playback::AudioSelectionGate audio_gate_{};
@@ -340,15 +351,18 @@ void add_button(brls::Box* row,const char* title,std::function<void()> action) {
 }
 class M3Activity final:public brls::Activity {
 public:
-    explicit M3Activity(bool hls):player_(hls),hls_(hls){active_=this;}
+    explicit M3Activity(bool hls,bool adaptive=false):
+        player_(hls,adaptive),hls_(hls),adaptive_(adaptive){active_=this;}
     ~M3Activity() override {active_=nullptr;player_.stop();}
     brls::View* createContentView() override {
         auto* root=new brls::Box(brls::Axis::COLUMN);
         root->setPadding(12,20,12,20);
         label(root,hls_?"TizenTube NX | M3 HLS Playback":
-                        "TizenTube NX | M3 Normal Video",24);
+                   adaptive_?"TizenTube NX | Adaptive H.264 + AAC":
+                             "TizenTube NX | M3 Normal Video",24);
         label(root,hls_?"Completed offline HLS segments + synchronized AAC":
-                        "Self-contained H.264/AAC MP4 from verified SD cache",15);
+                   adaptive_?"Verified local video MP4 and separate AAC":
+                             "Self-contained H.264/AAC MP4 from verified SD cache",15);
         root->addView(new VideoFrame(player_));
         status_=label(root,player_.status(),17);
         info_=label(root,player_.stats(),15);
@@ -391,7 +405,7 @@ private:
     }
     static M3Activity* active_;
     CachedMpv player_;
-    bool hls_{false};
+    bool hls_{false},adaptive_{false};
     brls::Label* status_{nullptr};
     brls::Label* info_{nullptr};
     unsigned ticks_{0};
@@ -404,6 +418,9 @@ void open_m3_completed_media(){
 }
 void open_m3_completed_hls(){
     brls::Application::pushActivity(new M3Activity(true));
+}
+void open_m3_completed_adaptive(){
+    brls::Application::pushActivity(new M3Activity(false,true));
 }
 void tick_m3_player(){M3Activity::tick_current();}
 } // namespace ttnx::switch_app

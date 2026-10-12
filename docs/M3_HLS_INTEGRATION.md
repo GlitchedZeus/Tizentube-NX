@@ -592,3 +592,7 @@ or an active libmpv lease must never present a playable pair. The previous
 muxed MP4 slot and HLS cache remain separate, with all paths fixed beneath
 the app-owned disposable media cache. Host regressions cover complete pairs,
 partial audio/video, corrupt structure, and active decoder lease.
+
+### Native adaptive MP4 and separate AAC playback
+
+After rejecting an unsupported HLS playlist, VisionOS returns approved normal-video H.264 and AAC formats. The media worker now downloads the video MP4 and AAC MP4 as separately bounded signed HTTPS range transfers, validates both local containers, atomically publishes a two-file ready marker and opens them with libmpv using its typed local audio-files option. Both HLS and adaptive sources require actual AAC track selection before reporting playback success. Signed URLs stay in the media worker; no web player, Shorts, ad traffic, or arbitrary destinations are allowed. Failures preserve the HLS and direct-source stage instead of masking all errors as missing muxed MP4.

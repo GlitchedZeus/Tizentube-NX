@@ -7,6 +7,7 @@ namespace ttnx::switch_app {
 // pass native extraction, range transport and cache completion gates.
 void open_m3_completed_media();
 void open_m3_completed_hls();
+void open_m3_completed_adaptive();
 void tick_m3_player();
 
 } // namespace ttnx::switch_app
