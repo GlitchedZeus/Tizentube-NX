@@ -31,6 +31,8 @@ jobs:
         run: python3 -m unittest discover -s tests -p local_av_demux_tests.py -v
       - name: M3 integrated Switch video-loop ownership and frame-latch contract
         run: python3 -m unittest discover -s tests -p m3_renderer_contract_tests.py -v
+      - name: M3 ephemeral playback cache and concurrent startup contracts
+        run: python3 -m unittest discover -s tests -p m3_ephemeral_cache_contract_tests.py -v
       - name: Offline M3 hardware log triage and privacy regressions
         run: python3 -m unittest discover -s tests -p m3_diagnostics_triage_tests.py -v
       - name: Verify isolated M3 offline-probe security contract

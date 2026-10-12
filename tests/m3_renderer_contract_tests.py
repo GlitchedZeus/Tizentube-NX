@@ -36,6 +36,10 @@ class M3NativeRendererContract(unittest.TestCase):
         self.assertEqual(simulate(False),0.0)  # reproduced invisible activity
         self.assertEqual(simulate(True),1.0)   # repaired visible activity
 
+    def test_hardware_accepted_video_has_no_calibration_overlay(self):
+        view=SOURCE.split("class VideoFrame final",1)[1].split("brls::Label* label",1)[0]
+        self.assertNotIn("const NVGcolor colors[]",view)
+        self.assertIn("nvgFillPaint(vg,nvgImagePattern",view)
     def test_video_has_independent_presentation_watchdog(self):
         self.assertIn("player_.frames_rendered()>=90",SOURCE)
         self.assertIn("video_->draw_count()==0",SOURCE)

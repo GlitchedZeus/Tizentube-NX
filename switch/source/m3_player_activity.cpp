@@ -495,18 +495,9 @@ public:
             nvgFillPaint(vg,nvgImagePattern(vg,vx,vy,vw,vh,0,image_,1));
             nvgFill(vg);
         }
-        // ALWAYS overlay calibration bars AFTER the video image. If the
-        // player's output is black but these bars show, NanoVG works and
-        // we should inspect the decoded RGB/texture-upload checkpoints.
-        const float strip=std::min(w*0.15f,125.0f);
-        const NVGcolor colors[]={nvgRGB(235,55,60),
-                                 nvgRGB(40,235,80),
-                                 nvgRGB(40,95,240)};
-        for(int i=0;i<3;++i) {
-            nvgBeginPath(vg);
-            nvgRect(vg,x+8+i*(strip/3.0f),y+8,strip/3.0f-1,14);
-            nvgFillColor(vg,colors[i]);nvgFill(vg);
-        }
+        // The user accepted real visible video on Switch. Leave the
+        // production picture unobstructed; retain numeric frame/texture
+        // diagnostics for future faults instead of RGB calibration bars.
         if(draw_calls_<=2 || draw_calls_%120==0)
             M3Diagnostics::record(M3Stage::Ui,M3Event::Draw,
                 static_cast<std::int64_t>(draw_calls_),
