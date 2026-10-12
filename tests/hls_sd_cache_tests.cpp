@@ -245,7 +245,7 @@ int main() {
            !sink.publish(paired),
            "complete-length but malformed AAC never becomes playable");
         sink.abort();
-        ck(read(base/"ready/audio_mode.txt")=="external\\n" &&
+        ck(read(base/"ready/audio_mode.txt")=="external\n" &&
            read(base/"ready/external_audio.m4a")==valid_external_aac() &&
            !fs::exists(base/"pending"),
            "corrupt replacement leaves prior verified AAC and clip intact");
