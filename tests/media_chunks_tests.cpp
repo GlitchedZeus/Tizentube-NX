@@ -219,6 +219,111 @@ void response_contract() {
     }
 }
 
+
+struct ScriptedRedirect final : MediaChunkTransport {
+    std::vector<net::HttpRequest> seen;
+    std::vector<net::HttpResult> replies;
+    net::HttpResult perform(const net::HttpRequest& req) override {
+        seen.push_back(req);
+        if(seen.size()>replies.size())return {};
+        return replies[seen.size()-1];
+    }
+};
+net::HttpResult moved(std::string location,int status=302) {
+    net::HttpResult r;
+    r.response.status_code=status;
+    r.response.headers={{"Location",std::move(location)}};
+    // Native HTTPS transport sets ok=false for redirects; this is expected.
+    return r;
+}
+void redirected_range_contract() {
+    const auto second=std::string("https://r2.googlevideo.com/videoplayback?sig=safe2");
+    {
+        ScriptedRedirect t;
+        t.replies={moved(second),response("HELLO","bytes 4-8/100")};
+        MediaChunkReader reader(t);
+        const auto r=reader.read(kUrl,{4,8});
+        check(r.ok() && r.bytes=="HELLO" && r.redirect_hops==1 &&
+              r.resource_size==100 && r.http_status==206,
+              "reviewed 302 follows with exact original range and final 206");
+        check(t.seen.size()==2 && t.seen[0].url==kUrl &&
+              t.seen[1].url==second &&
+              t.seen[0].headers.size()==3 && t.seen[1].headers.size()==3 &&
+              t.seen[0].headers[0].value=="bytes=4-8" &&
+              t.seen[1].headers[0].value=="bytes=4-8",
+              "redirect changes only approved destination; preserves range/no credentials");
+    }
+    {
+        ScriptedRedirect t;
+        t.replies={moved("/videoplayback?sig=same"),response("HELLO","bytes 0-4/100")};
+        MediaChunkReader reader(t);
+        const auto r=reader.read(kUrl,{0,4});
+        check(r.ok() && r.redirect_hops==1 && t.seen.size()==2 &&
+              t.seen[1].url=="https://r1---sn-example.googlevideo.com/videoplayback?sig=same",
+              "absolute-path redirect inherits exactly approved host");
+    }
+    for(const auto& bad : {
+        "https://accounts.nintendo.com/videoplayback",
+        "https://evil.test/videoplayback",
+        "https://r2.googlevideo.com.evil.test/videoplayback",
+        "https://u@r2.googlevideo.com/videoplayback",
+        "https://r2.googlevideo.com:444/videoplayback",
+        "https://r2.googlevideo.com/other",
+        "http://r2.googlevideo.com/videoplayback",
+        "//r2.googlevideo.com/videoplayback",
+        "../videoplayback",
+        "https://r2.googlevideo.com/videoplayback#frag",
+        "https://r2.googlevideo.com/videoplayback\r\nEvil: 1",
+    }) {
+        ScriptedRedirect t;t.replies={moved(bad)};
+        MediaChunkReader reader(t);
+        const auto out=reader.read(kUrl,{0,4});
+        check(!out.ok() && out.failure==MediaReadFailure::RedirectRejected &&
+              t.seen.size()==1 && out.bytes.empty(),
+              "untrusted Location rejected before any new DNS");
+    }
+    {
+        ScriptedRedirect t;t.replies={moved(second),moved(kUrl)};
+        MediaChunkReader reader(t);
+        const auto out=reader.read(kUrl,{0,4});
+        check(out.failure==MediaReadFailure::RedirectRejected &&
+              t.seen.size()==2,"cyclic redirect blocked");
+    }
+    {
+        ScriptedRedirect t;
+        const auto third=std::string("https://r3.googlevideo.com/videoplayback?sig=3");
+        t.replies={moved(second),moved(third),moved("https://r4.googlevideo.com/videoplayback?sig=4")};
+        MediaChunkReader reader(t);
+        const auto out=reader.read(kUrl,{0,4});
+        check(out.failure==MediaReadFailure::RedirectLimit &&
+              out.http_status==302 && t.seen.size()==3 &&
+              out.redirect_hops==2,"max two approved redirect hops, no third outbound call");
+    }
+    {
+        ScriptedRedirect t;
+        t.replies={moved(second),response("WHOLE","bytes 0-4/100")};
+        t.replies[1].response.status_code=200;
+        MediaChunkReader reader(t);
+        const auto out=reader.read(kUrl,{0,4});
+        check(out.failure==MediaReadFailure::UnexpectedStatus &&
+              t.seen.size()==2,"redirect never permits full-body HTTP 200");
+    }
+    {
+        ScriptedRedirect t;t.replies={moved(second)};
+        t.replies[0].response.headers.push_back({"Location",second});
+        MediaChunkReader reader(t);
+        check(reader.read(kUrl,{0,4}).failure==MediaReadFailure::RedirectRejected &&
+              t.seen.size()==1,"duplicate Location denied");
+    }
+    {
+        ScriptedRedirect t;t.replies={moved(second)};
+        t.replies[0].response.headers.clear();
+        MediaChunkReader reader(t);
+        check(reader.read(kUrl,{0,4}).failure==MediaReadFailure::RedirectRejected &&
+              t.seen.size()==1,"missing Location denied");
+    }
+}
+
 void range_planner() {
     const auto first = next_media_range(0);
     check(first && first->first == 0 && first->last == 1048575,
@@ -242,6 +347,7 @@ int main() {
     basic();
     fail_closed_destination_and_ranges();
     response_contract();
+    redirected_range_contract();
     range_planner();
     if (failures) std::cerr << failures << " media policy failures\n";
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;

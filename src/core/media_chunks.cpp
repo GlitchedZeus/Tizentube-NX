@@ -3,6 +3,7 @@
 #include "tizentube_nx/playback/playback.hpp"
 
 #include <algorithm>
+#include <vector>
 #include <cctype>
 #include <limits>
 #include <string>
@@ -82,6 +83,22 @@ bool read_content_range(std::string_view s, MediaRange requested,
     return delivered <= MediaChunkReader::kMaxChunkBytes;
 }
 
+// Redirect resolution is app-owned and constrained to the exact media CDN
+// path policy. Only absolute approved HTTPS or same-host root-relative
+// locations are supported; scheme-relative and arbitrary paths are rejected.
+std::optional<std::string> reviewed_media_location(
+    std::string_view current,std::string_view location) {
+    if(location.empty() || location.size()>8192)return std::nullopt;
+    std::string candidate;
+    if(location.starts_with("https://"))candidate=std::string(location);
+    else if(location.front()=='/' && !location.starts_with("//")) {
+        const auto slash=current.find('/',std::string_view("https://").size());
+        if(slash==std::string_view::npos)return std::nullopt;
+        candidate=std::string(current.substr(0,slash))+std::string(location);
+    } else return std::nullopt;
+    if(!is_reviewable_googlevideo_https_url(candidate))return std::nullopt;
+    return candidate;
+}
 bool media_content_type(std::string_view value) {
     // Reject HTML/error pages and all unknown content before feeding decoders.
     const auto semi = value.find(';');
@@ -131,25 +148,51 @@ MediaReadResult MediaChunkReader::read(std::string_view signed_media_url,
         {"Accept-Encoding", "identity"},
         {"Accept", "application/octet-stream"},
     };
-    // The injected media transport MUST separately repeat the DNS/redirect
-    // policy at socket-connect time. NEVER inject the M2 browse-only client.
-    auto fetched = transport_.perform(request);
+    // One bounded TLS request per perform(). Each redirect is explicitly
+    // reviewed here and individually rechecked by native transport before
+    // DNS/TLS. Never permit libmpv, M2 browse client or generic HTTP auto-
+    // redirects to resolve signed URLs. Keep only fixed Range/Accept headers.
+    constexpr unsigned kMaxReviewedRedirects=2;
+    std::vector<std::string> visited{request.url};
+    ttnx::net::HttpResult fetched;
+    for(unsigned hops=0;;) {
+        fetched=transport_.perform(request);
+        const auto status=fetched.response.status_code;
+        out.http_status=static_cast<int>(status);
+        out.redirect_hops=hops;
+        if(status<300 || status>=400)break;
+        if(status!=301 && status!=302 && status!=303 &&
+           status!=307 && status!=308) {
+            out.failure=MediaReadFailure::RedirectRejected;
+            return out;
+        }
+        const auto location=get_header(fetched.response,"location");
+        if(!location.present || !valid_header(location)) {
+            out.failure=MediaReadFailure::RedirectRejected;
+            return out;
+        }
+        const auto next=reviewed_media_location(request.url,location.value);
+        if(!next || std::find(visited.begin(),visited.end(),*next)!=visited.end()) {
+            out.failure=MediaReadFailure::RedirectRejected;
+            return out;
+        }
+        if(hops==kMaxReviewedRedirects) {
+            out.failure=MediaReadFailure::RedirectLimit;
+            return out;
+        }
+        visited.push_back(*next);
+        request.url=*next;
+        ++hops;
+    }
     if (!fetched.ok) {
-        // A backend may classify an upstream 403/429/503 as !ok. Preserve
-        // only the numeric HTTP category so retries can distinguish a
-        // permanent refusal from a dropped socket, without leaking tokens.
-        out.http_status = fetched.response.status_code;
+        // 403/429/5xx still preserve only the numeric HTTP status, and
+        // transport failures never get misreported as approved redirects.
         out.failure = out.http_status>=400
             ?MediaReadFailure::UnexpectedStatus
             :MediaReadFailure::TransportError;
         return out;
     }
-    const auto& r = fetched.response;
-    out.http_status = r.status_code;
-    if (r.status_code >= 300 && r.status_code < 400) {
-        out.failure = MediaReadFailure::RedirectRejected;
-        return out;
-    }
+    const auto& r=fetched.response;
     if (r.status_code != 206) {
         // Full-body 200 responses are rejected, including if the origin
         // silently ignored the Range header and sent an entire video.
