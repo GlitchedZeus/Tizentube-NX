@@ -439,3 +439,16 @@ append-only local timeline needed for playback during buffering,
 but does not yet enable libmpv to open a growing pending SD
 directory. That requires proving atomic replacement, active
 directory lifetime, and refresh/seek behavior first.
+
+### Host event-playlist refresh experiment
+
+A new synthetic H.264/AAC host integration checks whether a
+**running** libmpv instance follows an append-only, atomically
+replaced local HLS EVENT playlist. It initially exposes two
+three-second segments, then adds four more while playback is
+already underway; the test requires the media clock to advance
+beyond the original six-second window without reopening libmpv.
+This is a host feasibility test, not a console implementation.
+The production app still waits for full-cache publication until
+Switch-specific buffer lifetime, seeks and AAC synchronization
+are accepted.

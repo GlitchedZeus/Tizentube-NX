@@ -271,6 +271,19 @@ class LocalAvDemuxTests(unittest.TestCase):
         finally:
             mpv.mpv_terminate_destroy(handle)
 
+    def test_host_libmpv_refreshes_append_only_local_hls_event(self):
+        """A prebuffer of six seconds must grow without reopening libmpv."""
+        import sys
+        tool=(pathlib.Path(__file__).resolve().parents[1] /
+              "tools/m3_event_refresh_probe.py")
+        completed=subprocess.run(
+            [sys.executable,str(tool),str(self.ready),
+             str(self.root/"upstream.m3u8")],
+            capture_output=True,text=True,timeout=30)
+        self.assertEqual(completed.returncode,0,
+            "host libmpv must pass the original 6s buffered timeline "
+            "after atomic EVENT playlist extension")
+
     def test_audio_missing_and_torn_files_are_not_complete(self):
         path = self.ready / "external_audio.m4a"
         original = path.read_bytes()
