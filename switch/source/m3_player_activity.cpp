@@ -5,6 +5,10 @@
 #include "hls_cache_sink.hpp"
 #include "tizentube_nx/playback/audio_gate.hpp"
 #include "tizentube_nx/playback/hls_playback_lease.hpp"
+#if defined(TTNX_M4_ROLLING_STREAM) && defined(TTNX_M4_PLAYER_PROBE)
+#include "rolling_hls_sink.hpp"
+#include "tizentube_nx/playback/local_live_hls_gate.hpp"
+#endif
 
 #include <borealis.hpp>
 #include <mpv/client.h>
@@ -30,8 +34,9 @@ std::uint64_t playback_clock_ms() {
 }
 class CachedMpv {
 public:
-    explicit CachedMpv(bool hls=false,bool adaptive=false):
-        pixels_(kWidth*kHeight*4,0),use_hls_(hls),use_adaptive_(adaptive){}
+    explicit CachedMpv(bool hls=false,bool adaptive=false,bool live=false):
+        pixels_(kWidth*kHeight*4,0),use_hls_(hls),
+        use_adaptive_(adaptive),use_live_hls_(live){}
     ~CachedMpv() {
         // Closing libmpv releases every media FD and the exclusive lease.
         // Only now may the app erase the playback session's disposable SD
@@ -73,7 +78,14 @@ public:
             !required("load-scripts","no") ||
             !required("ytdl","no") ||
             !required("input-default-bindings","no") ||
-            !required("demuxer-lavf-o","protocol_whitelist=file") ||
+            !required("demuxer-lavf-o",
+#if defined(TTNX_M4_ROLLING_STREAM) && defined(TTNX_M4_PLAYER_PROBE)
+                      use_live_hls_
+                          ? "protocol_whitelist=file,crypto,data"
+                          : "protocol_whitelist=file") ||
+#else
+                      "protocol_whitelist=file") ||
+#endif
             !required("vo","libmpv") ||
             // This is the libmpv CPU-memory software render API. Do not
             // select a hardware-only video surface it cannot upload to
@@ -150,7 +162,8 @@ public:
         mpv_render_context_set_update_callback(
             renderer_,&CachedMpv::notify_render_update,this);
         M3Diagnostics::record(M3Stage::Render,M3Event::Ready,1,kWidth,kHeight);
-        status_="Ready: local verified cache";
+        status_=use_live_hls_?"Ready: reviewed local rolling HLS probe":
+                              "Ready: local verified cache";
         return true;
     }
     bool attach_external_aac(const char* path) {
@@ -179,6 +192,10 @@ public:
             ? SwitchHlsCacheSink::kReadyMaster
             : use_adaptive_?SwitchMediaCacheSink::kAdaptiveVideo:
                            SwitchMediaCacheSink::kComplete;
+#if defined(TTNX_M4_ROLLING_STREAM) && defined(TTNX_M4_PLAYER_PROBE)
+        // Fixed app-owned filename ONLY, never a signed media URL.
+        if(use_live_hls_)path=RollingHlsSink::kPlaylist;
+#endif
         std::FILE* file=std::fopen(path,"rb");
         if (!file) {
             M3Diagnostics::record(M3Stage::Cache,M3Event::Fail,4,0,0);
@@ -187,14 +204,43 @@ public:
         bool ok=std::fseek(file,0,SEEK_END)==0;
         const long bytes=ok?std::ftell(file):-1;
         std::fclose(file);
-        const long max_size=use_hls_?1024L*1024:512L*1024*1024;
-        const long minimum=use_hls_?20:1024;
+        const long max_size=(use_hls_ || use_live_hls_)
+            ?1024L*1024:512L*1024*1024;
+        const long minimum=(use_hls_ || use_live_hls_)?20:1024;
         M3Diagnostics::record(M3Stage::Cache,M3Event::Status,use_hls_ ? 2 : (use_adaptive_ ? 3 : 1),bytes,0);
         if (bytes<minimum || bytes>max_size) {
             M3Diagnostics::record(M3Stage::Cache,M3Event::Fail,5,bytes,0);
             status_="Completed local media missing or exceeds bounds";
             return false;
         }
+#if defined(TTNX_M4_ROLLING_STREAM) && defined(TTNX_M4_PLAYER_PROBE)
+        if(use_live_hls_) {
+            if(bytes<=0 || bytes>65536) {
+                status_="Local rolling playlist is outside fixed bounds";
+                return false;
+            }
+            std::FILE* manifest=std::fopen(path,"rb");
+            if(!manifest)return false;
+            std::string data(static_cast<std::size_t>(bytes),'\0');
+            const auto count=std::fread(data.data(),1,data.size(),manifest);
+            const bool closed=std::fclose(manifest)==0;
+            playback::LocalLiveHlsGate gate{};
+            if(!closed || count!=data.size() ||
+               !playback::parse_local_live_hls(data,gate) ||
+               !gate.playable_prefix()) {
+                status_="Local rolling HLS prefix not safe or ready";
+                return false;
+            }
+            // Probe is intentionally not connected to the app launcher.
+            // The caller MUST keep the producer alive and join it before
+            // unloading/cleaning this media. Never auto-restart evicted HLS.
+            if(live_loaded_) {
+                status_="Rolling live probe replay requires new seek epoch";
+                return false;
+            }
+            live_loaded_=true;
+        }
+#endif
         const char* cmd[]={"loadfile",path,"replace",nullptr};
         audio_gate_.reset();
         audio_failure_latched_=false;
@@ -204,7 +250,8 @@ public:
         if(load_rc<0) {
             status_="mpv rejected completed cache";return false;
         }
-        status_=use_hls_?"Opening fully cached HLS + AAC playlists...":
+        status_=use_live_hls_?"Opening reviewed *local* growing HLS...":
+            use_hls_?"Opening fully cached HLS + AAC playlists...":
             use_adaptive_?"Opening video MP4 plus verified AAC file...":
                           "Loading completed local MP4...";
         return true;
@@ -217,6 +264,12 @@ public:
     }
     void seek(int sec) {
         if(!handle_)return;
+        if(use_live_hls_) {
+            // Seeking outside the retained HLS window requires the producer
+            // to stop, re-prime and create a new epoch before opening mpv.
+            status_="Live seek awaits verified re-prime; no unsafe mpv seek";
+            return;
+        }
         const auto arg=std::to_string(sec);
         const char* cmd[]={"seek",arg.c_str(),"relative",nullptr};
         const int result=mpv_command(handle_,cmd);
@@ -293,7 +346,7 @@ public:
             }
             if(e->event_id==MPV_EVENT_FILE_LOADED) {
                 M3Diagnostics::record(M3Stage::Decode,M3Event::Loaded,e->error,0,0);
-                if((use_hls_||use_adaptive_) && audio_gate_.state()==
+                if((use_hls_||use_adaptive_||use_live_hls_) && audio_gate_.state()==
                    playback::AudioSelectionGate::State::Idle)
                     audio_gate_.begin(playback_clock_ms());
                 status_="Local media loaded; validating selected AAC audio...";
@@ -301,7 +354,7 @@ public:
             }
             if(e->event_id==MPV_EVENT_PLAYBACK_RESTART) {
                 M3Diagnostics::record(M3Stage::Decode,M3Event::Restart,e->error,0,0);
-                if(use_hls_||use_adaptive_) {
+                if(use_hls_||use_adaptive_||use_live_hls_) {
                     if(audio_gate_.state()!=
                        playback::AudioSelectionGate::State::Checking)
                         audio_gate_.begin(playback_clock_ms());
@@ -324,7 +377,7 @@ public:
                          "Video stopped or finished";
             }
         }
-        if((use_hls_||use_adaptive_) && audio_gate_.state()==
+        if((use_hls_||use_adaptive_||use_live_hls_) && audio_gate_.state()==
                        playback::AudioSelectionGate::State::Checking) {
             const auto outcome=audio_gate_.observe(
                 selected_audio_track(),playback_clock_ms());
@@ -446,7 +499,8 @@ private:
     mpv_handle* handle_{nullptr};
     mpv_render_context* renderer_{nullptr};
     std::vector<unsigned char> pixels_;
-    bool use_hls_{false},use_adaptive_{false};
+    bool use_hls_{false},use_adaptive_{false},use_live_hls_{false};
+    bool live_loaded_{false};
     std::string status_{"Starting libmpv..."};
     bool have_frame_{false},new_frame_{false};
     playback::AudioSelectionGate audio_gate_{};
@@ -522,16 +576,19 @@ void add_button(brls::Box* row,const char* title,std::function<void()> action) {
 }
 class M3Activity final:public brls::Activity {
 public:
-    explicit M3Activity(bool hls,bool adaptive=false):
-        player_(hls,adaptive),hls_(hls),adaptive_(adaptive){active_=this;}
+    explicit M3Activity(bool hls,bool adaptive=false,bool live=false):
+        player_(hls,adaptive,live),hls_(hls),adaptive_(adaptive),
+        live_(live){active_=this;}
     ~M3Activity() override {active_=nullptr;player_.stop();}
     brls::View* createContentView() override {
         auto* root=new brls::Box(brls::Axis::COLUMN);
         root->setPadding(12,20,12,20);
-        label(root,hls_?"TizenTube NX | M3 HLS Playback":
+        label(root,live_?"TizenTube NX | M4 Local Live HLS Probe":
+            hls_?"TizenTube NX | M3 HLS Playback":
                    adaptive_?"TizenTube NX | Adaptive H.264 + AAC":
                              "TizenTube NX | M3 Normal Video",24);
-        label(root,hls_?"Completed offline HLS segments + synchronized AAC":
+        label(root,live_?"Opt-in local-only HLS; hardware decode not accepted":
+            hls_?"Completed offline HLS segments + synchronized AAC":
                    adaptive_?"Verified local video MP4 and separate AAC":
                              "Self-contained H.264/AAC MP4 from verified SD cache",15);
         label(root,M3Diagnostics::available()
@@ -607,7 +664,7 @@ private:
     }
     static M3Activity* active_;
     CachedMpv player_;
-    bool hls_{false},adaptive_{false};
+    bool hls_{false},adaptive_{false},live_{false};
     bool presentation_warning_latched_{false};
     VideoFrame* video_{nullptr}; // borrowed, destroyed by the activity tree
     brls::Label* status_{nullptr};
@@ -626,6 +683,13 @@ void open_m3_completed_hls(){
 void open_m3_completed_adaptive(){
     brls::Application::pushActivity(new M3Activity(false,true));
 }
+#if defined(TTNX_M4_ROLLING_STREAM) && defined(TTNX_M4_PLAYER_PROBE)
+// This symbol intentionally has no main-menu entry. Integration must
+// prove producer-join + decoder-close ordering before enabling access.
+void open_m4_local_hls_probe(){
+    brls::Application::pushActivity(new M3Activity(false,false,true));
+}
+#endif
 void tick_m3_player(){M3Activity::tick_current();}
 } // namespace ttnx::switch_app
 #endif // TTNX_M3_INTEGRATED

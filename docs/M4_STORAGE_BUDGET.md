@@ -175,3 +175,36 @@ This is host proof of HLS reload/eviction under FFmpeg. It does not prove
 libmpv's FDs are released at the same point on Switch; per-segment decoder
 lifetime and FAT rename behavior must pass on real hardware before live
 eviction is enabled for users.
+
+## M4 experimental local libmpv opening (compiled but not user-accessible)
+
+The hardware-proven M3 `CachedMpv` renderer now has a **compile-gated**
+`TTNX_M4_PLAYER_PROBE=1` mode (requires both `TTNX_M3_INTEGRATED=1`
+and `TTNX_M4_ROLLING_STREAM=1`). It reuses the proven Borealis
+visibility workaround, mpv software render callback, NanoVG frame upload,
+AAC selection gate and exclusive decoder lease rather than introducing
+a replacement drawing pipeline.
+
+In this mode alone, the local-file demuxer protocol whitelist is
+`file,crypto,data` (still no HTTP/HTTPS); `loadfile` receives only the
+fixed app-owned rolling `stream.m3u8` path. An independent bounded,
+host-tested `LocalLiveHlsGate` parses the exact sink-produced playlist
+format and rejects remote URLs, path traversal, encryption, extra tags,
+bad segment numbers, excessive metadata and an insufficient A/V prefix.
+Seeking/replaying evicted segments is disabled pending a safe producer
+re-prime/decoder lifecycle. Normal M3 playback options and UI routes
+remain unchanged. The new function has **no caller from main.cpp**.
+
+The integrated GitHub devkitA64 workflow now builds a second, **non-uploaded**
+probe NRO with all M4 flags to catch native compilation/link errors, while
+still packaging **only** the original M3 integrated candidate. Host tests
+include the local gate under normal and ASan/UBSan, independent inspection
+of the exact on-SD playlist produced by `RollingHlsSink`, and static
+isolation checks for the renderer and absence of an ordinary UI route.
+
+**Remaining acceptance blockers:** even when it compiles, the native probe
+is not approved for distribution or hardware playback because the app's
+network producer and the player activity do not yet have coordinated,
+worker-joined teardown or measured native libmpv live-HLS behavior.
+No main-screen playback action has been changed. Do not label the new M4
+mode working or say that 100 MB total SD usage is achieved.

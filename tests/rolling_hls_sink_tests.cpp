@@ -1,4 +1,5 @@
 #include "rolling_hls_sink.hpp"
+#include "tizentube_nx/playback/local_live_hls_gate.hpp"
 #include "tizentube_nx/playback/hls_playback_lease.hpp"
 #include <filesystem>
 #include <fstream>
@@ -25,6 +26,10 @@ int main(){
   ck(!sink.append(1,6000,packet),"reject segment beyond fixed HLS target");
   ck(sink.append(1,3000,packet),"second segment published");
   const auto first=read(root/"stream.m3u8");
+  ttnx::playback::LocalLiveHlsGate prefix{};
+  ck(ttnx::playback::parse_local_live_hls(first,prefix) &&
+     prefix.playable_prefix() && prefix.first_sequence==0,
+     "persisted sink playlist passes exact local-only mpv pre-open gate");
   ck(first.find("#EXT-X-TARGETDURATION:5")!=std::string::npos &&
      first.find("#EXT-X-MEDIA-SEQUENCE:0")!=std::string::npos &&
      first.find("v_00000.ts")!=std::string::npos &&
@@ -35,12 +40,17 @@ int main(){
   ck(sink.retire_before(1),"advance window before unlinking consumed chunk");
   ck(!sink.retire_before(1),"retiring zero new segments is refused");
   const auto next=read(root/"stream.m3u8");
+  ck(ttnx::playback::parse_local_live_hls(next,prefix) &&
+     prefix.playable_prefix() && prefix.first_sequence==1,
+     "retired sliding playlist remains acceptable at media-sequence 1");
   ck(next.find("#EXT-X-TARGETDURATION:5")!=std::string::npos &&
      next.find("#EXT-X-MEDIA-SEQUENCE:1")!=std::string::npos &&
      next.find("v_00000.ts")==std::string::npos &&
      !fs::exists(root/"v_00000.ts") &&
      sink.bytes()==packet.size(),"rolling playlist sheds already played bytes");
-  ck(sink.finish() && read(root/"stream.m3u8").find("#EXT-X-ENDLIST")!=std::string::npos,
+  ck(sink.finish() && read(root/"stream.m3u8").find("#EXT-X-ENDLIST")!=std::string::npos &&
+     ttnx::playback::parse_local_live_hls(read(root/"stream.m3u8"),prefix) &&
+     prefix.complete,
      "finished playlist closes cleanly");
   ck(!sink.finish() && !sink.append(2,3000,packet),
      "finalized VOD cannot silently append more media");

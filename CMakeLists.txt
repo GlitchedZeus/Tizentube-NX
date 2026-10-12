@@ -239,6 +239,11 @@ if(TTNX_BUILD_TESTS)
         tests/rolling_media_budget_tests.cpp)
     add_test(NAME rolling_media_budget COMMAND tizentube_nx_rolling_media_budget_tests)
 
+    add_executable(tizentube_nx_local_live_hls_gate_tests
+        tests/local_live_hls_gate_tests.cpp)
+    add_test(NAME local_live_hls_gate
+        COMMAND tizentube_nx_local_live_hls_gate_tests)
+
     add_executable(tizentube_nx_rolling_stream_coordinator_tests
         tests/rolling_stream_coordinator_tests.cpp)
     add_test(NAME rolling_stream_coordinator

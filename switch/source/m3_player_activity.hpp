@@ -8,6 +8,10 @@ namespace ttnx::switch_app {
 void open_m3_completed_media();
 void open_m3_completed_hls();
 void open_m3_completed_adaptive();
+#if defined(TTNX_M4_ROLLING_STREAM) && defined(TTNX_M4_PLAYER_PROBE)
+// Local growing HLS only. No menu call until worker lifetime proven.
+void open_m4_local_hls_probe();
+#endif
 void tick_m3_player();
 
 } // namespace ttnx::switch_app

@@ -14,6 +14,13 @@ public:
 #else
     static constexpr const char* kRoot = "sdmc:/switch/TizenTube-NX/media-cache/rolling";
 #endif
+#ifdef TTNX_M4_ROLLING_HOST_TEST
+    static constexpr const char* kPlaylist =
+        "/tmp/ttnx-m4-rolling-test/switch/TizenTube-NX/media-cache/rolling/stream.m3u8";
+#else
+    static constexpr const char* kPlaylist =
+        "sdmc:/switch/TizenTube-NX/media-cache/rolling/stream.m3u8";
+#endif
     static constexpr std::uint64_t kMaxMediaBytes=24ULL*1024*1024-131072;
     static constexpr std::size_t kMaxSegments=4096;
     ~RollingHlsSink() = default;
