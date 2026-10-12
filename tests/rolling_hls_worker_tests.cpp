@@ -16,7 +16,7 @@ template<typename F> bool until(F&& f) {
 }
 struct Fake:RollingHlsWorker::Job {
     std::atomic<unsigned> pumps{0},retired{0},cleanups{0};
-    std::atomic<bool> completed{false},throw_on_pump{false},block_once{false};
+    std::atomic<bool> completed{false},throw_on_pump{false},block_once{false},throw_on_cleanup{false};
     std::thread::id worker_id{};
     RollingHlsWorker::Step fetch_one() override {
         worker_id=std::this_thread::get_id();
@@ -31,7 +31,10 @@ struct Fake:RollingHlsWorker::Job {
         if(std::this_thread::get_id()!=worker_id || n==999 || ms<4000)return false;
         ++retired;return true;
     }
-    bool cleanup_after_decoder() override {++cleanups;return true;}
+    bool cleanup_after_decoder() override {
+        if(throw_on_cleanup)throw 5;
+        ++cleanups;return true;
+    }
 };
 }
 int main() {
@@ -67,6 +70,10 @@ int main() {
         ck(lease.acquire() && !w.cleanup_after_decoder_closed() && job.cleanups==0,
            "active libmpv lease prevents erase even after job joined");
     }
+    job.throw_on_cleanup=true;
+    ck(!w.cleanup_after_decoder_closed() && job.cleanups==0,
+       "unexpected SD cleanup exception preserves pending teardown without terminate");
+    job.throw_on_cleanup=false;
     ck(w.cleanup_after_decoder_closed() && job.cleanups==1,
        "decoder closes then all private bytes may be deleted");
     ck(w.snapshot().state==RollingHlsWorker::State::Cleared,

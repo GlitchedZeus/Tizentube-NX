@@ -69,7 +69,11 @@ bool RollingHlsWorker::cleanup_after_decoder_closed() noexcept {
     std::lock_guard lock(mutex_);
     if(!job_ || worker_.joinable() || !status_.worker_ended ||
        playback::HlsPlaybackLease::is_active())return false;
-    if(!job_->cleanup_after_decoder())return false;
+    // An injected/native cleanup failure must never terminate the app.
+    // Leave job ownership and cache accounting intact so cleanup can retry.
+    bool cleaned=false;
+    try {cleaned=job_->cleanup_after_decoder();}catch(...){return false;}
+    if(!cleaned)return false;
     job_=nullptr;
     pending_.reset();
     stop_=false;
