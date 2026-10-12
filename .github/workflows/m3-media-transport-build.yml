@@ -2,7 +2,7 @@ name: M3 experimental media transport compile
 # Keep only the newest automatic build per PR/ref. Explicitly dispatched
 # hardware-candidate builds are never cancelled by a subsequent push.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 on:
   pull_request:
