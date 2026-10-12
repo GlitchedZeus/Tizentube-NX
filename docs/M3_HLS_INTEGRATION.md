@@ -600,3 +600,15 @@ After rejecting an unsupported HLS playlist, VisionOS returns approved normal-vi
 ### Real decoder proof for adaptive media
 
 The host media suite remuxes an independently generated 45-second H.264 MPEG-TS source into a real video-only MP4, pairs it with a separate AAC MP4, and runs FFmpeg and libmpv API playback including track selection and deep seeking. No signed network URL or server media enters this test. This validates local adaptive playback topology, not availability of these formats for a particular YouTube video on Switch.
+
+### Bounded adaptive MP4 CDN retries
+
+Adaptive H.264/AAC transfers now retry only short-lived lost connections
+and CDN 429/500/502/503/504 responses, at most twice with worker-only
+250 ms and 500 ms delays. Signed HTTP 403, malformed ranges, changed
+resource lengths, redirected destinations, bad MIME, DRM, or unsafe URLs
+still fail immediately. The already-written partial file is retained
+across a transient retry, never published until complete, and erased
+on cancellation or terminal error. Host tests verify recovery, retry
+limit, and permanent refusal handling. This is not a bypass of YouTube
+playability or content restrictions.

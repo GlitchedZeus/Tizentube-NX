@@ -46,10 +46,18 @@ struct FakeTransport final : MediaChunkTransport {
     std::string payload;
     int calls{0};
     bool fail_network{false}, change_total{false};
+    int transient_failures{0},transient_http_status{0};
     std::uint64_t advertized_total{0};
     net::HttpResult perform(const net::HttpRequest& req) override {
         ++calls;
         net::HttpResult r;
+        if (transient_failures>0) {
+            --transient_failures;
+            r.response.status_code=transient_http_status;
+            if(transient_http_status)r.ok=true;
+            else r.error="network unavailable";
+            return r;
+        }
         if (fail_network) { r.error = "network unavailable"; return r; }
         std::uint64_t from = 0, to = 0;
         if (req.headers.empty() || req.headers[0].name != "Range" ||
@@ -119,15 +127,46 @@ void large_success() {
 }
 void negative_cases() {
     {
+        FakeTransport fake;fake.payload="RECOVER";
+        fake.transient_failures=1;fake.transient_http_status=503;
+        FakeSink sink;MediaChunkReader reader(fake);
+        MediaDownloadJob job(reader,sink);
+        check(job.start(url),"bounded 503 test starts");
+        check(job.pump()==MediaDownloadState::Fetching &&
+              job.transient_attempts()==1 && sink.published.empty(),
+              "transient 503 does not publish incomplete MP4");
+        check(job.pump()==MediaDownloadState::Complete &&
+              sink.published==fake.payload && fake.calls==2,
+              "recovered signed 503 downloads and publishes once");
+    }
+    {
+        FakeTransport fake;fake.payload="BLOCKED";
+        fake.transient_failures=1;fake.transient_http_status=403;
+        FakeSink sink;MediaChunkReader reader(fake);
+        MediaDownloadJob job(reader,sink);
+        check(job.start(url),"403 test starts");
+        check(job.pump()==MediaDownloadState::Error &&
+              fake.calls==1 && sink.aborts==1,
+              "permanent signed 403 fails closed without retry");
+    }
+    {
         FakeTransport fake; fake.payload = std::string(MediaChunkReader::kMaxChunkBytes+9,'a');
         FakeSink sink; MediaChunkReader reader(fake); MediaDownloadJob job(reader,sink);
         check(job.start(url),"failure test starts");
         check(job.pump() == MediaDownloadState::Fetching,"first chunk downloaded");
         fake.fail_network=true;
-        check(job.pump() == MediaDownloadState::Error &&
-              job.error() == MediaDownloadError::RangeFailure &&
-              sink.aborts == 1 && sink.published.empty() &&
-              sink.temporary.empty(), "network error aborts partial cache");
+        check(job.pump()==MediaDownloadState::Fetching &&
+              job.transient_attempts()==1 &&
+              job.retry_delay_ms()==250 && sink.aborts==0,
+              "first missing connection retains staged bytes and backs off");
+        check(job.pump()==MediaDownloadState::Fetching &&
+              job.transient_attempts()==2 && job.retry_delay_ms()==500,
+              "second transient connection failure bounded at 500ms");
+        check(job.pump()==MediaDownloadState::Error &&
+              job.error()==MediaDownloadError::RangeFailure &&
+              sink.aborts==1 && sink.published.empty() &&
+              sink.temporary.empty(),
+              "third connection failure aborts before publishing partial cache");
     }
     {
         FakeTransport fake; fake.payload = std::string(MediaChunkReader::kMaxChunkBytes+9,'b');

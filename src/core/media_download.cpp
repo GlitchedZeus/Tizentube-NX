@@ -14,6 +14,7 @@ bool MediaDownloadJob::start(std::string signed_url) {
     last_http_status_ = 0;
     received_ = 0;
     total_ = 0;
+    transient_attempts_=retry_delay_ms_=0;
     if (!is_reviewable_googlevideo_https_url(signed_url)) {
         error_ = MediaDownloadError::UnsafeUrl;
         state_ = MediaDownloadState::Error;
@@ -42,9 +43,22 @@ MediaDownloadState MediaDownloadJob::pump() {
     last_chunk_failure_ = bytes.failure;
     last_http_status_ = bytes.http_status;
     if (!bytes.ok()) {
+        // Signed URLs are never logged or altered on retry. Only a dropped
+        // transport, throttling or explicitly transient 5xx HTTP may retry.
+        const bool temporary=bytes.failure==MediaReadFailure::TransportError ||
+             (bytes.failure==MediaReadFailure::UnexpectedStatus &&
+              (bytes.http_status==429 || bytes.http_status==500 ||
+               bytes.http_status==502 || bytes.http_status==503 ||
+               bytes.http_status==504));
+        if(temporary && transient_attempts_<kMaxTransientRetries) {
+            ++transient_attempts_;
+            retry_delay_ms_=250*transient_attempts_;
+            return state_; // no new byte, no new write, preserve partial
+        }
         fail(MediaDownloadError::RangeFailure);
         return state_;
     }
+    transient_attempts_=retry_delay_ms_=0;
     if (bytes.resource_size == 0 || bytes.resource_size > kMaxFileBytes) {
         fail(MediaDownloadError::ResourceTooLarge);
         return state_;
@@ -91,6 +105,7 @@ void MediaDownloadJob::fail(MediaDownloadError code) noexcept {
         sink_open_ = false;
     }
     url_.clear();
+    transient_attempts_=retry_delay_ms_=0;
     error_ = code;
     state_ = MediaDownloadState::Error;
 }
@@ -101,6 +116,7 @@ void MediaDownloadJob::cancel() noexcept {
         sink_open_ = false;
     }
     url_.clear();
+    transient_attempts_=retry_delay_ms_=0;
     if (state_ == MediaDownloadState::Fetching)
         state_ = MediaDownloadState::Cancelled;
 }

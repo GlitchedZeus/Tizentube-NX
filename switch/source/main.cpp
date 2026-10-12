@@ -1565,6 +1565,11 @@ private:
                                               ttnx::playback::MediaDownloadState::Fetching &&
                                               !media_cancel_requested_.load()) {
                                             (void)job.pump();
+                                            if(job.retry_delay_ms() &&
+                                               !media_cancel_requested_.load())
+                                                std::this_thread::sleep_for(
+                                                    std::chrono::milliseconds(
+                                                        job.retry_delay_ms()));
                                             media_progress_bytes_.store(job.bytes_received());
                                             media_progress_total_.store(job.total_bytes());
                                         }

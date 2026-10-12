@@ -33,6 +33,7 @@ enum class MediaDownloadError {
 class MediaDownloadJob {
 public:
     static constexpr std::uint64_t kMaxFileBytes = 512ULL * 1024 * 1024;
+    static constexpr unsigned kMaxTransientRetries=2;
     MediaDownloadJob(MediaChunkReader& reader, MediaChunkSink& sink)
         : reader_(reader), sink_(sink) {}
     ~MediaDownloadJob() { cancel(); }
@@ -48,6 +49,8 @@ public:
     [[nodiscard]] int last_http_status() const noexcept { return last_http_status_; }
     [[nodiscard]] std::uint64_t bytes_received() const noexcept { return received_; }
     [[nodiscard]] std::uint64_t total_bytes() const noexcept { return total_; }
+    [[nodiscard]] unsigned retry_delay_ms() const noexcept {return retry_delay_ms_;}
+    [[nodiscard]] unsigned transient_attempts() const noexcept {return transient_attempts_;}
 private:
     void fail(MediaDownloadError error) noexcept;
     MediaChunkReader& reader_;
@@ -60,6 +63,7 @@ private:
     std::uint64_t received_{0};
     std::uint64_t total_{0};
     bool sink_open_{false};
+    unsigned transient_attempts_{0},retry_delay_ms_{0};
 };
 
 } // namespace ttnx::playback
