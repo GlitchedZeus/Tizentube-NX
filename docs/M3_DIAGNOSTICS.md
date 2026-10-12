@@ -48,3 +48,17 @@ libmpv decoding proves a local software capability, but real Switch A/V
 and UI rendering still require this hardware evidence.
 
 Accepted M2 stays unchanged; keep PR #8 unmerged.
+
+## Offline automatic triage
+
+After copying the SD log to Linux, run
+
+`python3 tools/m3_diagnostics_triage.py /path/to/m3-playback.log`
+
+The tool reads ONLY fixed typed numeric events and emits one coarse fault
+category, such as `AUDIO_ONLY_TRACKS`,
+`VIDEO_RENDER_NOT_PRODUCING_FRAMES`, `BLACK_RENDERED_FRAMES`,
+`UI_VIEW_NOT_DRAWN`, `CHECK_TEXTURE_AND_DISPLAY`, or
+`AAC_DOWNLOAD_FAILED`. It does not access any network service. A
+classification is evidence for the next focused fix, not proof of the
+ultimate decoder bug or DRM compatibility.
