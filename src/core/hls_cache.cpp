@@ -41,6 +41,8 @@ bool HlsCacheJob::start(const HlsProbePlan& plan) {
     total_segments_=0;
     next_segment_=0;
     track_=0;
+    paused_video_segment_=0;
+    early_audio_complete_=false;
     transient_attempts_=0;
     retry_delay_ms_=0;
     error_=HlsCacheFailure::InvalidPlaylist;
@@ -162,6 +164,17 @@ HlsCacheState HlsCacheJob::pump() {
     const auto& playlist=track_==0
         ?active_->video_segments:*active_->audio_segments;
     if(next_segment_>=playlist.segments.size() && !init_pending_) {
+        if(track_==1) {
+            // Audio playlist has completed successfully, but this alone does
+            // not authorize libmpv: we still require every video segment and
+            // final local manifest transaction before playback.
+            early_audio_complete_=true;
+            startup_buffer_.mark_complete_audio(true);
+            track_=0;
+            next_segment_=paused_video_segment_;
+            init_pending_=false;
+            return state_;
+        }
         // Direct TS manifests do not advertise a trustworthy codec string.
         // Never package a random 200-OK response as playable H.264.
         if(track_==0 && !active_->video_segments.init_segment_url &&
@@ -189,7 +202,10 @@ HlsCacheState HlsCacheJob::pump() {
                 return state_;
             }
         }
-        if(track_==0 && active_->audio_segments) {
+        if(track_==0 && active_->audio_segments &&
+           !early_audio_complete_) {
+            // Defensive fallback for any future alternate transfer order.
+            paused_video_segment_=next_segment_;
             track_=1;
             next_segment_=0;
             init_pending_=active_->audio_segments->init_segment_url.has_value();
@@ -271,6 +287,26 @@ HlsCacheState HlsCacheJob::pump() {
             startup_event_segments_=next_segment_;
         }
     }
+    // For a separate HLS audio rendition, probe AAC after the first real
+    // video segment, then resume the remaining H.264 segments afterward.
+    // A 403, wrong type, or broken audio rendition no longer wastes the
+    // entire video download. Never offer this partial state to libmpv.
+    if(track_==0 && !is_init && next_segment_==1 &&
+       active_->audio_segments && !early_audio_complete_) {
+        if(!active_->video_segments.init_segment_url &&
+           !video_codec_verified_) {
+            sink_.abort();
+            state_=HlsCacheState::Failed;
+            error_=HlsCacheFailure::UnsupportedVideo;
+            active_.reset();
+            return state_;
+        }
+        paused_video_segment_=next_segment_;
+        track_=1;
+        next_segment_=0;
+        init_pending_=active_->audio_segments->init_segment_url.has_value();
+        return state_;
+    }
     // Direct TS with neither external nor muxed AAC cannot be played.
     // Fail after the first verified segment, not the entire silent VOD.
     if(track_==0 && !is_init && next_segment_==1 &&
@@ -313,6 +349,8 @@ void HlsCacheJob::cancel() noexcept {
     startup_buffer_.reset();
     startup_event_staged_=false;
     startup_event_segments_=0;
+    paused_video_segment_=0;
+    early_audio_complete_=false;
     transient_attempts_=0;
     retry_delay_ms_=0;
 }

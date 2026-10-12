@@ -93,6 +93,11 @@ private:
     std::size_t total_segments_{0};
     std::size_t next_segment_{0};
     unsigned track_{0}; // 0 HLS video, 1 HLS audio, 2 ranged AAC MP4
+    // Download the separate HLS AAC playlist immediately after one verified
+    // video segment. Restore video at the saved position after audio finishes.
+    // This avoids waiting for an entire video before discovering audio 403.
+    std::size_t paused_video_segment_{0};
+    bool early_audio_complete_{false};
     unsigned transient_attempts_{0},retry_delay_ms_{0};
     bool init_pending_{false};
     bool muxed_audio_verified_{false};

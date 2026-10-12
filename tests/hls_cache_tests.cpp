@@ -52,8 +52,10 @@ struct FakeTransport:net::HttpClient {
     int fail_after{0};
     int temporary_left{0},temporary_status{0};
     bool ts_h264{false},ts_aac{false};
+    std::vector<std::string> requested_urls;
     net::HttpResult perform(const net::HttpRequest& request) override {
         ++hits;
+        requested_urls.push_back(request.url);
         net::HttpResult out;
         out.ok=fail_after==0 || hits!=fail_after;
         out.response.status_code=out.ok?200:403;
@@ -186,12 +188,53 @@ void full() {
           transport.hits==6 && sink.publishes==1 &&
           sink.written.size()==6 && sink.completed,
           "video+audio init and four independent segments published exactly once");
+    const auto& ordered=transport.requested_urls;
+    check(ordered.size()==6 &&
+          ordered[0].find("initv")!=std::string::npos &&
+          ordered[1].find("v1")!=std::string::npos &&
+          ordered[2].find("inita")!=std::string::npos &&
+          ordered[3].find("a1")!=std::string::npos &&
+          ordered[4].find("a2")!=std::string::npos &&
+          ordered[5].find("v2")!=std::string::npos,
+          "separate HLS AAC is fetched after first video piece, before remaining VOD");
+
     check(job.downloaded_bytes()==96 && job.segments_completed()==4,
           "bounded progress counts all bytes but only proper media segments");
     (void)job.pump();
     check(sink.publishes==1,"completed video cache cannot publish twice");
 }
 void failure_cases() {
+    {
+        FakeTransport media;
+        media.fail_after=3; // 1 video init, 2 first video, 3 AAC init
+        playback::HlsSegmentReader reader(media);
+        Sink sink;playback::HlsCacheJob job(reader,sink);
+        check(job.start(plan()),"AAC early-403 scenario stages safely");
+        for(int i=0;i<12 && job.state()==playback::HlsCacheState::Fetching;++i)
+            (void)job.pump();
+        check(job.state()==playback::HlsCacheState::Failed &&
+              job.error()==playback::HlsCacheFailure::MediaFetch &&
+              media.hits==3 && media.requested_urls.size()==3 &&
+              media.requested_urls.back().find("inita")!=std::string::npos &&
+              sink.publishes==0 && sink.aborts>0,
+              "separate HLS AAC 403 aborts before remaining video download");
+    }
+    {
+        FakeTransport media;media.ts_h264=true;
+        playback::HlsSegmentReader reader(media);
+        Sink sink;playback::HlsCacheJob job(reader,sink);
+        auto source=plan();
+        source.video_segments.init_segment_url.reset();
+        source.audio_segments->init_segment_url.reset();
+        source.selected.direct_media_playlist=true;
+        check(job.start(source),"TS H264 plus separate audio track stages");
+        for(int i=0;i<14 && job.state()==playback::HlsCacheState::Fetching;++i)
+            (void)job.pump();
+        check(job.state()==playback::HlsCacheState::Ready &&
+              media.hits==4 && sink.publishes==1 &&
+              job.startup_buffer_prepared(),
+              "verified TS H264 and finished separate AAC unlock prepared prefix");
+    }
     {
         FakeTransport video;video.ts_h264=true; // H.264 but no AAC
         playback::HlsSegmentReader reader(video);
