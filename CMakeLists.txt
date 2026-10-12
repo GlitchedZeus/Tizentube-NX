@@ -81,6 +81,10 @@ if(TTNX_BUILD_TESTS)
     target_link_libraries(tizentube_nx_aac_mp4_structure_tests PRIVATE tizentube_nx_core)
     add_test(NAME aac_mp4_structure COMMAND tizentube_nx_aac_mp4_structure_tests)
 
+    add_executable(tizentube_nx_hls_event_playlist_tests tests/hls_event_playlist_tests.cpp)
+    target_link_libraries(tizentube_nx_hls_event_playlist_tests PRIVATE tizentube_nx_core)
+    add_test(NAME hls_event_playlist COMMAND tizentube_nx_hls_event_playlist_tests)
+
     add_executable(tizentube_nx_hls_startup_buffer_tests tests/hls_startup_buffer_tests.cpp)
     target_link_libraries(tizentube_nx_hls_startup_buffer_tests PRIVATE tizentube_nx_core)
     add_test(NAME hls_startup_buffer COMMAND tizentube_nx_hls_startup_buffer_tests)

@@ -425,3 +425,17 @@ or permit opening any unfinished media in libmpv; it provides
 an auditable readiness state for the subsequent append-only
 streaming milestone. Existing automatic full-cache playback
 and user hardware acceptance are unchanged.
+
+### Append-only local HLS EVENT snapshots
+
+A separate host-tested `make_hls_event_snapshot` renderer now
+builds strictly local EVENT playlists from verified persisted
+video segment indices, preserving a stable media sequence and
+adding `#EXT-X-ENDLIST` only for the completed clip. Real signed
+YouTube URLs are NEVER copied from the input plan. The renderer
+rejects missing fragments, premature ENDLIST, malformed durations
+and MPEG-TS / fMP4 extension mismatches. This prepares the
+append-only local timeline needed for playback during buffering,
+but does not yet enable libmpv to open a growing pending SD
+directory. That requires proving atomic replacement, active
+directory lifetime, and refresh/seek behavior first.
