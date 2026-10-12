@@ -345,6 +345,7 @@ int main() {
     ck(switch_app::SwitchHlsCacheSink::discard_session_media() &&
        !fs::exists(base/"ready"),
        "cleanup resumes after unknown entry removed");
+    fs::create_directories(base);
     const auto elsewhere=base.parent_path()/"elsewhere";
     fs::create_directories(elsewhere);
     std::ofstream(elsewhere/"v_00000.ts")<<"do not erase";
