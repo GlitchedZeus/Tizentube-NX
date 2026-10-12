@@ -102,6 +102,7 @@ private:
     bool init_pending_{false};
     bool muxed_audio_verified_{false};
     bool video_codec_verified_{false};
+    bool audio_codec_verified_{false};
     std::uint64_t aac_offset_{0}, aac_total_{0};
     AacMp4Structure aac_structure_{};
     HlsStartupBuffer startup_buffer_{};

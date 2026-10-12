@@ -220,7 +220,7 @@ void failure_cases() {
               "separate HLS AAC 403 aborts before remaining video download");
     }
     {
-        FakeTransport media;media.ts_h264=true;
+        FakeTransport media;media.ts_h264=true;media.ts_aac=true;
         playback::HlsSegmentReader reader(media);
         Sink sink;playback::HlsCacheJob job(reader,sink);
         auto source=plan();
@@ -234,6 +234,22 @@ void failure_cases() {
               media.hits==4 && sink.publishes==1 &&
               job.startup_buffer_prepared(),
               "verified TS H264 and finished separate AAC unlock prepared prefix");
+    }
+    {
+        FakeTransport media;media.ts_h264=true; // AAC-only route lies
+        playback::HlsSegmentReader reader(media);
+        Sink sink;playback::HlsCacheJob job(reader,sink);
+        auto source=plan();
+        source.video_segments.init_segment_url.reset();
+        source.audio_segments->init_segment_url.reset();
+        source.selected.direct_media_playlist=true;
+        check(job.start(source),"TS audio-mismatch plan stages");
+        for(int i=0;i<10 && job.state()==playback::HlsCacheState::Fetching;++i)
+            (void)job.pump();
+        check(job.state()==playback::HlsCacheState::Failed &&
+              job.error()==playback::HlsCacheFailure::MissingAudio &&
+              media.hits==2 && sink.publishes==0 && sink.aborts>0,
+              "TS audio rendition without AAC fails after first audio segment");
     }
     {
         FakeTransport video;video.ts_h264=true; // H.264 but no AAC

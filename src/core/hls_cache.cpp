@@ -31,6 +31,7 @@ bool HlsCacheJob::start(const HlsProbePlan& plan) {
     bytes_=0;
     muxed_audio_verified_=false;
     video_codec_verified_=false;
+    audio_codec_verified_=false;
     aac_offset_=0;
     aac_total_=0;
     aac_structure_.reset();
@@ -169,7 +170,10 @@ HlsCacheState HlsCacheJob::pump() {
             // not authorize libmpv: we still require every video segment and
             // final local manifest transaction before playback.
             early_audio_complete_=true;
-            startup_buffer_.mark_complete_audio(true);
+            // MPEG-TS audio needs verified AAC program metadata; fMP4
+            // renditions still rely on the final libmpv codec gate, never
+            // advertise early-playback readiness without independent proof.
+            if(audio_codec_verified_)startup_buffer_.mark_complete_audio(true);
             track_=0;
             next_segment_=paused_video_segment_;
             init_pending_=false;
@@ -239,6 +243,20 @@ HlsCacheState HlsCacheJob::pump() {
         error_=HlsCacheFailure::TotalSizeExceeded;
         active_.reset();
         return state_;
+    }
+    if(track_==1 && !is_init &&
+       !active_->audio_segments->init_segment_url) {
+        // The first TS audio segment must actually advertise AAC, not just
+        // return HTTP 200 with a plausible video/mp2t MIME type.
+        const auto streams=inspect_mpeg_ts(bytes.bytes);
+        if(next_segment_==0 && !(streams.recognized && streams.aac)) {
+            sink_.abort();
+            state_=HlsCacheState::Failed;
+            error_=HlsCacheFailure::MissingAudio;
+            active_.reset();
+            return state_;
+        }
+        if(streams.recognized && streams.aac)audio_codec_verified_=true;
     }
     if(track_==0 && !is_init &&
        !active_->video_segments.init_segment_url) {
