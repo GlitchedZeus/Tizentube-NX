@@ -27,7 +27,7 @@ int main() {
           text.find("cookie")==std::string::npos &&
           text.find("https://")==std::string::npos,
           "fixed typed API cannot emit bearer URLs or headers");
-    for(int i=0;i<5200;++i)
+    for(int i=0;i<8000;++i)
         M3Diagnostics::record(M3Stage::Render,M3Event::Frame,i,0,0);
     check(fs::file_size(M3Diagnostics::kPath) < M3Diagnostics::kMaxBytes+256 &&
           fs::exists(M3Diagnostics::kPrevious),
