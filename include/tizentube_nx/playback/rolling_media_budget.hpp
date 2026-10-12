@@ -120,6 +120,14 @@ public:
         return false;
     }
 
+    // A seek creates a new timeline; playback from a later timestamp must
+    // not require three seconds of media starting at t=0.
+    [[nodiscard]] bool begin_epoch(std::uint64_t start_ms) noexcept {
+        if (!clear_epoch()) return false;
+        epoch_start_ms_ = start_ms;
+        return true;
+    }
+
     // Safety-first: a seek/cancel must not clear the accounting of media
     // still held by libmpv; the caller closes/unpins decoder leases first.
     [[nodiscard]] bool clear_epoch() noexcept {
@@ -127,6 +135,7 @@ public:
         pieces_.clear();
         used_bytes_ = 0;
         last_video_ = last_audio_ = last_muxed_ = {};
+        epoch_start_ms_ = 0;
         verified_video_ = verified_audio_ = false;
         return true;
     }
@@ -136,19 +145,19 @@ public:
         verified_audio_ = audio;
     }
 
-    // Contiguous buffered coverage must begin at t=0 for both A/V. Presence
+    // Contiguous buffered coverage must begin at the seek epoch for both A/V. Presence
     // of a byte or a header alone is not evidence of decodable frames.
     [[nodiscard]] bool startup_ready() const noexcept {
         return verified_video_ && verified_audio_ &&
-            contiguous_ms(Track::Video) >= kStartupVideoMs &&
-            contiguous_ms(Track::Audio) >= kStartupAudioMs;
+            buffered_video_ms() >= kStartupVideoMs &&
+            buffered_audio_ms() >= kStartupAudioMs;
     }
 
     [[nodiscard]] std::uint64_t buffered_video_ms() const noexcept {
-        return contiguous_ms(Track::Video);
+        return contiguous_ms(Track::Video) - epoch_start_ms_;
     }
     [[nodiscard]] std::uint64_t buffered_audio_ms() const noexcept {
-        return contiguous_ms(Track::Audio);
+        return contiguous_ms(Track::Audio) - epoch_start_ms_;
     }
     [[nodiscard]] std::uint64_t used_bytes() const noexcept { return used_bytes_; }
     [[nodiscard]] std::uint64_t high_water_bytes() const noexcept { return high_water_bytes_; }
@@ -162,7 +171,7 @@ private:
     };
     LastPiece last_video_{},last_audio_{},last_muxed_{};
     [[nodiscard]] std::uint64_t contiguous_ms(Track track) const noexcept {
-        std::uint64_t end = 0;
+        std::uint64_t end = epoch_start_ms_;
         // A muxed stream counts toward both tracks, but only after its AAC
         // and H.264 structures have been separately verified by the caller.
         for (std::size_t step = 0; step < pieces_.size(); ++step) {
@@ -177,6 +186,7 @@ private:
         return end;
     }
     std::deque<Piece> pieces_{};
+    std::uint64_t epoch_start_ms_{0};
     std::uint64_t used_bytes_{0};
     std::uint64_t high_water_bytes_{0};
     bool verified_video_{false}, verified_audio_{false};

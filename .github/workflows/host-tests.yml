@@ -43,3 +43,13 @@ jobs:
         run: cmake --build build --parallel
       - name: Test
         run: ctest --test-dir build --output-on-failure
+      - name: Sanitized M4 streaming-accounting regressions
+        run: |
+          set -euo pipefail
+          for target in rolling_media_budget rolling_stream_coordinator; do
+            g++ -std=c++20 -Wall -Wextra -Werror -O1 -g \
+              -fsanitize=address,undefined -fno-omit-frame-pointer \
+              -Iinclude "tests/${target}_tests.cpp" \
+              -o "/tmp/ttnx-${target}-san"
+            "/tmp/ttnx-${target}-san"
+          done

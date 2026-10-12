@@ -51,3 +51,28 @@ the upstream provider. Preserve user-initiated settings only as needed.
 **Release gate:** all host normal/ASan/UBSan checks, native Switch build,
 NRO size check and on-device full-view 720p video/pause/seek/cleanup test.
 No automatic merge of PR #8 and no regression to accepted real playback.
+
+## M4 native rolling stream coordinator (staged, not Switch-accepted)
+
+The separate header-only RollingStreamCoordinator now reserves bandwidth
+and on-SD bytes *before* each approved media fetch, counts in-flight media
+against the same 24 MiB cap, and publishes verified media accounting only
+after an exact-sized durable segment is reported. Unverified media,
+stale-generation callbacks, forged/tampered ticket fields and failed storage
+transactions cannot advance the prepared startup state. Decoder-pinned
+segments never release quota; a caller acknowledges actual safe file deletion
+before the coordinator frees capacity. Backpressure protects the budget when
+the player pauses. Seeking creates a new timeline anchor (no mistaken
+three-second readiness at t=120 seconds) and refuses to forget old media
+until callers have joined downloads, released decoder leases and purged bytes.
+
+A simulation runs 1,200 three-second video/AAC pairs (one hour) with a
+small rolling window, plus 720p/60 source selection, stale callbacks,
+failed writes, pin/unpin, quota exhaustion and arbitrary-time seeks.
+Both normal -Wall -Wextra -Werror and ASan/UBSan tests ran locally.
+The workflow also runs these deterministic sanitizer tests in CI.
+
+IMPORTANT: **not yet connected to actual libnx HTTP, HLS event demux or
+the native libmpv playback pipeline.** It is a bounded producer/consumer
+admission layer, NOT a proven fast-start video player. The previously
+accepted visible M3 video remains the only hardware-accepted candidate.
