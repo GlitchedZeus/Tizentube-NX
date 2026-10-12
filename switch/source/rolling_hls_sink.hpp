@@ -24,6 +24,12 @@ public:
     static constexpr std::uint64_t kMaxMediaBytes=24ULL*1024*1024-131072;
     static constexpr std::size_t kMaxSegments=4096;
     ~RollingHlsSink() = default;
+#ifdef TTNX_M4_ROLLING_HOST_TEST
+    // Deterministic FAT/non-overwrite promotion failure simulation.
+    static void test_fail_manifest_promotion(bool failure) noexcept {
+        test_promotion_failure_=failure;
+    }
+#endif
     [[nodiscard]] bool begin(std::uint64_t maximum_segment_ms=6000);
     [[nodiscard]] bool append(std::size_t index,std::uint64_t duration_ms,
                               std::string_view verified_muxed_ts);
@@ -48,5 +54,8 @@ private:
     std::uint64_t target_seconds_{0};
     bool started_{false};
     bool finished_{false};
+#ifdef TTNX_M4_ROLLING_HOST_TEST
+    static inline bool test_promotion_failure_{false};
+#endif
 };
 } // namespace ttnx::switch_app

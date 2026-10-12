@@ -208,3 +208,26 @@ network producer and the player activity do not yet have coordinated,
 worker-joined teardown or measured native libmpv live-HLS behavior.
 No main-screen playback action has been changed. Do not label the new M4
 mode working or say that 100 MB total SD usage is achieved.
+
+## FAT-compatible rolling HLS playlist replacement and rollback
+
+The original file-backed M4 sink used rename-over-existing when updating
+`stream.m3u8`. libnx SD filesystems need not provide POSIX replacement
+semantics. The experimental backend now publishes via a fixed, app-owned
+`stream.m3u8.previous` backup, promotes a fully flushed temporary file,
+and restores the prior manifest when promotion fails. Failed segment
+transactions still remove unpublished TS bytes before releasing quota;
+cleanup whitelists the backup while refusing symlinks or unfamiliar files.
+
+Host tests inject promotion failure after moving the original playlist,
+prove byte-for-byte manifest restoration, prove no new TS bytes remain,
+then retry successfully and discard the whole session. The normal and
+ASan/UBSan host sink tests passed, and the three FFmpeg-generated real
+H264/AAC progressive host tests still passed with the revised publisher.
+
+This publication is **not fully atomic to a reader**: a brief pathname
+gap exists between moving the old playlist and promoting the new one.
+Before enabling M4 on a Switch, validate libmpv's playlist reload retry
+behavior on actual SD/FAT/exFAT under frequent refresh, pause/sleep and
+power interruption. Keep the hardware-proven complete-cache M3 fallback
+until that gate passes.

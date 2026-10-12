@@ -87,6 +87,27 @@ int main(){
        "second session also leaves zero media bytes");
     fs::remove(foreign);
   }
+  // Native FAT path: rename/promote failure must restore the previously
+  // published local playlist and roll back all unadvertised media bytes.
+  {
+    RollingHlsSink rollback;
+    ck(rollback.begin(5000) && rollback.append(0,3000,packet),
+       "FAT promotion fixture publishes original segment");
+    const auto original=read(root/"stream.m3u8");
+    RollingHlsSink::test_fail_manifest_promotion(true);
+    ck(!rollback.append(1,3000,packet) &&
+       read(root/"stream.m3u8")==original &&
+       !fs::exists(root/"v_00001.ts") &&
+       !fs::exists(root/"stream.m3u8.previous") &&
+       rollback.next_index()==1 && rollback.bytes()==packet.size(),
+       "FAT promotion rejection restores playable manifest without SD growth");
+    RollingHlsSink::test_fail_manifest_promotion(false);
+    ck(rollback.append(1,3000,packet) &&
+       !fs::exists(root/"stream.m3u8.previous"),
+       "recovered FAT promotion publishes second segment and cleans backup");
+    ck(rollback.close_session() && !fs::exists(root),
+       "FAT rollback video teardown returns media usage to zero");
+  }
   RollingHlsSink hour;
   ck(hour.begin(),"long-form session starts");
   const std::string chunk(48*1024,'Z');

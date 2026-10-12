@@ -41,7 +41,8 @@ std::string segment_path(std::size_t index,bool part=false) {
     return std::string(RollingHlsSink::kRoot)+"/"+name;
 }
 bool known(std::string_view name) {
-    if(name=="stream.m3u8" || name=="stream.m3u8.part")return true;
+    if(name=="stream.m3u8" || name=="stream.m3u8.part" ||
+       name=="stream.m3u8.previous")return true;
     if(name.size()!=10 && name.size()!=15)return false;
     if(name.substr(0,2)!="v_" ||
        name.substr(7)!=(name.size()==10?".ts":".ts.part"))return false;
@@ -169,13 +170,36 @@ bool RollingHlsSink::publish(bool end_list) {
     if(text.size()>65536 || !ancestors(false))return false;
     const auto partial=std::string(kRoot)+"/stream.m3u8.part";
     const auto ready=std::string(kRoot)+"/stream.m3u8";
-    // Never follow a poisoned named manifest. Replacement behavior is
-    // filesystem dependent and must be verified on actual Switch SD.
+    const auto previous=std::string(kRoot)+"/stream.m3u8.previous";
+    // FAT/exFAT-style libnx filesystems need not support POSIX rename-over-
+    // existing-file. Maintain an app-owned backup while publishing the new
+    // manifest, and restore it if promotion fails. This is NOT strictly
+    // atomic from an HLS reader's perspective: hardware reload behavior is
+    // a mandatory gate before this is user-enabled.
     if(!regular_or_absent(partial) || !regular_or_absent(ready) ||
+       !regular_or_absent(previous) || !remove_file(previous) ||
        !remove_file(partial) || !write_exclusive(partial,text))return false;
-    if(rename(partial.c_str(),ready.c_str())!=0) {
-        (void)remove_file(partial);return false;
+    struct stat old{};
+    const bool had_ready=lstat(ready.c_str(),&old)==0;
+    if(had_ready && !S_ISREG(old.st_mode))return false;
+    if(had_ready && rename(ready.c_str(),previous.c_str())!=0) {
+        (void)remove_file(partial);
+        return false;
     }
+#ifdef TTNX_M4_ROLLING_HOST_TEST
+    if(test_promotion_failure_ || rename(partial.c_str(),ready.c_str())!=0) {
+#else
+    if(rename(partial.c_str(),ready.c_str())!=0) {
+#endif
+        if(had_ready && rename(previous.c_str(),ready.c_str())!=0)
+            started_=false; // media may now be unavailable; fail closed
+        (void)remove_file(partial);
+        return false;
+    }
+    // Once the replacement is fully published, leftover prior manifests
+    // can be deleted later. They are never user data and must never be read
+    // as an alternative HLS source.
+    if(had_ready)(void)remove_file(previous);
     return true;
 }
 bool RollingHlsSink::retire_before(std::size_t first_index) {
