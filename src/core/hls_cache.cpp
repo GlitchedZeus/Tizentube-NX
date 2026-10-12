@@ -236,6 +236,20 @@ HlsCacheState HlsCacheJob::pump() {
     request_succeeded();
     if(is_init)init_pending_=false;
     else {++next_segment_;++completed_;}
+    // Direct TS with neither external nor muxed AAC cannot be played.
+    // Fail after the first verified segment, not the entire silent VOD.
+    if(track_==0 && !is_init && next_segment_==1 &&
+       !active_->audio_segments &&
+       active_->source.external_aac_url.empty() &&
+       !active_->video_segments.init_segment_url &&
+       (!video_codec_verified_ || !muxed_audio_verified_)) {
+        sink_.abort();
+        state_=HlsCacheState::Failed;
+        error_=video_codec_verified_
+            ?HlsCacheFailure::MissingAudio:HlsCacheFailure::UnsupportedVideo;
+        active_.reset();
+        return state_;
+    }
     // Validate one real video segment first. If a separately signed AAC
     // rendition is needed, fetch it before downloading the ENTIRE HLS VOD.
     // A 403/expired AAC thus aborts after at most the video init + first

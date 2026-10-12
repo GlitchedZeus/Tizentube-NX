@@ -383,3 +383,12 @@ or redirection is never retried or followed; bad MIME, broken duration,
 missing media or forbidden manifest tags fail immediately. The YouTube
 guest browsing client and its strict www.youtube.com policy are unchanged.
 Host tests exercise recoverable 503, persistent 429 and terminal 403.
+
+### First-segment rejection of silent direct HLS
+
+Direct MPEG-TS VOD without a signed external AAC file or a declared HLS
+audio rendition now checks muxed H.264 and AAC in its very first
+segment. Silent/unrecognized streams abort immediately without
+downloading the remaining movie; valid muxed audio and real YouTube
+video with a separately verified AAC file remain supported. The
+previously accepted complete cache remains preserved.

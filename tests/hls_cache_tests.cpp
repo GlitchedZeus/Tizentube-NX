@@ -184,6 +184,35 @@ void full() {
 }
 void failure_cases() {
     {
+        FakeTransport video;video.ts_h264=true; // H.264 but no AAC
+        playback::HlsSegmentReader reader(video);
+        Sink sink;playback::HlsCacheJob job(reader,sink);
+        auto p=plan();p.audio_segments.reset();p.selected.audio_playlist_url.clear();
+        p.video_segments.init_segment_url.reset();
+        p.selected.direct_media_playlist=true;
+        check(job.start(p),"direct silent MPEG-TS fixture staged");
+        for(int i=0;i<10 && job.state()==playback::HlsCacheState::Fetching;++i)
+            (void)job.pump();
+        check(job.state()==playback::HlsCacheState::Failed &&
+              job.error()==playback::HlsCacheFailure::MissingAudio &&
+              video.hits==1 && sink.publishes==0,
+              "no AAC direct TS aborts after first video segment");
+    }
+    {
+        FakeTransport video;video.ts_h264=true;video.ts_aac=true;
+        playback::HlsSegmentReader reader(video);
+        Sink sink;playback::HlsCacheJob job(reader,sink);
+        auto p=plan();p.audio_segments.reset();p.selected.audio_playlist_url.clear();
+        p.video_segments.init_segment_url.reset();
+        p.selected.direct_media_playlist=true;
+        check(job.start(p),"muxed H264/AAC MPEG-TS source staged");
+        for(int i=0;i<10 && job.state()==playback::HlsCacheState::Fetching;++i)
+            (void)job.pump();
+        check(job.state()==playback::HlsCacheState::Ready &&
+              video.hits==2 && sink.publishes==1,
+              "valid muxed H.264/AAC TS publishes unchanged");
+    }
+    {
         FakeTransport video;video.temporary_left=1;
         playback::HlsSegmentReader reader(video);
         Sink sink;playback::HlsCacheJob job(reader,sink);
