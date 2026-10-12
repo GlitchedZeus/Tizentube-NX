@@ -15,15 +15,18 @@ int main(){
   fs::remove_all("/tmp/ttnx-m4-rolling-test");
   const std::string packet(188*2,'T'); // Native caller must verify codecs before append.
   RollingHlsSink sink;
-  ck(sink.begin(),"begin fresh ephemeral rolling directory");
+  ck(!sink.begin(60001),"reject malformed manifest target duration");
+  ck(sink.begin(5000),"begin fresh ephemeral rolling directory");
   ck(sink.append(0,3000,packet),"fsync and publish first verified segment");
   ck(!sink.append(0,3000,packet),"duplicate segment rejected");
   ck(!sink.append(2,3000,packet),"segment gap rejected");
   ck(!sink.append(1,0,packet),"invalid zero duration rejected");
   ck(!sink.append(1,3000,std::string(17*1024*1024,'v')),"unbounded media chunk rejected");
+  ck(!sink.append(1,6000,packet),"reject segment beyond fixed HLS target");
   ck(sink.append(1,3000,packet),"second segment published");
   const auto first=read(root/"stream.m3u8");
-  ck(first.find("#EXT-X-MEDIA-SEQUENCE:0")!=std::string::npos &&
+  ck(first.find("#EXT-X-TARGETDURATION:5")!=std::string::npos &&
+     first.find("#EXT-X-MEDIA-SEQUENCE:0")!=std::string::npos &&
      first.find("v_00000.ts")!=std::string::npos &&
      first.find("v_00001.ts")!=std::string::npos &&
      first.find("#EXT-X-ENDLIST")==std::string::npos,
@@ -31,7 +34,8 @@ int main(){
   ck(!sink.retire_before(2),"cannot retire entire visible playback window");
   ck(sink.retire_before(1),"advance window before unlinking consumed chunk");
   const auto next=read(root/"stream.m3u8");
-  ck(next.find("#EXT-X-MEDIA-SEQUENCE:1")!=std::string::npos &&
+  ck(next.find("#EXT-X-TARGETDURATION:5")!=std::string::npos &&
+     next.find("#EXT-X-MEDIA-SEQUENCE:1")!=std::string::npos &&
      next.find("v_00000.ts")==std::string::npos &&
      !fs::exists(root/"v_00000.ts") &&
      sink.bytes()==packet.size(),"rolling playlist sheds already played bytes");

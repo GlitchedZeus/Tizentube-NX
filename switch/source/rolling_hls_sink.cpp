@@ -100,16 +100,19 @@ bool RollingHlsSink::discard() noexcept {
     for(const auto& path:paths)if(!remove_file(path))return false;
     return rmdir(kRoot)==0 || errno==ENOENT;
 }
-bool RollingHlsSink::begin() {
+bool RollingHlsSink::begin(std::uint64_t maximum_segment_ms) {
+    if(!maximum_segment_ms || maximum_segment_ms>60000)return false;
     if(started_ || playback::HlsPlaybackLease::is_active() ||
        !discard() || !ancestors(true))return false;
-    segments_.clear();bytes_=0;next_=0;started_=true;
+    segments_.clear();bytes_=0;next_=0;
+    target_seconds_=(maximum_segment_ms+999)/1000;started_=true;
     return true;
 }
 bool RollingHlsSink::append(std::size_t index,std::uint64_t duration_ms,
                             std::string_view verified_muxed_ts) {
     if(!started_ || !ancestors(false) || index!=next_ ||
-       index>=kMaxSegments || duration_ms==0 || duration_ms>60000 ||
+       index>=kMaxSegments || duration_ms==0 ||
+       duration_ms>(target_seconds_*1000) ||
        verified_muxed_ts.empty() || verified_muxed_ts.size()>16*1024*1024 ||
        verified_muxed_ts.size()>kMaxMediaBytes-bytes_)return false;
     const auto tmp=segment_path(index,true), ready=segment_path(index);
@@ -124,10 +127,8 @@ bool RollingHlsSink::append(std::size_t index,std::uint64_t duration_ms,
 }
 bool RollingHlsSink::publish(bool end_list) {
     if(segments_.empty())return false;
-    std::uint64_t maximum_ms=0;
-    for(const auto& s:segments_)maximum_ms=std::max(maximum_ms,s.duration_ms);
     std::string text="#EXTM3U\n#EXT-X-VERSION:3\n"
-       "#EXT-X-TARGETDURATION:"+std::to_string((maximum_ms+999)/1000)+"\n"
+       "#EXT-X-TARGETDURATION:"+std::to_string(target_seconds_)+"\n"
        "#EXT-X-MEDIA-SEQUENCE:"+std::to_string(segments_.front().index)+"\n";
     for(const auto& s:segments_) {
         char millis[36]{};
