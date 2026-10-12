@@ -9,6 +9,39 @@ def events(*items):
                     for i,(kind,status,a,b,c) in enumerate(items,1))+"\n"
 
 class M3TriageTests(unittest.TestCase):
+    def test_visible_frame_after_stop_is_not_playback_success(self):
+        # Physical Switch October 12 first real YouTube picture flash on B.
+        log=events(("SESSION","START",1,1,0),
+                   ("PLAYER","START",3,0,0),
+                   ("DECODE","SELECTED",1,1,0),
+                   ("RENDER","FRAME",1,13,1),
+                   ("RENDER","FRAME",120,13,1),
+                   ("PLAYER","STOP",0,0,0),
+                   ("UI","READY",1,2,0),
+                   ("UI","DRAW",1,0,1),
+                   ("UI","PRESENTED",1,2,1),
+                   ("UI","DRAW",2,1,1))
+        code,summary=assess(log)
+        self.assertEqual(code,"PLAYER_ACTIVITY_NOT_VISIBLE")
+        self.assertIn("only during exit",summary)
+
+    def test_ui_watchdog_reports_invisible_root_opacity(self):
+        log=events(("SESSION","START",1,1,0),
+                   ("RENDER","FRAME",120,13,1),
+                   ("UI","FAIL",2,120,0))
+        code,summary=assess(log)
+        self.assertEqual(code,"PLAYER_ACTIVITY_NOT_VISIBLE")
+        self.assertIn("alpha x1000=0",summary)
+
+    def test_healthy_draw_before_stop_is_not_invisible(self):
+        log=events(("SESSION","START",1,1,0),
+                   ("RENDER","FRAME",1,13,1),
+                   ("UI","DRAW",1,1,1),
+                   ("UI","PRESENTED",1,3,1),
+                   ("PLAYER","STOP",0,0,0),
+                   ("UI","DRAW",2,0,1))
+        self.assertEqual(assess(log)[0],"CHECK_TEXTURE_AND_DISPLAY")
+
     def test_audio_only(self):
         log=events(("SESSION","START",1,1,0),
                    ("DECODE","LOADED",0,0,0),

@@ -80,6 +80,28 @@ def assess(text: str):
         return "NO_SELECTED_VIDEO","Playback is active but no video track is selected."
     frames=of("RENDER","FRAME")
     ui_draws=of("UI","DRAW")
+    # Presentation activity fade bug: a 0-alpha root prevents ALL widget
+    # draws until Borealis hide() temporarily forces alpha back to 1.
+    # An upload after Stop is not proof that picture was visible in playback.
+    no_draw_warnings=[x for x in of("UI","FAIL") if x[2]==2]
+    if no_draw_warnings:
+        last=no_draw_warnings[-1]
+        return "PLAYER_ACTIVITY_NOT_VISIBLE",(
+            f"{last[3]} software frames decoded with zero video-widget draws; "
+            f"activity alpha x1000={last[4]}. Review Borealis show/hide lifecycle.")
+    if frames and any(x[3]>0 for x in frames) and ui_draws:
+        first_stop=next((i for i,x in enumerate(rows)
+                         if x[:2]==("PLAYER","STOP")),None)
+        if first_stop is not None:
+            drawn_before_stop=any(x[:2]==("UI","DRAW")
+                                  for x in rows[:first_stop])
+            rendered_before_stop=any(x[:2]==("RENDER","FRAME") and x[3]>0
+                                     for x in rows[:first_stop])
+            if rendered_before_stop and not drawn_before_stop:
+                return "PLAYER_ACTIVITY_NOT_VISIBLE",(
+                    "Non-black software frames were rendered before Stop, "
+                    "but the first player view draw occurred only during exit; "
+                    "inspect incoming activity opacity and Borealis transitions.")
     if not frames and (of("DECODE","LOADED") or of("DECODE","RESTART")):
         return "VIDEO_RENDER_NOT_PRODUCING_FRAMES","Media loaded, but no successful software-rendered video frames were observed."
     if frames and all(x[3]==0 for x in frames):
