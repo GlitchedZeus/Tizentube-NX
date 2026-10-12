@@ -9,6 +9,9 @@ No cookies/account/PoToken; no signed media URLs or raw errors are logged.
 from __future__ import annotations
 import argparse
 import json
+import pathlib
+import subprocess
+import tempfile
 import re
 import sys
 import urllib.error
@@ -24,6 +27,7 @@ VISION_UA="com.google.ios.youtube/1.02 (RealityDevice17,1; U; CPU visionOS 26_5 
 MAX_JSON=4*1024*1024
 MAX_PLAYLIST=1024*1024
 MAX_SAMPLE=65536
+MAX_DECODE_MEDIA=16*1024*1024
 
 
 class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -413,7 +417,89 @@ def classify_vision_audio_candidates(payload: bytes) -> str:
         return "AUDIO_LIST_UNAVAILABLE"
 
 
-def one_source(video_id: str,visitor: str) -> str:
+
+def get_complete_media(url: str) -> bytes:
+    """One full, bounded signed media object. No redirects, no URL logging.
+
+    This intentionally exercises complete audio and video bytes in LIVE CI
+    without allowing mpv/ffmpeg any network access. A partial 206 must span
+    the entire object; a mere first chunk cannot count as decoded media.
+    """
+    if not approved_hls(url):
+        raise ValueError("DECODE_MEDIA_URL_REJECTED")
+    request=urllib.request.Request(url,method="GET",headers={
+        "Accept":"application/octet-stream",
+        "Accept-Encoding":"identity",
+    })
+    with urllib.request.build_opener(NoRedirect()).open(request,timeout=25) as response:
+        if response.status not in (200,206):
+            raise ValueError("DECODE_MEDIA_HTTP_UNAVAILABLE")
+        if response.headers.get("Content-Encoding","identity").lower()!="identity":
+            raise ValueError("DECODE_MEDIA_ENCODING_REJECTED")
+        contents=response.read(MAX_DECODE_MEDIA+1)
+        if not 376<=len(contents)<=MAX_DECODE_MEDIA:
+            raise ValueError("DECODE_MEDIA_SIZE_REJECTED")
+        length=response.headers.get("Content-Length")
+        if length is not None:
+            if not length.isdigit() or int(length)!=len(contents):
+                raise ValueError("DECODE_MEDIA_TRUNCATED")
+        if response.status==206:
+            value=response.headers.get("Content-Range","")
+            match=re.fullmatch(r"bytes 0-(\d+)/(\d+)",value)
+            if not match or int(match.group(1))+1!=int(match.group(2)) or (
+                    int(match.group(2))!=len(contents)):
+                raise ValueError("DECODE_MEDIA_PARTIAL")
+        return contents
+
+
+def decode_real_av_pair(video: bytes,audio: bytes) -> bool:
+    """Decode actual A/V samples with file-only FFmpeg and discard all bytes.
+
+    Never pass a bearer URL, ID, visitor token, or network protocol to
+    ffmpeg/ffprobe. Decoder errors are not echoed (they may be untrusted).
+    """
+    if identify_media_container(video)!="MPEG_TS" or (
+            0x1b not in detect_ts_stream_types(video[:MAX_SAMPLE])):
+        return False
+    if identify_media_container(audio)!="ISOBMFF" or audio[4:8]!=b"ftyp":
+        return False
+    with tempfile.TemporaryDirectory(prefix="ttnx-live-av-") as directory:
+        root=pathlib.Path(directory)
+        video_path=root/"video.ts"
+        audio_path=root/"audio.m4a"
+        video_path.write_bytes(video)
+        audio_path.write_bytes(audio)
+        def inspect(path: pathlib.Path) -> list[tuple[str,str]]:
+            run=subprocess.run([
+                "ffprobe","-v","error",
+                "-protocol_whitelist","file",
+                "-show_entries","stream=codec_name,codec_type",
+                "-of","json",str(path),
+            ],capture_output=True,timeout=25,check=True)
+            info=json.loads(run.stdout)
+            return [(s.get("codec_name",""),s.get("codec_type",""))
+                    for s in info.get("streams",[])]
+        if ("h264","video") not in inspect(video_path) or (
+                "aac","audio") not in inspect(audio_path):
+            return False
+        # Independent decoding catches broken packets even if stream metadata
+        # is present; combined mapping verifies the two actual files can be
+        # opened in one local process without remote access.
+        for args in [
+            ["-i",str(video_path),"-map","0:v:0",
+             "-frames:v","24","-f","null","-"],
+            ["-i",str(audio_path),"-map","0:a:0",
+             "-t","2","-f","null","-"],
+            ["-i",str(video_path),"-i",str(audio_path),
+             "-map","0:v:0","-map","1:a:0","-t","3","-f","null","-"],
+        ]:
+            subprocess.run(["ffmpeg","-nostdin","-hide_banner","-loglevel",
+                            "error","-xerror","-protocol_whitelist","file",
+                            *args],capture_output=True,check=True,timeout=35)
+        return True
+
+
+def one_source(video_id: str,visitor: str,decode_real: bool=False) -> str:
     stage="PLAYER"
     try:
         post=urllib.request.Request(
@@ -487,6 +573,18 @@ def one_source(video_id: str,visitor: str) -> str:
                 })
                 if identify_media_container(sample)!="ISOBMFF":
                     return "HLS_H264_AUDIO_CONTAINER_UNVERIFIED"
+                if decode_real:
+                    stage="REAL_AV_DOWNLOAD"
+                    full_video=get_complete_media(segment)
+                    full_audio=get_complete_media(audio)
+                    stage="REAL_AV_DECODE"
+                    try:
+                        if decode_real_av_pair(full_video,full_audio):
+                            return "HLS_REAL_H264_AAC_DECODE_VERIFIED"
+                    except (subprocess.CalledProcessError,
+                            subprocess.TimeoutExpired,ValueError,OSError):
+                        return "REAL_AV_DECODE_REJECTED"
+                    return "REAL_AV_CODEC_REJECTED"
                 return "HLS_H264_AND_SEPARATE_AAC_MP4_BYTES_VERIFIED"
             return "HLS_MPEG_TS_CODEC_UNVERIFIED"
         return "HLS_SEGMENT_"+container+"_BYTES_OBTAINED"
@@ -509,6 +607,8 @@ def one_source(video_id: str,visitor: str) -> str:
 def main() -> int:
     parser=argparse.ArgumentParser()
     parser.add_argument("--video-id",action="append",required=True)
+    parser.add_argument("--decode-real-av",action="store_true",
+                        help="Require bounded real FFmpeg H.264/AAC decoding")
     args=parser.parse_args()
     ids=args.video_id
     if len(ids)>3 or len(set(ids))!=len(ids) or any(not VIDEO_ID.fullmatch(x) for x in ids):
@@ -526,12 +626,16 @@ def main() -> int:
         print("VISITOR_BOOTSTRAP_UNAVAILABLE")
         return 1
     for video_id in ids:
-        result=one_source(video_id,visitor)
+        result=one_source(video_id,visitor,decode_real=args.decode_real_av)
         print(f"source={video_id} stage={result}")
-        if result in {"HLS_MPEG_TS_H264_AAC_STREAMS_VERIFIED",
-                      "HLS_H264_AND_SEPARATE_AAC_MP4_BYTES_VERIFIED",
-                      "HLS_SEGMENT_ISOBMFF_BYTES_OBTAINED"}:
+        acceptable={"HLS_REAL_H264_AAC_DECODE_VERIFIED"} if args.decode_real_av else {
+            "HLS_MPEG_TS_H264_AAC_STREAMS_VERIFIED",
+            "HLS_H264_AND_SEPARATE_AAC_MP4_BYTES_VERIFIED",
+            "HLS_SEGMENT_ISOBMFF_BYTES_OBTAINED"}
+        if result in acceptable:
             print("M3_VISION_HLS_LIVE_REFERENCE=PASS")
+            if args.decode_real_av:
+                print("M3_REAL_AV_DECODE=PASS")
             return 0
     print("M3_VISION_HLS_LIVE_REFERENCE=FAIL")
     return 1

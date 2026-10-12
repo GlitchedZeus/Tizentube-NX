@@ -275,3 +275,18 @@ without wasting a full clip. The cache still publishes only after every
 remaining H.264 video segment and the complete AAC are present. A TS
 codec mismatch still fails before opening the AAC URL. Tests verify the
 transfer ordering, cancellation, late failures and no premature publish.
+
+### Live paired A/V decoder gate (network-isolated from FFmpeg)
+
+The VisionOS source CI now includes an opt-in `--decode-real-av` path.
+For the first public guest video with an eligible direct HLS video-only
+MPEG-TS rendition and a signed separate AAC MP4, it fetches **one entire
+bounded video segment and the complete bounded audio resource** (maximum
+16 MiB each). Every HTTPS URL is independently checked under the established
+media-host policy with redirects refused. Both files exist only in an
+ephemeral private temporary directory; the workflow never uploads any
+media, source JSON or signed URLs. Host `ffprobe` must identify actual
+H.264 and AAC streams, and `ffmpeg` must decode the independent tracks
+and open them together using a file-only protocol whitelist. The CI
+result remains an **off-console media compatibility proof**, not a
+Nintendo Switch playback or audio-synchronization acceptance.

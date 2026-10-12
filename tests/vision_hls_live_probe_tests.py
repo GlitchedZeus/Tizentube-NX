@@ -1,6 +1,9 @@
 """Offline safety checks for the network-isolated visionOS/HLS live proof gate."""
 from __future__ import annotations
 import json
+import shutil
+import subprocess
+import tempfile
 import pathlib
 import sys
 import unittest
@@ -56,6 +59,20 @@ class ProofContracts(unittest.TestCase):
             with self.subTest(url=url):
                 self.assertFalse(probe.approved_hls(url))
         self.assertTrue(probe.approved_hls(MASTER))
+
+    def test_real_decode_refuses_fake_media_without_network(self):
+        self.assertFalse(probe.decode_real_av_pair(
+            b"<html>not video</html>",b"not-audio"))
+        self.assertFalse(probe.decode_real_av_pair(
+            b"\x47"+b"x"*400,b"\x00\x00\x00\x18ftypisom"+b"x"*512))
+
+    def test_real_media_download_policy_blocks_unreviewed_hosts(self):
+        for value in ["https://accounts.nintendo.com/videoplayback",
+                      "http://r1.googlevideo.com/videoplayback",
+                      "https://r1.googlevideo.com:80/videoplayback"]:
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    probe.get_complete_media(value)
 
     def test_hls_master_and_segments_checked(self):
         master=(
