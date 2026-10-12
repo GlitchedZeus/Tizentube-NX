@@ -1588,10 +1588,12 @@ private:
                                     ttnx::playback::MediaChunkReader reader(audio_transport);
                                     auto download=[&](const std::string& url,Cache& sink,
                                                       int phase,
-                                                      ttnx::playback::MediaChunkReader& chunks)->bool {
+                                                      ttnx::playback::MediaChunkReader& chunks,
+                                                      std::atomic_bool* sibling_failed=nullptr)->bool {
                                         ttnx::playback::MediaDownloadJob job(chunks,sink);
                                         ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Transfer,ttnx::switch_app::M3Event::Start,phase,0,0);
                                         if(!job.start(url)){
+                                            if(sibling_failed)sibling_failed->store(true);
                                             ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Cache,ttnx::switch_app::M3Event::Fail,phase,static_cast<int>(sink.last_storage_error()),sink.last_storage_errno());
                                             ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Transfer,ttnx::switch_app::M3Event::Fail,phase,static_cast<int>(job.error()),0);
                                             return false;
@@ -1600,8 +1602,11 @@ private:
                                         std::uint64_t last_reported_mib=0;
                                         while(job.state()==
                                               ttnx::playback::MediaDownloadState::Fetching &&
-                                              !media_cancel_requested_.load()) {
+                                              !media_cancel_requested_.load() &&
+                                              !(sibling_failed && sibling_failed->load())) {
                                             (void)job.pump();
+                                            if(job.state()==ttnx::playback::MediaDownloadState::Error &&
+                                               sibling_failed)sibling_failed->store(true);
                                             if(job.retry_delay_ms()) {
                                                 ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Transfer,ttnx::switch_app::M3Event::Retry,phase,job.last_http_status(),static_cast<int>(job.last_chunk_failure()));
                                             }
@@ -1627,7 +1632,9 @@ private:
                                                 media_progress_total_.store(job.total_bytes());
                                             }
                                         }
-                                        if(media_cancel_requested_.load()) {
+                                        if(media_cancel_requested_.load() ||
+                                           (sibling_failed && sibling_failed->load() &&
+                                            job.state()==ttnx::playback::MediaDownloadState::Fetching)) {
                                             job.cancel();
                                             ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Transfer,ttnx::switch_app::M3Event::Cancel,phase,static_cast<std::int64_t>(job.bytes_received()),0);
                                             return false;
@@ -1643,8 +1650,10 @@ private:
                                         ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Transfer,ttnx::switch_app::M3Event::End,phase,static_cast<int>(job.error())*1000+job.last_http_status(),static_cast<std::int64_t>(job.bytes_received()));
                                         ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Transfer,ttnx::switch_app::M3Event::Status,phase,static_cast<int>(job.last_chunk_failure()),static_cast<std::int64_t>(job.total_bytes()));
                                         ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Transfer,ttnx::switch_app::M3Event::Redirect,phase,job.redirect_hops_total(),0);
-                                        return job.state()==
+                                        const bool good=job.state()==
                                             ttnx::playback::MediaDownloadState::Complete;
+                                        if(!good && sibling_failed)sibling_failed->store(true);
+                                        return good;
                                     };
                                     if(have_muxed){
                                         Cache movie;
@@ -1659,6 +1668,7 @@ private:
                                         Cache audio(Cache::Slot::AdaptiveAudio);
                                         Cache video(Cache::Slot::AdaptiveVideo);
                                         bool audio_ok=false,video_ok=false;
+                                        std::atomic_bool sibling_failed{false};
                                         // Both media URLs came from the same approved
                                         // guest response. Keep independent strict
                                         // HTTPS transports/byte-range readers and
@@ -1673,14 +1683,16 @@ private:
                                                 media_parallel_adaptive_.store(true);
                                                 video_result=std::async(std::launch::async,[&] {
                                                     return download(paired.streams->video_url,
-                                                                    video,5,video_reader);
+                                                                    video,5,video_reader,
+                                                                    &sibling_failed);
                                                 });
                                             } catch (...) {
                                                 media_parallel_adaptive_.store(false);
                                             }
                                             if(video_result.valid()) {
                                                 audio_ok=download(paired.streams->audio_url,
-                                                                  audio,4,reader);
+                                                                  audio,4,reader,
+                                                                  &sibling_failed);
                                                 video_ok=video_result.get();
                                                 media_parallel_adaptive_.store(false);
                                             } else {
