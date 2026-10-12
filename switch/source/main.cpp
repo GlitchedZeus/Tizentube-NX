@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <functional>
+#include <future>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -373,6 +374,9 @@ private:
     std::atomic<int> media_step_{0}; // 0 resolver, 1 media URL accepted, 2 downloading
     std::atomic<std::uint64_t> media_progress_bytes_{0};
     std::atomic<std::uint64_t> media_progress_total_{0};
+    std::atomic_bool media_parallel_adaptive_{false};
+    std::atomic<std::uint64_t> media_audio_bytes_{0},media_audio_total_{0};
+    std::atomic<std::uint64_t> media_video_bytes_{0},media_video_total_{0};
     std::atomic<unsigned> media_segments_done_{0};
     std::atomic<unsigned> media_segments_total_{0};
     std::atomic_bool media_external_aac_phase_{false};
@@ -1452,8 +1456,9 @@ private:
     // Do not silently retain a completed or partial prior video. The
     // on-disk media folder is always throwaway, never watch history.
     static bool discard_m3_session_media() noexcept {
-        return ttnx::switch_app::SwitchMediaCacheSink::discard_session_media() &&
-               ttnx::switch_app::SwitchHlsCacheSink::discard_session_media();
+        const bool mp4=ttnx::switch_app::SwitchMediaCacheSink::discard_session_media();
+        const bool hls=ttnx::switch_app::SwitchHlsCacheSink::discard_session_media();
+        return mp4 && hls;
     }
     void publish_m3_feedback_on_ui(const std::string& video_id) {
         // Global status is above Search results and offscreen when Play is
@@ -1496,6 +1501,11 @@ private:
         media_step_.store(0);
         media_progress_bytes_.store(0);
         media_progress_total_.store(0);
+        media_parallel_adaptive_.store(false);
+        media_audio_bytes_.store(0);
+        media_audio_total_.store(0);
+        media_video_bytes_.store(0);
+        media_video_total_.store(0);
         media_segments_done_.store(0);
         media_segments_total_.store(0);
         media_external_aac_phase_.store(false);
@@ -1577,8 +1587,9 @@ private:
                                     using Cache=ttnx::switch_app::SwitchMediaCacheSink;
                                     ttnx::playback::MediaChunkReader reader(audio_transport);
                                     auto download=[&](const std::string& url,Cache& sink,
-                                                      int phase)->bool {
-                                        ttnx::playback::MediaDownloadJob job(reader,sink);
+                                                      int phase,
+                                                      ttnx::playback::MediaChunkReader& chunks)->bool {
+                                        ttnx::playback::MediaDownloadJob job(chunks,sink);
                                         ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Transfer,ttnx::switch_app::M3Event::Start,phase,0,0);
                                         if(!job.start(url)){
                                             ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Cache,ttnx::switch_app::M3Event::Fail,phase,static_cast<int>(sink.last_storage_error()),sink.last_storage_errno());
@@ -1604,13 +1615,29 @@ private:
                                                 std::this_thread::sleep_for(
                                                     std::chrono::milliseconds(
                                                         job.retry_delay_ms()));
-                                            media_progress_bytes_.store(job.bytes_received());
-                                            media_progress_total_.store(job.total_bytes());
+                                            if(phase==4) {
+                                                media_audio_bytes_.store(job.bytes_received());
+                                                media_audio_total_.store(job.total_bytes());
+                                            } else if(phase==5) {
+                                                media_video_bytes_.store(job.bytes_received());
+                                                media_video_total_.store(job.total_bytes());
+                                            }
+                                            if(!media_parallel_adaptive_.load()) {
+                                                media_progress_bytes_.store(job.bytes_received());
+                                                media_progress_total_.store(job.total_bytes());
+                                            }
                                         }
                                         if(media_cancel_requested_.load()) {
                                             job.cancel();
                                             ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Transfer,ttnx::switch_app::M3Event::Cancel,phase,static_cast<std::int64_t>(job.bytes_received()),0);
                                             return false;
+                                        }
+                                        if(phase==4) {
+                                            media_audio_bytes_.store(job.bytes_received());
+                                            media_audio_total_.store(job.total_bytes());
+                                        } else if(phase==5) {
+                                            media_video_bytes_.store(job.bytes_received());
+                                            media_video_total_.store(job.total_bytes());
                                         }
                                         ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Cache,job.state()==ttnx::playback::MediaDownloadState::Complete?ttnx::switch_app::M3Event::Pass:ttnx::switch_app::M3Event::Fail,phase,static_cast<int>(sink.last_storage_error()),sink.last_storage_errno());
                                         ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Transfer,ttnx::switch_app::M3Event::End,phase,static_cast<int>(job.error())*1000+job.last_http_status(),static_cast<std::int64_t>(job.bytes_received()));
@@ -1622,7 +1649,7 @@ private:
                                     if(have_muxed){
                                         Cache movie;
                                         completed=download(single.streams->video_url,
-                                                           movie,3);
+                                                           movie,3,reader);
                                         feedback=media_cancel_requested_.load()
                                             ?"M3 download cancelled."
                                             :completed?"M3: verified muxed MP4 ready."
@@ -1630,26 +1657,62 @@ private:
                                     } else if(have_pair){
                                         Cache::invalidate_adaptive_pair();
                                         Cache audio(Cache::Slot::AdaptiveAudio);
-                                        const bool audio_ok=download(
-                                            paired.streams->audio_url,audio,4);
-                                        if(audio_ok) {
-                                            Cache video(Cache::Slot::AdaptiveVideo);
-                                            const bool video_ok=download(
-                                                paired.streams->video_url,video,5);
-                                            if(video_ok && Cache::publish_adaptive_pair()) {
-                                                ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Cache,ttnx::switch_app::M3Event::Pass,1,0,0);
-                                                completed=true;
-                                                completed_adaptive=true;
-                                                feedback="M3: video MP4 + separate AAC verified.";
-                                            } else {
-                                                ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Cache,ttnx::switch_app::M3Event::Fail,static_cast<int>(video_ok),0,0);
-                                                feedback=media_cancel_requested_.load()
-                                                    ?"M3 adaptive download cancelled."
-                                                    :"M3 adaptive video transfer/MP4 validation failed.";
+                                        Cache video(Cache::Slot::AdaptiveVideo);
+                                        bool audio_ok=false,video_ok=false;
+                                        // Both media URLs came from the same approved
+                                        // guest response. Keep independent strict
+                                        // HTTPS transports/byte-range readers and
+                                        // distinct SD sinks, then join before commit.
+                                        // Two simultaneous downloads reduce startup
+                                        // on links where latency is the limiting factor.
+                                        ttnx::switch_app::LibnxMediaChunkTransport video_transport;
+                                        if(video_transport.ready()) {
+                                            ttnx::playback::MediaChunkReader video_reader(video_transport);
+                                            std::future<bool> video_result;
+                                            try {
+                                                media_parallel_adaptive_.store(true);
+                                                video_result=std::async(std::launch::async,[&] {
+                                                    return download(paired.streams->video_url,
+                                                                    video,5,video_reader);
+                                                });
+                                            } catch (...) {
+                                                media_parallel_adaptive_.store(false);
                                             }
-                                        } else feedback=media_cancel_requested_.load()
-                                            ?"M3 adaptive download cancelled."
-                                            :"M3 adaptive AAC range download failed.";
+                                            if(video_result.valid()) {
+                                                audio_ok=download(paired.streams->audio_url,
+                                                                  audio,4,reader);
+                                                video_ok=video_result.get();
+                                                media_parallel_adaptive_.store(false);
+                                            } else {
+                                                audio_ok=download(paired.streams->audio_url,
+                                                                  audio,4,reader);
+                                                if(audio_ok)video_ok=download(
+                                                    paired.streams->video_url,video,5,reader);
+                                            }
+                                        } else {
+                                            audio_ok=download(paired.streams->audio_url,
+                                                              audio,4,reader);
+                                            if(audio_ok)video_ok=download(
+                                                paired.streams->video_url,video,5,reader);
+                                        }
+                                        if(audio_ok && video_ok &&
+                                           Cache::publish_adaptive_pair()) {
+                                            ttnx::switch_app::M3Diagnostics::record(
+                                                ttnx::switch_app::M3Stage::Cache,
+                                                ttnx::switch_app::M3Event::Pass,1,0,0);
+                                            completed=true;
+                                            completed_adaptive=true;
+                                            feedback="M3: video MP4 + separate AAC verified.";
+                                        } else {
+                                            ttnx::switch_app::M3Diagnostics::record(
+                                                ttnx::switch_app::M3Stage::Cache,
+                                                ttnx::switch_app::M3Event::Fail,1,
+                                                audio_ok?1:0,video_ok?1:0);
+                                            feedback=media_cancel_requested_.load()
+                                                ?"M3 adaptive download cancelled."
+                                                :!audio_ok?"M3 adaptive AAC range download failed."
+                                                :"M3 adaptive video transfer/MP4 validation failed.";
+                                        }
                                     } else feedback=hls_reason+
                                         " | no safe muxed/separate H.264+AAC; "+
                                         std::to_string(resolved->video.size())+
@@ -1736,7 +1799,17 @@ private:
             const auto now = std::chrono::steady_clock::now();
             if (now - media_last_ui_update_ < std::chrono::milliseconds(700)) return;
             media_last_ui_update_ = now;
-            if(media_step_.load()==3 || media_step_.load()==4 ||
+            if(media_parallel_adaptive_.load()) {
+                media_feedback_="M3 downloading AAC "+
+                    std::to_string(media_audio_bytes_.load()/1024)+" KiB";
+                if(media_audio_total_.load())media_feedback_+=" / "+
+                    std::to_string(media_audio_total_.load()/1024)+" KiB";
+                media_feedback_+=" + H.264 "+
+                    std::to_string(media_video_bytes_.load()/1024)+" KiB";
+                if(media_video_total_.load())media_feedback_+=" / "+
+                    std::to_string(media_video_total_.load()/1024)+" KiB";
+                publish_m3_feedback_on_ui(active_m3_video_id_);
+            } else if(media_step_.load()==3 || media_step_.load()==4 ||
                media_step_.load()==5) {
                 const auto phase=media_step_.load();
                 const auto current=media_progress_bytes_.load();
