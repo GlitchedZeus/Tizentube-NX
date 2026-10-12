@@ -430,6 +430,19 @@ int main() {
     fs::remove(base/"ready");
     ck(switch_app::SwitchHlsCacheSink::discard_session_media(),
        "cleanup recovers after symlink removed");
+    // An intermediate SD directory symlink must not redirect cleanup.
+    fs::remove_all("/tmp/tizentube-m3-hls-test/switch");
+    const auto foreign=fs::path("/tmp/tizentube-m3-hls-test/foreign");
+    fs::create_directories(foreign/"TizenTube-NX/media-cache/hls/ready");
+    std::ofstream(foreign/"TizenTube-NX/media-cache/hls/ready/v_00000.ts")<<"foreign";
+    fs::create_directory_symlink(foreign,
+                                  "/tmp/tizentube-m3-hls-test/switch");
+    switch_app::SwitchHlsCacheSink guarded;
+    ck(!switch_app::SwitchHlsCacheSink::discard_session_media() &&
+       !guarded.begin(source) &&
+       fs::exists(foreign/"TizenTube-NX/media-cache/hls/ready/v_00000.ts"),
+       "symlinked HLS ancestor blocks deletion and new transactions");
+    fs::remove("/tmp/tizentube-m3-hls-test/switch");
     fs::remove_all("/tmp/tizentube-m3-hls-test");
     if(failures)std::cerr<<failures<<" SD cache contract failures\n";
     return failures?EXIT_FAILURE:EXIT_SUCCESS;

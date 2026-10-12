@@ -246,3 +246,23 @@ tries to purge app-owned temporary media. If libmpv is still actively
 playing, its exclusive lease prevents unsafe removal; the startup sweep
 on the next launch remains the fallback. Numeric-only CACHE PASS/FAIL phase
 7 indicates whether immediate exit cleanup succeeded.
+
+## Temporary storage ceilings and global cleanup preflight
+
+HLS now has aggregate **per-clip budgets** of 512 MiB video and 128 MiB
+audio (including external AAC), rather than only a 16 MiB per-segment
+limit. The adaptive MP4 paths retain their 512 MiB video / 128 MiB audio
+limits. HLS manifest and bookkeeping bytes add a small overhead. These
+are bounds per transaction, **not an absolute peak SD reservation**:
+a prior published HLS clip and its replacement can coexist briefly
+during a transaction. True bounded-buffer streaming has not been
+implemented; full media downloads still precede normal playback.
+
+MP4 cache cleanup inventories all known fixed paths before deleting any;
+HLS inventories pending/previous/ready in full before deleting from any
+of them. Unexpected file types and symlinked SD-directory ancestors
+cause a fail-closed result, preserving unrelated files. These are
+defense-in-depth checks, not a sandbox against concurrent hostile
+filesystem mutations. Native regression cases exercise budget
+exhaustion, poisoned neighboring directories, symlinks, active leases
+and repeat-view cleanup.

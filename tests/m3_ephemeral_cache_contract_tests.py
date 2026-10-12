@@ -29,8 +29,13 @@ class EphemeralPlaybackContract(unittest.TestCase):
         self.assertIn('const bool storage_ready = ttnx::initialize_storage();',MAIN)
         self.assertIn('SwitchMediaCacheSink::discard_session_media();', MAIN)
         self.assertIn('SwitchHlsCacheSink::discard_session_media();', MAIN)
-        self.assertIn('if(playback::HlsPlaybackLease::is_active())return false;', MEDIA)
-        self.assertIn('if(playback::HlsPlaybackLease::is_active())return false;', HLS)
+        self.assertIn('if(playback::HlsPlaybackLease::is_active() || !safe_media_ancestors())return false;', MEDIA)
+        self.assertIn('if(playback::HlsPlaybackLease::is_active() || !safe_hls_ancestors())return false;', HLS)
+        for directory in ('kPending','kPrevious','kReady'):
+            self.assertIn(f'discard_known_directory({directory},true)',HLS)
+        self.assertIn('video_bytes_=audio_bytes_=0;',HLS)
+        self.assertIn('used+=bytes.size();',HLS)
+        self.assertIn('audio_bytes_+=bytes.size();',HLS)
 
     def test_player_releases_mpv_before_erasing_cache(self):
         scope=PLAYER.split('~CachedMpv() {',1)[1].split('    bool init()',1)[0]

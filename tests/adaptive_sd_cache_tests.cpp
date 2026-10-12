@@ -187,6 +187,18 @@ int main(){
           fs::exists(outside/"active.mp4"),
           "symlink cache root is rejected; unrelated data preserved");
     fs::remove(folder);
+    // A symlinked ancestor is also forbidden, even with a real cache root.
+    fs::remove_all("/tmp/ttnx-adaptive-cache-test/switch");
+    const auto foreign=fs::path("/tmp/ttnx-adaptive-cache-test/foreign");
+    fs::create_directories(foreign/"TizenTube-NX/media-cache");
+    std::ofstream(foreign/"TizenTube-NX/media-cache/active.mp4")<<"foreign";
+    fs::create_directory_symlink(foreign,"/tmp/ttnx-adaptive-cache-test/switch");
+    SwitchMediaCacheSink guarded(Slot::MuxedVideo);
+    check(!SwitchMediaCacheSink::discard_session_media() &&
+          !guarded.begin() &&
+          fs::exists(foreign/"TizenTube-NX/media-cache/active.mp4"),
+          "symlinked MP4 ancestor blocks cleanup and new downloads");
+    fs::remove("/tmp/ttnx-adaptive-cache-test/switch");
     fs::remove_all("/tmp/ttnx-adaptive-cache-test");
     return errors?EXIT_FAILURE:EXIT_SUCCESS;
 }
