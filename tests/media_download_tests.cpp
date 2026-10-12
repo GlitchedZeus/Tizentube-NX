@@ -7,6 +7,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace {
 using namespace ttnx::playback;
@@ -48,9 +49,20 @@ struct FakeTransport final : MediaChunkTransport {
     bool fail_network{false}, change_total{false};
     int transient_failures{0},transient_http_status{0};
     std::uint64_t advertized_total{0};
+    bool redirect_each_signed_range{false};
+    std::string redirect_to{"https://r2.googlevideo.com/videoplayback?sig=approved"};
+    std::vector<net::HttpRequest> observed;
+    int redirected_calls{0};
     net::HttpResult perform(const net::HttpRequest& req) override {
         ++calls;
+        observed.push_back(req);
         net::HttpResult r;
+        if(redirect_each_signed_range && req.url==url) {
+            ++redirected_calls;
+            r.response.status_code=302;
+            r.response.headers={{"Location",redirect_to}};
+            return r;
+        }
         if (transient_failures>0) {
             --transient_failures;
             r.response.status_code=transient_http_status;
@@ -125,6 +137,52 @@ void large_success() {
           sink.published == fake.payload && sink.finishes == 1 &&
           fake.calls == 2, "final partial chunk completes and publishes");
 }
+void redirected_multichunk_download() {
+    {
+        // Reproduces the physical failure at both AAC start and a later
+        // H.264 chunk. Every original 1 MiB range receives 302 and only
+        // its reviewed follow-up receives the matching 206 media bytes.
+        FakeTransport fake;
+        fake.payload=std::string(2*MediaChunkReader::kMaxChunkBytes+19,'V');
+        fake.redirect_each_signed_range=true;
+        FakeSink sink;MediaChunkReader reader(fake);MediaDownloadJob job(reader,sink);
+        check(job.start(url),"redirected media download begins without network");
+        while(job.state()==MediaDownloadState::Fetching)(void)job.pump();
+        check(job.state()==MediaDownloadState::Complete &&
+              job.redirect_hops_total()==3 && fake.calls==6 &&
+              fake.redirected_calls==3 && sink.finishes==1 &&
+              sink.published==fake.payload,
+              "first/middle/final CDN relocations yield exactly one complete file");
+        bool ranges_preserved=fake.observed.size()==6;
+        for(std::size_t i=0;i+1<fake.observed.size();i+=2) {
+            ranges_preserved=ranges_preserved &&
+                fake.observed[i].url==url &&
+                fake.observed[i+1].url==fake.redirect_to &&
+                fake.observed[i].headers.size()==3 &&
+                fake.observed[i+1].headers.size()==3 &&
+                fake.observed[i].headers[0].value==
+                    fake.observed[i+1].headers[0].value &&
+                fake.observed[i].headers[0].name=="Range";
+        }
+        check(ranges_preserved,
+              "no byte-range/header mutations or unreviewed requests on redirects");
+    }
+    {
+        FakeTransport fake;
+        fake.payload=std::string(MediaChunkReader::kMaxChunkBytes+1,'Q');
+        fake.redirect_each_signed_range=true;
+        fake.redirect_to="https://accounts.nintendo.com/videoplayback";
+        FakeSink sink;MediaChunkReader reader(fake);MediaDownloadJob job(reader,sink);
+        check(job.start(url),"malicious redirect test begins");
+        check(job.pump()==MediaDownloadState::Error &&
+              job.last_chunk_failure()==MediaReadFailure::RedirectRejected &&
+              sink.aborts==1 && sink.finishes==0 &&
+              sink.temporary.empty() && sink.published.empty() &&
+              fake.calls==1,
+              "unapproved CDN relocation blocked with zero partial publication");
+    }
+}
+
 void negative_cases() {
     {
         FakeTransport fake;fake.payload="RECOVER";
@@ -226,6 +284,7 @@ void negative_cases() {
 int main() {
     short_success();
     large_success();
+    redirected_multichunk_download();
     negative_cases();
     if (failures) std::cerr << failures << " media download tests failed\n";
     return failures ? EXIT_FAILURE : EXIT_SUCCESS;

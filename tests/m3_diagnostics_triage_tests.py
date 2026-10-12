@@ -53,6 +53,25 @@ class M3TriageTests(unittest.TestCase):
                    ("CACHE","FAIL",4,4,5),
                    ("TRANSFER","END",4,2206,9814141))
         self.assertEqual(assess(log)[0],"AAC_SD_SYNC_FAILED")
+    def test_october_12_video_mid_transfer_302(self):
+        log=events(("SESSION","START",1,1,0),
+                   ("CACHE","PASS",4,0,0),
+                   ("TRANSFER","END",4,206,7849910),
+                   ("TRANSFER","RETRY",5,302,4),
+                   ("TRANSFER","RETRY",5,302,4),
+                   ("CACHE","FAIL",5,0,0),
+                   ("TRANSFER","END",5,3302,11534336),
+                   ("TRANSFER","STATUS",5,4,21356101))
+        code,summary=assess(log)
+        self.assertEqual(code,"CDN_REDIRECT_UNHANDLED")
+        self.assertIn("11534336",summary)
+    def test_unsafe_redirect_and_limit(self):
+        for failure,expected in ((5,"UNSAFE_MEDIA_REDIRECT"),
+                                 (11,"MEDIA_REDIRECT_LIMIT")):
+            log=events(("SESSION","START",1,1,0),
+                       ("TRANSFER","END",4,3302,0),
+                       ("TRANSFER","STATUS",4,failure,1234567))
+            self.assertEqual(assess(log)[0],expected)
     def test_range_failure(self):
         log=events(("SESSION","START",1,1,0),
                    ("TRANSFER","END",4,1033,4096))

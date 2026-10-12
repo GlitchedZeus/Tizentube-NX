@@ -39,8 +39,27 @@ def assess(text: str):
             return ("AAC_SD_" if phase==4 else "VIDEO_SD_")+causes[stage]+"_FAILED", (
                 f"SD finalization failed in {causes[stage]} (numeric errno {os_error}); "
                 "no network retry can repair this local failure.")
+    # Location and signed source URLs are never logged. Distinguish a
+    # legacy 302 treated as a transport retry from a new verified policy
+    # rejection or the hard two-hop redirect limit.
+    statuses=of("TRANSFER","STATUS")
+    retries=of("TRANSFER","RETRY")
     for row in transfer:
         phase,code,bytes_read=row[2:]
+        if code>=1000 and code%1000 in (301,302,303,307,308):
+            media_status=next((s for s in reversed(statuses) if s[2]==phase),None)
+            failure=media_status[3] if media_status else None
+            if failure==5:
+                return "UNSAFE_MEDIA_REDIRECT",(
+                    f"Phase {phase} rejected an unreviewed or cyclic CDN Location; "
+                    "no unsafe destination was contacted.")
+            if failure==11:
+                return "MEDIA_REDIRECT_LIMIT",(
+                    f"Phase {phase} exceeded two approved CDN redirects per range.")
+            if any(r[2]==phase and r[3]==302 for r in retries):
+                return "CDN_REDIRECT_UNHANDLED",(
+                    f"Phase {phase} received HTTP 302 after {bytes_read} bytes; "
+                    "the old native range downloader rejected that relocation.")
         # a=phase (3 muxed, 4 AAC, 5 video),
         # b=download-error*1000 + HTTP code; c=received bytes.
         if code>=1000:

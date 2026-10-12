@@ -100,6 +100,37 @@ All values are numeric, with no URLs, titles or media bytes. The offline
 triage script now reports e.g. `AAC_SD_PROMOTE_FAILED` instead of blaming
 the CDN when all promised range bytes arrived.
 
+## Field-confirmed October 12 redirect failure
+
+The October 12 hardware log proves a full 7,849,910-byte AAC transfer
+(HTTP 206), followed by H.264 download failure at 11,534,336 of
+21,356,101 bytes when subsequent Range requests repeatedly returned
+HTTP 302. Another source attempt encountered HTTP 302 before receiving
+any AAC bytes. Neither attempt reached the libmpv decoder.
+
+Previously the native media transport surfaced all 302 responses as
+terminal failures, and the range reader retried them as generic socket
+errors. The updated media reader may follow **at most two** HTTP
+301/302/303/307/308 hops per bounded Range request, only to approved
+HTTPS Googlevideo /videoplayback destinations. The original exact Range
+and identity Accept headers remain unchanged. Every hop repeats the
+native pre-DNS media-host gate and TLS certificate/hostname checks.
+No arbitrary redirects, Nintendo hosts, off-CDN destinations, unsigned
+media URL logs, MIME relaxations, or full HTTP 200 fallbacks are added.
+The terminal media response must still be an exact validated HTTP 206
+with the same resource size across chunks. Redirect loops and unreviewed
+locations fail closed. Tests cover first, middle and final chunk 302,
+unsafe destinations, loops, missing/duplicate Location and hop limits.
+
+TRANSFER REDIRECT <phase> <hop-count> 0 now records the number of
+reviewed hops *only*; no signed URL is serialized. The triage script
+distinguishes legacy CDN_REDIRECT_UNHANDLED from newly unsafe Location
+rejections and redirect limits.
+
+This removes one demonstrated transport blocker but is not a physical
+video/audio acceptance. The first full Switch decode and framebuffer
+presentation remain pending hardware evidence.
+
 ## Render-loop fix for the original black-video report
 
 The real libmpv render API requires timely update callbacks for
