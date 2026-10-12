@@ -590,7 +590,7 @@ public:
         if(!presentation_warning_latched_ && player_.frames_rendered()>=90 &&
            video_ && video_->draw_count()==0) {
             presentation_warning_latched_=true;
-            const auto* root=getContentView();
+            auto* root=getContentView();
             const auto alpha=root?static_cast<std::int64_t>(
                 root->getAlpha()*1000):-1;
             M3Diagnostics::record(M3Stage::Ui,M3Event::Fail,2,
