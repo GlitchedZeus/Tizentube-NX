@@ -404,3 +404,13 @@ Unverifiable high-duration bitrates fail early, rather than wasting
 the entire download. The existing hard byte limits remain mandatory;
 the estimate is not a proof that a stream will fit. Direct-media
 playlists without a master are not artificially assigned a bitrate.
+
+### Streaming startup buffer planning
+
+A new host-tested, independent `HlsStartupBuffer` prepares the
+bounded 12-second / six-segment prefix needed for future progressive
+HLS playback. Readiness requires in-order video segments, a verified
+H.264 source, and complete AAC; no partial cache is currently exposed
+to the native player. It is a preparation contract, not an assertion
+that Switch libmpv can refresh a growing HLS event playlist.
+The accepted full-cache transaction remains unchanged.
