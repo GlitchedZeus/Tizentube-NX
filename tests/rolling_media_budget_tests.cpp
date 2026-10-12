@@ -64,6 +64,34 @@ int main() {
     check(w.evictable_bytes(1999)==0,"eviction guard prevents early unlink");
     check(w.evictable_bytes(2000)==0,"eviction guard exact boundary");
     check(!w.commit_eviction(T::Audio,0,3499),"within protected playing window");
+    // A long video must not accumulate gigabytes across successive segments.
+    check(w.clear_epoch(),"reset before long-form stress playback");
+    const std::uint64_t video_chunk = 1536*1024;
+    const std::uint64_t audio_chunk = 128*1024;
+    for (std::uint32_t i=0; i<1200; ++i) {
+        const auto start=3000ULL*i;
+        // The consumer has advanced; unlink verified, unpinned old parts
+        // before admitting the next high-bitrate 720p segment.
+        if (i>2) {
+            const auto old=i-3;
+            check(w.commit_eviction(T::Video,old,start),"old video unlinked");
+            check(w.commit_eviction(T::Audio,old,start),"old AAC unlinked");
+        }
+        check(w.add(T::Video,i,start,start+3000,video_chunk)==R::Accepted,
+              "rolling 720p video segment admitted");
+        check(w.add(T::Audio,i,start,start+3000,audio_chunk)==R::Accepted,
+              "rolling AAC segment admitted");
+        check(w.used_bytes()<=W::kCapacityBytes,"long video never exceeds rolling quota");
+    }
+    check(w.high_water_bytes()<=W::kCapacityBytes && w.pieces()<=8,
+          "1200 segments (~one hour) remain within a fixed small window");
+    // Eviction must not reset per-track ordering until an explicit seek.
+    check(w.commit_eviction(T::Video,1197,3601000),"last old video released");
+    check(w.add(T::Video,1197,3591000,3594000,video_chunk)==R::OutOfOrder,
+          "evicted segment number cannot be replayed in the same epoch");
+    check(w.clear_epoch(),"seek resets per-track sequence guard");
+    check(w.add(T::Video,0,0,3000,video_chunk)==R::Accepted,
+          "new seek epoch starts fresh from segment zero");
     if (errors) std::cerr << errors << " failures\n";
     return errors ? 1 : 0;
 }

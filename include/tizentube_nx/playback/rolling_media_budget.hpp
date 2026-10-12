@@ -65,22 +65,17 @@ public:
         if (bytes > kCapacityBytes - used_bytes_) return AddResult::AtCapacity;
         // For each elementary track require exactly increasing piece IDs
         // and a non-overlapping timeline. A seek creates a fresh epoch.
-        bool found = false;
-        std::uint32_t last_index = 0;
-        std::uint64_t last_end = 0;
-        for (const auto& piece : pieces_) {
-            if (piece.track != track) continue;
-            if (!found || piece.index > last_index) {
-                found = true;
-                last_index = piece.index;
-                last_end = piece.end_ms;
-            }
-        }
-        if (found && (index <= last_index || start_ms < last_end))
+        // Preserve the highest sequence/time even when a played piece was
+        // evicted: an expired signed URL or retry cannot reinsert old media.
+        auto& previous = track == Track::Video ? last_video_ :
+                         track == Track::Audio ? last_audio_ : last_muxed_;
+        if (previous.valid &&
+            (index <= previous.index || start_ms < previous.end_ms))
             return AddResult::OutOfOrder;
         // No media bytes are allocated here; the caller must complete the
         // verified SD/memory publication before advertising a piece.
         pieces_.push_back(Piece{track,index,start_ms,end_ms,bytes,pinned});
+        previous = LastPiece{true,index,end_ms};
         used_bytes_ += bytes;
         high_water_bytes_ = std::max(high_water_bytes_,used_bytes_);
         return AddResult::Accepted;
@@ -131,6 +126,7 @@ public:
         for (const auto& p : pieces_) if (p.pinned) return false;
         pieces_.clear();
         used_bytes_ = 0;
+        last_video_ = last_audio_ = last_muxed_ = {};
         verified_video_ = verified_audio_ = false;
         return true;
     }
@@ -159,6 +155,12 @@ public:
     [[nodiscard]] std::size_t pieces() const noexcept { return pieces_.size(); }
 
 private:
+    struct LastPiece {
+        bool valid{false};
+        std::uint32_t index{0};
+        std::uint64_t end_ms{0};
+    };
+    LastPiece last_video_{},last_audio_{},last_muxed_{};
     [[nodiscard]] std::uint64_t contiguous_ms(Track track) const noexcept {
         std::uint64_t end = 0;
         // A muxed stream counts toward both tracks, but only after its AAC
