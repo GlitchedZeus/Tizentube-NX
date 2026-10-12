@@ -319,6 +319,32 @@ int main() {
         ck(read(base/"ready/master.m3u8")==original,
            "failed replacement leaves original completed media untouched");
     }
+    // Exiting a player must not leave the completed HLS media, or any
+    // failed/incomplete candidate, on SD. Only app-owned known files go.
+    ck(switch_app::SwitchHlsCacheSink::discard_session_media() &&
+       !fs::exists(base/"ready") && !fs::exists(base/"pending") &&
+       !fs::exists(base/"previous"),
+       "session cleanup removes HLS ready/previous/pending after close");
+    ck(switch_app::SwitchHlsCacheSink::discard_session_media(),
+       "cleanup is idempotent with absent media");
+    fs::create_directories(base/"ready");
+    {
+        std::ofstream(base/"ready/v_00000.ts")<<"partial stream";
+        std::ofstream(base/"ready/not-our-file.txt")<<"preserve";
+        ttnx::playback::HlsPlaybackLease playing;
+        ck(playing.acquire() &&
+           !switch_app::SwitchHlsCacheSink::discard_session_media() &&
+           fs::exists(base/"ready/v_00000.ts"),
+           "active playback lease blocks HLS file disposal");
+    }
+    ck(!switch_app::SwitchHlsCacheSink::discard_session_media() &&
+       !fs::exists(base/"ready/v_00000.ts") &&
+       fs::exists(base/"ready/not-our-file.txt"),
+       "cleanup deletes only known media; unfamiliar entry remains untouched");
+    fs::remove(base/"ready/not-our-file.txt");
+    ck(switch_app::SwitchHlsCacheSink::discard_session_media() &&
+       !fs::exists(base/"ready"),
+       "cleanup resumes after unknown entry removed");
     fs::remove_all("/tmp/tizentube-m3-hls-test");
     if(failures)std::cerr<<failures<<" SD cache contract failures\n";
     return failures?EXIT_FAILURE:EXIT_SUCCESS;
