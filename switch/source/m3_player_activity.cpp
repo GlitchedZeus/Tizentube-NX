@@ -168,6 +168,8 @@ public:
         have_frame_=false;
         status_="Stopped. A replays completed cache.";
     }
+    // The audio gate counts bounded active UI time, so sleep/wake cannot
+    // instantly trip the missing-AAC timeout after a long suspend.
     // Query the selected audio stream on each active UI tick, rather than
     // assuming the first PLAYBACK_RESTART event has finalized all tracks.
     bool selected_audio_track() const {

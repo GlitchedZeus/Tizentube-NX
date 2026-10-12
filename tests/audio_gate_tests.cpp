@@ -11,28 +11,38 @@ int main() {
     check(gate.state()==Gate::State::Idle &&
           gate.observe(false,0)==Gate::State::Idle,
           "no AAC readiness probe before playback starts");
+
     gate.begin(1000);
     check(gate.observe(false,1000)==Gate::State::Checking &&
           gate.observe(false,4999)==Gate::State::Checking,
-          "late async AAC track selection must not fail early");
-    check(gate.observe(true,4999)==Gate::State::Ready &&
-          gate.observe(false,9000)==Gate::State::Ready,
-          "verified AAC track remains ready until restart");
-    gate.begin(11000);
-    check(gate.observe(false,14999)==Gate::State::Checking &&
-          gate.observe(false,15000)==Gate::State::Missing &&
-          gate.observe(true,15001)==Gate::State::Missing,
-          "missing AAC fails closed after four seconds, no false recovery");
+          "a stalled UI or sleeping console must not fail AAC prematurely");
+    check(gate.observe(true,5000)==Gate::State::Ready &&
+          gate.observe(false,100000)==Gate::State::Ready,
+          "later selected audio survives an inactive clock gap");
+
+    gate.begin(2000);
+    check(gate.observe(false,2000)==Gate::State::Checking,
+          "replay starts a fresh audio-readiness window");
+    for(std::uint64_t i=1;i<40;++i) {
+        check(gate.observe(false,2000+i*100)==Gate::State::Checking,
+              "missing track waits through 3.9 seconds of active UI polling");
+    }
+    check(gate.observe(false,6000)==Gate::State::Missing &&
+          gate.observe(true,6100)==Gate::State::Missing,
+          "four seconds of active polls fails closed and latches failure");
+
     gate.reset();
     gate.begin(25000);
     check(gate.observe(false,24000)==Gate::State::Checking &&
-          gate.observe(false,27999)==Gate::State::Checking &&
-          gate.observe(false,28000)==Gate::State::Missing,
-          "a regressing monotonic time does not underflow to immediate fail");
+          gate.observe(false,1000000)==Gate::State::Checking,
+          "clock regression or hours of suspended activity do not fail");
+    check(gate.observe(true,1000001)==Gate::State::Ready,
+          "AAC can become selected immediately after waking");
+
     gate.reset();
     gate.begin(100);
     check(gate.observe(true,100)==Gate::State::Ready,
-          "stop/replay clears stale failure and accepts immediate AAC");
+          "stop/replay clears prior missing AAC failure");
     if(failures)std::cerr<<failures<<" audio readiness regressions\n";
     return failures?EXIT_FAILURE:EXIT_SUCCESS;
 }

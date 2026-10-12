@@ -252,3 +252,13 @@ and a sustained missing track stops playback without falling back to an
 ad-bearing web player. Stop, replay and seeks reset the gate; fatal audio
 errors are preserved in the UI rather than being overwritten by the
 subsequent expected stop event.
+
+### Sleep/wake readiness resilience
+
+A monotonic wall-clock timeout can falsely reject asynchronous AAC if the
+Switch sleeps between media-load and the next player tick. The readiness
+gate now accumulates observed active UI time, limited to 100 ms per
+observation. A long suspend counts as at most one bounded tick, while
+roughly four seconds of active missing-audio observations still fail
+closed. Host regressions cover clock regression, long suspend, delayed
+AAC selection, failure latching and stop/replay reset.
