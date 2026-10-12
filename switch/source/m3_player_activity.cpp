@@ -426,8 +426,17 @@ public:
               brls::Style,brls::FrameContext*) override {
         ++draw_calls_;
         const auto& pixels=player_.render();
-        if(image_<0)image_=nvgCreateImageRGBA(vg,kWidth,kHeight,0,pixels.data());
-        else if(player_.new_frame())nvgUpdateImage(vg,image_,pixels.data());
+        if(image_<0) {
+            image_=nvgCreateImageRGBA(vg,kWidth,kHeight,0,pixels.data());
+            M3Diagnostics::record(M3Stage::Ui,
+                image_>=0?M3Event::Ready:M3Event::Fail,1,image_,0);
+        } else if(player_.new_frame()) {
+            nvgUpdateImage(vg,image_,pixels.data());
+            ++texture_updates_;
+            if(texture_updates_<=3 || texture_updates_%120==0)
+                M3Diagnostics::record(M3Stage::Ui,M3Event::Presented,
+                    static_cast<std::int64_t>(texture_updates_),image_,1);
+        }
         nvgBeginPath(vg);nvgRoundedRect(vg,x,y,w,h,8);
         nvgFillColor(vg,nvgRGB(8,14,20));nvgFill(vg);
         // Always-on diagnostic R/G/B calibration strip. If the screen is
@@ -454,7 +463,7 @@ public:
     }
 private:
     CachedMpv& player_;int image_{-1};
-    std::uint64_t draw_calls_{0};
+    std::uint64_t draw_calls_{0},texture_updates_{0};
 };
 brls::Label* label(brls::Box* box,const std::string& s,int size) {
     auto* v=new brls::Label();
