@@ -29,6 +29,7 @@ bool RollingMuxedHlsSession::begin(const playback::HlsProbePlan& plan) {
        plan.selected.height==0 || plan.selected.height>720 ||
        plan.selected.fps==0 || plan.selected.fps>60 ||
        plan.audio_segments ||
+       !plan.selected.audio_playlist_url.empty() ||
        !plan.source.external_aac_url.empty() ||
        plan.video_segments.init_segment_url ||
        plan.video_segments.segments.empty() ||

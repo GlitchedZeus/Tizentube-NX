@@ -11,6 +11,7 @@ on:
       - 'include/tizentube_nx/playback/**'
       - 'src/core/media_*.cpp'
       - 'Makefile.switch'
+      - 'switch/source/rolling_hls_*'
       - '.github/workflows/m3-media-transport-build.yml'
   push:
     paths:
@@ -18,6 +19,7 @@ on:
       - 'include/tizentube_nx/playback/**'
       - 'src/core/media_*.cpp'
       - 'Makefile.switch'
+      - 'switch/source/rolling_hls_*'
       - '.github/workflows/m3-media-transport-build.yml'
   workflow_dispatch:
 jobs:
@@ -37,6 +39,20 @@ jobs:
         run: |
           test -s tizentube_nx.nro
           test -s tizentube_nx.elf
+          sha256sum tizentube_nx.nro
+      - name: Compile opt-in M4 rolling transport on native devkitA64
+        run: >-
+          docker run --rm
+          -v "$PWD:/work" -w /work
+          devkitpro/devkita64@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282
+          make -f Makefile.switch TTNX_M3_MEDIA_EXPERIMENT=1
+          TTNX_M4_ROLLING_STREAM=1 BUILD=build-m4-rolling -j2
+      - name: Verify opt-in M4 Switch object compilation
+        run: |
+          test -s tizentube_nx.nro
+          test -s tizentube_nx.elf
+          test -s build-m4-rolling/rolling_hls_feed.o
+          test -s build-m4-rolling/rolling_hls_sink.o
           sha256sum tizentube_nx.nro
       - name: Clarify acceptance boundary
         run: |

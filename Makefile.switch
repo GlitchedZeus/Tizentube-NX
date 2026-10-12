@@ -82,6 +82,10 @@ endif
 ifeq ($(TTNX_M3_INTEGRATED),1)
 DEFINES += -DTTNX_M3_INTEGRATED
 endif
+# Opt-in M4 native media worker; no production playback change.
+ifeq ($(TTNX_M4_ROLLING_STREAM),1)
+DEFINES += -DTTNX_M4_ROLLING_STREAM
+endif
 
 ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 

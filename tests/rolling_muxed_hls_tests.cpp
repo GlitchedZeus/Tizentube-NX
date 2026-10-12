@@ -92,6 +92,12 @@ void successful() {
        !fs::exists(fs::path(Sink::kRoot)/"v_00001.ts"),
        "decoder-certified consumed files retired after guard");
     ck(!work.close_after_player(false),"cannot clear media while decoder is active");
+    {
+        playback::HlsPlaybackLease lease;
+        ck(lease.acquire() && !work.close_after_player(true) &&
+           fs::exists(Sink::kRoot),
+           "even a false release claim cannot override an active libmpv lease");
+    }
     ck(work.close_after_player(true) && !fs::exists(Sink::kRoot),
        "worker complete+decoder closed leaves zero saved media");
 }
