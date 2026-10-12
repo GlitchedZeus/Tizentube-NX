@@ -32,8 +32,14 @@ class M3TriageTests(unittest.TestCase):
     def test_texture_display(self):
         log=events(("SESSION","START",1,1,0),
                    ("RENDER","FRAME",9,2,1),
-                   ("UI","DRAW",20,1,1))
+                   ("UI","DRAW",20,1,1),
+                   ("UI","PRESENTED",2,13,1))
         self.assertEqual(assess(log)[0],"CHECK_TEXTURE_AND_DISPLAY")
+    def test_missing_texture_upload(self):
+        log=events(("SESSION","START",1,1,0),
+                   ("RENDER","FRAME",9,2,1),
+                   ("UI","DRAW",20,1,1))
+        self.assertEqual(assess(log)[0],"TEXTURE_UPLOAD_NOT_OBSERVED")
     def test_range_failure(self):
         log=events(("SESSION","START",1,1,0),
                    ("TRANSFER","END",4,1033,4096))
@@ -47,7 +53,8 @@ class M3TriageTests(unittest.TestCase):
                    ("TRANSFER","END",4,1403,0),
                    ("SESSION","START",2,1,0),
                    ("RENDER","FRAME",3,9,1),
-                   ("UI","DRAW",10,1,1))
+                   ("UI","DRAW",10,1,1),
+                   ("UI","PRESENTED",3,17,1))
         self.assertEqual(assess(log)[0],"CHECK_TEXTURE_AND_DISPLAY")
 
 if __name__=="__main__":

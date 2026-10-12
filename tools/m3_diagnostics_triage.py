@@ -59,7 +59,10 @@ def assess(text: str):
     if frames and any(x[3]>0 for x in frames) and not ui_draws:
         return "UI_VIEW_NOT_DRAWN","Non-black frames were rendered but the Borealis video view did not report drawing."
     if frames and any(x[3]>0 for x in frames) and ui_draws:
-        return "CHECK_TEXTURE_AND_DISPLAY","Non-black frames and UI draws both exist; check texture upload and whether RGB calibration bars were visible."
+        uploads=of("UI","PRESENTED")
+        if not uploads:
+            return "TEXTURE_UPLOAD_NOT_OBSERVED","Non-black frames exist but no NanoVG texture upload was reported."
+        return "CHECK_TEXTURE_AND_DISPLAY","Non-black frames, UI draw calls and texture uploads exist; check whether RGB calibration bars were visible."
     if of("HLS","STATUS") and not of("CACHE","PASS") and not of("TRANSFER","END"):
         return "SOURCE_NOT_READY","No completed and verified playable media cache was observed."
     return "INCOMPLETE_OR_UNRESOLVED","The log does not establish the first fault yet; collect a full 15-second run."

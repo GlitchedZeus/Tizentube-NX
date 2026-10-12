@@ -69,3 +69,9 @@ immediately. Only coarse fixed category numbers (video, render, demux,
 audio, ffmpeg, other) and the integer severity are saved, capped to 64
 warnings per session. This helps distinguish missing decoders from a
 NanoVG presentation failure without ever persisting signed URLs.
+
+The native video view logs `UI READY` on its NanoVG texture creation,
+`UI PRESENTED` each successful texture-upload attempt, and `UI DRAW`
+independently of decoded content. A video can have audio, a selected
+H.264 track and non-black software framebuffer pixels while the GPU
+still presents nothing; the separate checkpoint makes that distinguishable.
