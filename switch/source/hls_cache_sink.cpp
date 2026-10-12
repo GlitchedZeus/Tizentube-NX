@@ -11,6 +11,7 @@
 #include <dirent.h>
 #include <string>
 #include <string_view>
+#include <vector>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -62,24 +63,34 @@ bool discard_known_directory(const char* path) {
     if(!S_ISDIR(root.st_mode))return false;
     auto* directory_stream=opendir(path);
     if(!directory_stream) return errno==ENOENT;
+    // Inventory and verify every directory entry BEFORE deleting anything.
+    // An unfamiliar file must never cause half the known media to disappear
+    // based on unpredictable readdir() order. Bounded to the 4096-segment
+    // media format, plus sidecars, with no following of symlinks.
+    std::vector<std::string> known;
     bool okay=true;
-    std::size_t count=0;
     for(auto* d=readdir(directory_stream);d;d=readdir(directory_stream)) {
         const std::string filename=d->d_name;
         if(filename=="."||filename=="..")continue;
-        if(++count>8200 || !known_filename(filename)) {
+        if(known.size()>=8200 || !known_filename(filename)) {
             okay=false;break;
         }
         const std::string absolute=std::string(path)+"/"+filename;
         struct stat entry{};
-        if(lstat(absolute.c_str(),&entry)!=0 ||
-           !S_ISREG(entry.st_mode) ||
-           unlink(absolute.c_str())!=0) {
+        if(lstat(absolute.c_str(),&entry)!=0 || !S_ISREG(entry.st_mode)) {
             okay=false;break;
         }
+        known.push_back(absolute);
     }
-    closedir(directory_stream);
-    return okay && rmdir(path)==0;
+    if(closedir(directory_stream)!=0)okay=false;
+    if(!okay)return false;
+    for(const auto& filename:known) {
+        struct stat entry{};
+        if(lstat(filename.c_str(),&entry)!=0 ||
+           !S_ISREG(entry.st_mode) || unlink(filename.c_str())!=0)
+            return false;
+    }
+    return rmdir(path)==0;
 }
 // A completed HTTP 206 transfer and exact file length do not prove that
 // external AAC is a usable MP4 container. Stream bounded top-level boxes

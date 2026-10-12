@@ -357,9 +357,9 @@ int main() {
            "active playback lease blocks HLS file disposal");
     }
     ck(!switch_app::SwitchHlsCacheSink::discard_session_media() &&
-       !fs::exists(base/"ready/v_00000.ts") &&
+       fs::exists(base/"ready/v_00000.ts") &&
        fs::exists(base/"ready/not-our-file.txt"),
-       "cleanup deletes only known media; unfamiliar entry remains untouched");
+       "unfamiliar entry blocks all deletion before any media is changed");
     fs::remove(base/"ready/not-our-file.txt");
     ck(switch_app::SwitchHlsCacheSink::discard_session_media() &&
        !fs::exists(base/"ready"),
