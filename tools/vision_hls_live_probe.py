@@ -9,6 +9,7 @@ No cookies/account/PoToken; no signed media URLs or raw errors are logged.
 from __future__ import annotations
 import argparse
 import json
+import os
 import pathlib
 import subprocess
 import tempfile
@@ -531,6 +532,13 @@ def decode_real_av_pair(video: bytes,audio: bytes) -> bool:
         if ("h264","video") not in inspect(video_path) or (
                 "aac","audio") not in inspect(audio_path):
             return False
+        # This is the same real C++ TS / MP4 parser linked into the Switch
+        # build, not a Python port or merely an FFmpeg codec declaration.
+        validator=os.environ.get("TTNX_M3_NATIVE_MEDIA_CHECK")
+        if not validator:
+            return False
+        subprocess.run([validator,str(video_path),str(audio_path)],
+                       capture_output=True,check=True,timeout=30)
         # Independent decoding catches broken packets even if stream metadata
         # is present; combined mapping verifies the two actual files can be
         # opened in one local process without remote access.
@@ -545,6 +553,7 @@ def decode_real_av_pair(video: bytes,audio: bytes) -> bool:
             subprocess.run(["ffmpeg","-nostdin","-hide_banner","-loglevel",
                             "error","-xerror","-protocol_whitelist","file",
                             *args],capture_output=True,check=True,timeout=35)
+        print("M3_NATIVE_MEDIA_PARSERS=PASS")
         return True
 
 

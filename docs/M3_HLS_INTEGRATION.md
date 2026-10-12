@@ -313,3 +313,15 @@ and the same <=16 MiB total size; redirects, unexpected HTTP 200, partial
 or changing resources are rejected without disclosing signed URLs.
 Offline mocked-transport tests cover multi-range reconstruction and
 discontinuous responses.
+
+### Live native-parser compatibility
+
+The LIVE CI gate now compiles a standalone host executable using the **same
+C++ `inspect_mpeg_ts` implementation and incremental `AacMp4Structure`
+gate as the Switch application**. It runs these checks directly on the
+temporary real YouTube segment and AAC file before invoking the file-only
+FFmpeg decoder. A host FFmpeg success can no longer mask a native
+parser rejecting genuine media. Successful runs emit the privacy-safe
+`M3_NATIVE_MEDIA_PARSERS=PASS` category; no signed URLs, media or binary
+artifacts are uploaded. Nintendo Switch decoder/runtime behavior is still
+a separate hardware acceptance step.
