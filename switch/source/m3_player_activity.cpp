@@ -439,9 +439,17 @@ public:
         }
         nvgBeginPath(vg);nvgRoundedRect(vg,x,y,w,h,8);
         nvgFillColor(vg,nvgRGB(8,14,20));nvgFill(vg);
-        // Always-on diagnostic R/G/B calibration strip. If the screen is
-        // black and these native NanoVG blocks are also missing, suspect
-        // UI drawing/compositing rather than the H.264 decoder alone.
+        if(image_>=0 && player_.have_frame()) {
+            const float scale=std::min(w/kWidth,h/kHeight);
+            const float vw=kWidth*scale,vh=kHeight*scale;
+            const float vx=x+(w-vw)*0.5f,vy=y+(h-vh)*0.5f;
+            nvgBeginPath(vg);nvgRect(vg,vx,vy,vw,vh);
+            nvgFillPaint(vg,nvgImagePattern(vg,vx,vy,vw,vh,0,image_,1));
+            nvgFill(vg);
+        }
+        // ALWAYS overlay calibration bars AFTER the video image. If the
+        // player's output is black but these bars show, NanoVG works and
+        // we should inspect the decoded RGB/texture-upload checkpoints.
         const float strip=std::min(w*0.15f,125.0f);
         const NVGcolor colors[]={nvgRGB(235,55,60),
                                  nvgRGB(40,235,80),
@@ -452,14 +460,9 @@ public:
             nvgFillColor(vg,colors[i]);nvgFill(vg);
         }
         if(draw_calls_<=2 || draw_calls_%120==0)
-            M3Diagnostics::record(M3Stage::Ui,M3Event::Draw,static_cast<std::int64_t>(draw_calls_),player_.have_frame() ? 1 : 0,image_>=0 ? 1 : 0);
-        if(image_<0||!player_.have_frame())return;
-        const float scale=std::min(w/kWidth,h/kHeight);
-        const float vw=kWidth*scale,vh=kHeight*scale;
-        const float vx=x+(w-vw)*0.5f,vy=y+(h-vh)*0.5f;
-        nvgBeginPath(vg);nvgRect(vg,vx,vy,vw,vh);
-        nvgFillPaint(vg,nvgImagePattern(vg,vx,vy,vw,vh,0,image_,1));
-        nvgFill(vg);
+            M3Diagnostics::record(M3Stage::Ui,M3Event::Draw,
+                static_cast<std::int64_t>(draw_calls_),
+                player_.have_frame()?1:0,image_>=0?1:0);
     }
 private:
     CachedMpv& player_;int image_{-1};
