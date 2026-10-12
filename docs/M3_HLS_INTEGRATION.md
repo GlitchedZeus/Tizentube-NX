@@ -231,3 +231,11 @@ receives a filename with a literal colon via the typed audio-files array,
 seeks to 30 seconds, resumes and checks that H.264 and AAC decoders advance
 after the seek. Stop and replay must yield a new FILE_LOADED event.
 This is a host software-decoding gate, not Switch audio-output acceptance.
+
+### Correct numeric playback-position assertion
+
+The 45-second host libmpv probe initially failed after seeking because its
+test converted a display-formatted `time-pos` string into a Python float.
+The test now reads `time-pos` with `MPV_FORMAT_DOUBLE`, matching the
+documented native API, and includes the last H.264/AAC and position state in
+failure diagnostics. No production decoder behavior was bypassed.

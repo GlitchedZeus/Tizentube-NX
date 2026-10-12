@@ -230,6 +230,7 @@ class LocalAvDemuxTests(unittest.TestCase):
             self.assertGreaterEqual(cmd("cycle", "pause"), 0,
                                     "libmpv must resume after seeking")
             decoded = False
+            last_observation = None
             deadline = time.monotonic() + 12
             while time.monotonic() < deadline:
                 event = mpv.mpv_wait_event(handle, 0.25).contents
@@ -237,16 +238,21 @@ class LocalAvDemuxTests(unittest.TestCase):
                     self.fail("libmpv ended before post-seek decoder verification")
                 v = (prop("video-codec") or "").lower()
                 a = (prop("audio-codec") or "").lower()
-                position = prop("time-pos")
-                if "h264" in v and "aac" in a and position:
-                    try:
-                        decoded = float(position) >= 29
-                    except ValueError:
-                        pass
-                if decoded:
+                # mpv_get_property_string returns a display-formatted
+                # timestamp such as 00:00:30, NOT necessarily a float.
+                # Read the native DOUBLE property instead.
+                seconds = ctypes.c_double()
+                position_ok = mpv.mpv_get_property(
+                    handle, b"time-pos", 5, ctypes.byref(seconds)) >= 0
+                last_observation = (v, a, position_ok,
+                                    seconds.value if position_ok else None)
+                if ("h264" in v and "aac" in a and position_ok and
+                        seconds.value >= 29):
+                    decoded = True
                     break
             self.assertTrue(decoded,
-                "H.264/AAC must decode and advance after the 30s seek")
+                "H.264/AAC must decode and advance after the 30s seek; "
+                f"last observation: {last_observation}")
             self.assertGreaterEqual(cmd("stop"), 0,
                                     "libmpv must support stop")
             self.assertGreaterEqual(cmd("loadfile",
