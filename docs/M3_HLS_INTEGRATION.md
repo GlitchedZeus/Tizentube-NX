@@ -495,3 +495,15 @@ Content-Length ambiguity. Chunked replies retain the existing
 validated EOF/parser fallback. The strict destination whitelist,
 TLS certificate checks, 16 MiB media cap and no-redirect policy
 remain unchanged.
+
+### Stable playback lease for the completed SD cache
+
+The integrated libmpv activity now owns an exclusive lease on the
+published `ready/` HLS directory from player initialization until
+`mpv_terminate_destroy` has closed its file descriptors. A new
+download or publish cannot rename/delete this directory while it
+is in use; attempts leave the completed clip intact. The lease
+does not authorize playing unfinished `pending/` files and
+does not alter the M2 browser. Host cache regressions cover
+exclusive acquisition, denied replacement, cleanup, and recovery
+after closing the player.

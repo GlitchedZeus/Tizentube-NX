@@ -1,6 +1,7 @@
 #ifdef TTNX_M3_MEDIA_PLANE
 #include "hls_cache_sink.hpp"
 #include "tizentube_nx/playback/hls_event_playlist.hpp"
+#include "tizentube_nx/playback/hls_playback_lease.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -141,6 +142,7 @@ std::string master_text(const playback::HlsProbePlan& plan) {
 } // namespace
 
 bool SwitchHlsCacheSink::begin(const playback::HlsProbePlan& plan) {
+    if(playback::HlsPlaybackLease::is_active())return false;
     abort();
     if(!directory(kParent) || !directory(kMediaDir) ||
        !directory(kRoot))return false;
@@ -238,6 +240,7 @@ bool SwitchHlsCacheSink::stage_startup_event(
 }
 
 bool SwitchHlsCacheSink::publish(const playback::HlsProbePlan& plan) {
+    if(playback::HlsPlaybackLease::is_active())return false;
     if(!staged_ || !wrote_video_ ||
        video_written_.size()!=plan.video_segments.segments.size() ||
        video_written_.empty() ||

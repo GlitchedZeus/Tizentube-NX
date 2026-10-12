@@ -3,6 +3,7 @@
 #include "media_file_sink.hpp"
 #include "hls_cache_sink.hpp"
 #include "tizentube_nx/playback/audio_gate.hpp"
+#include "tizentube_nx/playback/hls_playback_lease.hpp"
 
 #include <borealis.hpp>
 #include <mpv/client.h>
@@ -31,8 +32,16 @@ public:
     ~CachedMpv() { close(); }
     bool init() {
         if (handle_) return renderer_!=nullptr;
+        if(use_hls_ && !ready_lease_.acquire()) {
+            status_="Completed HLS video cache is already playing";
+            return false;
+        }
         handle_=mpv_create();
-        if (!handle_) { status_="mpv_create failed";return false; }
+        if (!handle_) {
+            status_="mpv_create failed";
+            ready_lease_.release();
+            return false;
+        }
         auto required=[this](const char* key,const char* value) {
             const int result=mpv_set_option_string(handle_,key,value);
             // Older Switch libmpv builds omit scripting entirely.
@@ -281,6 +290,8 @@ private:
     void close() {
         if(renderer_){mpv_render_context_free(renderer_);renderer_=nullptr;}
         if(handle_){mpv_terminate_destroy(handle_);handle_=nullptr;}
+        // Release ONLY after libmpv has closed every file descriptor.
+        ready_lease_.release();
     }
     mpv_handle* handle_{nullptr};
     mpv_render_context* renderer_{nullptr};
@@ -289,6 +300,7 @@ private:
     std::string status_{"Starting libmpv..."};
     bool have_frame_{false},new_frame_{false};
     playback::AudioSelectionGate audio_gate_{};
+    playback::HlsPlaybackLease ready_lease_{};
     bool audio_failure_latched_{false};
     unsigned long long frames_{0};
 };

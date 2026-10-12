@@ -1,4 +1,5 @@
 #include "hls_cache_sink.hpp"
+#include "tizentube_nx/playback/hls_playback_lease.hpp"
 
 #include <cstdlib>
 #include <filesystem>
@@ -245,6 +246,36 @@ int main() {
            !sink.write_segment(true,false,99,"OUT_OF_RANGE"),
            "duplicate init and wrong media indices rejected");
         sink.abort();
+    }
+    {
+        // A player decoding ready/ must not lose the directory during a
+        // second download or during the publish/rename window.
+        const auto original=read(base/"ready/master.m3u8");
+        playback::HlsPlaybackLease watching;
+        ck(watching.acquire() && watching.owned() &&
+           playback::HlsPlaybackLease::is_active(),
+           "libmpv owns exclusive completed-cache lease");
+        playback::HlsPlaybackLease competing;
+        ck(!competing.acquire(),"second player cannot acquire same cache");
+        {
+            switch_app::SwitchHlsCacheSink new_job;
+            ck(!new_job.begin(source) &&
+               read(base/"ready/master.m3u8")==original,
+               "active libmpv prevents new cache transaction");
+        }
+        watching.release();
+        ck(!playback::HlsPlaybackLease::is_active(),
+           "cache lease releases after decoding ends");
+        switch_app::SwitchHlsCacheSink retry;
+        ck(retry.begin(source),"new video can begin after player closes");
+        ck(!watching.acquire() || watching.owned(),
+           "lease can be acquired again after release");
+        ck(!retry.publish(source),
+           "publish cannot replace active video during lease");
+        watching.release();
+        retry.abort();
+        ck(read(base/"ready/master.m3u8")==original,
+           "failed replacement leaves original completed media untouched");
     }
     fs::remove_all("/tmp/tizentube-m3-hls-test");
     if(failures)std::cerr<<failures<<" SD cache contract failures\n";
