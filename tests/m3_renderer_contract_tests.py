@@ -24,6 +24,10 @@ class M3NativeRendererContract(unittest.TestCase):
         render_view=SOURCE.split("class VideoFrame final",1)[1].split("brls::Label* label",1)[0]
         self.assertIn("player_.pixels()",render_view)
         self.assertNotIn("player_.render()",render_view)
+    def test_software_renderer_disables_incompatible_hardware_surfaces(self):
+        self.assertIn('!required("hwdec","no")',SOURCE)
+        self.assertNotIn('!required("hwdec","auto")',SOURCE)
+
     def test_unuploaded_frame_latches_until_texture_upload(self):
         renderer=SOURCE.split("const std::vector<unsigned char>& render()",1)[1].split("std::string stats()",1)[0]
         self.assertNotIn("new_frame_=false;",renderer)

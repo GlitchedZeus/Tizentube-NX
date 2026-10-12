@@ -126,3 +126,15 @@ opening a playable local file is no longer sufficient to pass this
 render test. The separate production contract asserts that the Switch
 UI tick drives the renderer and NanoVG acknowledges textures only
 after actual upload. This does not replace physical Switch evidence.
+
+### Video decode interoperability safeguard
+
+The integrated player's output is the libmpv **software** renderer
+(`MPV_RENDER_API_TYPE_SW`), whose frames must be CPU-readable RGB
+memory before NanoVG can upload them. The isolated M3 code now explicitly
+uses `hwdec=no` for this path, rather than offering `hwdec=auto`
+hardware surfaces that might not be exported to software output. This
+prioritizes image correctness over peak hardware decode efficiency until
+a proper pinned Switch GPU-backed renderer has been validated.
+The already accepted M2 browsing build and earlier offline checkpoint
+are unchanged.

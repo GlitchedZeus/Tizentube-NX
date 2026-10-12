@@ -65,7 +65,10 @@ public:
             !required("input-default-bindings","no") ||
             !required("demuxer-lavf-o","protocol_whitelist=file") ||
             !required("vo","libmpv") ||
-            !required("hwdec","auto") ||
+            // This is the libmpv CPU-memory software render API. Do not
+            // select a hardware-only video surface it cannot upload to
+            // NanoVG; prefer dependable H.264 software decode first.
+            !required("hwdec","no") ||
             !required("audio-channels","stereo")) {
             close();return false;
         }
