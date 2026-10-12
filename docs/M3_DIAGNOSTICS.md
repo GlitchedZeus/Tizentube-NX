@@ -115,3 +115,14 @@ before freeing the mpv context. Periodic typed `RENDER STATUS` entries
 now record the frame flag, count of update notifications and frame
 count separately. This does not assert physical Switch playback without
 a new hardware run.
+
+### Exact host frame-render proof
+
+Host CI now generates a real local 45-second H.264 video-only MP4,
+opens it through libmpv's **software render-context API**, registers
+the same notify-only update callback used by the Switch and requires
+at least three **non-black RGB decoded frames**. Selecting audio or
+opening a playable local file is no longer sufficient to pass this
+render test. The separate production contract asserts that the Switch
+UI tick drives the renderer and NanoVG acknowledges textures only
+after actual upload. This does not replace physical Switch evidence.

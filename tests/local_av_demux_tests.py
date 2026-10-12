@@ -318,6 +318,16 @@ class LocalAvDemuxTests(unittest.TestCase):
         self.assertEqual(done.returncode,0,
                          "libmpv must select separate AAC and seek H264 MP4")
 
+    def test_sw_renderer_callback_yields_nonblack_h264_frames(self):
+        """Decode H.264 through actual libmpv SW render API, not audio track count."""
+        import sys
+        tool=pathlib.Path(__file__).resolve().parents[1]/"tools/m3_sw_render_probe.py"
+        finished=subprocess.run([sys.executable,str(tool),
+                                  str(self.ready/"adaptive_video.mp4")],
+                                 capture_output=True,text=True,timeout=28)
+        self.assertEqual(finished.returncode,0,
+            "real libmpv video rendering requires callback and 3 non-black RGB frames")
+
     def test_audio_missing_and_torn_files_are_not_complete(self):
         path = self.ready / "external_audio.m4a"
         original = path.read_bytes()
