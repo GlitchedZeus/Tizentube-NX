@@ -128,12 +128,15 @@ struct FakeAacTransport:playback::MediaChunkTransport {
 struct Sink:playback::HlsCacheSink {
     int begins{0},writes{0},publishes{0},aborts{0};
     int audio_appends{0};
+    int event_calls{0};
+    std::size_t event_segments{0};
     std::size_t aac_bytes{0};
     bool reject_write{false},reject_publish{false};
     bool completed{false};
     std::vector<std::string> written;
     bool begin(const playback::HlsProbePlan&) override {
-        ++begins;written.clear();completed=false;return true;
+        ++begins;written.clear();completed=false;
+        event_calls=0;event_segments=0;return true;
     }
     bool write_segment(bool audio,bool init,std::size_t i,std::string_view data) override {
         ++writes;
@@ -146,6 +149,12 @@ struct Sink:playback::HlsCacheSink {
     bool append_external_aac(std::string_view data) override {
         ++audio_appends;
         aac_bytes+=data.size();
+        return !reject_write;
+    }
+    bool stage_startup_event(const playback::HlsProbePlan&,
+                             std::size_t count) override {
+        ++event_calls;
+        event_segments=count;
         return !reject_write;
     }
     bool publish(const playback::HlsProbePlan&) override {
@@ -413,10 +422,39 @@ void failure_cases() {
             (void)job.pump();
         check(job.state()==playback::HlsCacheState::Ready &&
               sink.audio_appends==1 && sink.aac_bytes==2048 &&
-              sink.publishes==1 && audio.requests==1 &&
-              job.startup_event_staged() &&
-              job.staged_event_segments()==2,
+              sink.publishes==1 && audio.requests==1,
               "AAC fully fetched with 206 range before video/audio commit");
+    }
+    {
+        // Realistic direct H.264 TS plus complete AAC, with a 3-segment
+        // VOD. Startup readiness requires 12 seconds, then each new
+        // persisted segment must atomically update the event snapshot.
+        FakeTransport video;video.ts_h264=true;
+        FakeAacTransport audio;
+        playback::HlsSegmentReader video_reader(video);
+        playback::MediaChunkReader audio_reader(audio);
+        Sink sink;
+        playback::HlsCacheJob job(video_reader,sink,&audio_reader);
+        auto p=plan();
+        p.audio_segments.reset();
+        p.selected.audio_playlist_url.clear();
+        p.selected.direct_media_playlist=true;
+        p.video_segments.init_segment_url.reset();
+        p.video_segments.segments.push_back({base+"v3",6000});
+        p.video_segments.total_duration_ms=18000;
+        p.source.duration_ms=18000;
+        p.source.external_aac_url=base+"external";
+        check(job.start(p),"valid TS plus AAC supports appendable event fixture");
+        for(int i=0;i<16 && job.state()==playback::HlsCacheState::Fetching;++i)
+            (void)job.pump();
+        check(job.state()==playback::HlsCacheState::Ready &&
+              job.startup_buffer_prepared() &&
+              job.startup_buffer_ms()==12000 &&
+              job.startup_event_staged() &&
+              job.staged_event_segments()==3 &&
+              sink.event_calls==2 && sink.event_segments==3 &&
+              sink.publishes==1 && audio.requests==1,
+              "verified H264/AAC triggers 12s event then grows it through 18s");
     }
     {
         FakeTransport video;
