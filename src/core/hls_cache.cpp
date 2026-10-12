@@ -15,6 +15,7 @@ bool HlsCacheJob::start(const HlsProbePlan& plan) {
     video_codec_verified_=false;
     aac_offset_=0;
     aac_total_=0;
+    aac_structure_.reset();
     completed_=0;
     total_segments_=0;
     next_segment_=0;
@@ -78,6 +79,8 @@ HlsCacheState HlsCacheJob::pump() {
             active_.reset();return state_;
         };
         if(aac_total_ && aac_offset_==aac_total_) {
+            if(!aac_structure_.complete())
+                return failed(HlsCacheFailure::MissingAudio);
             // The audio is ready, but no public cache exists until ALL
             // remaining video segments have been fetched and validated.
             track_=0;
@@ -99,7 +102,11 @@ HlsCacheState HlsCacheJob::pump() {
                std::string_view(audio.bytes).substr(4,4)!="ftyp")
                 return failed(HlsCacheFailure::MissingAudio);
             aac_total_=audio.resource_size;
+            if(!aac_structure_.begin(aac_total_))
+                return failed(HlsCacheFailure::MissingAudio);
         }
+        if(!aac_structure_.append(audio.bytes))
+            return failed(HlsCacheFailure::MissingAudio);
         if(!sink_.append_external_aac(audio.bytes))
             return failed(HlsCacheFailure::MediaWrite);
         aac_offset_+=audio.bytes.size();

@@ -290,3 +290,15 @@ H.264 and AAC streams, and `ffmpeg` must decode the independent tracks
 and open them together using a file-only protocol whitelist. The CI
 result remains an **off-console media compatibility proof**, not a
 Nintendo Switch playback or audio-synchronization acceptance.
+
+### Verified AAC MP4 container boundaries
+
+The core HLS downloader now checks the complete independently signed AAC
+file through an incremental, constant-memory ISO BMFF top-level atom parser.
+A trustworthy `ftyp` header alone is no longer enough: the entire 206
+sequence must form bounded, non-overlapping atoms with `ftyp`, `moov`,
+and `mdat`, and the declared resource length must be accounted for exactly
+before fetching the rest of the video or publishing any cache. This rejects
+truncated or bogus responses that previously could pass an MP4 signature
+test. It is **container validation**, not a substitute for FFmpeg decode
+or independent physical Switch A/V acceptance.

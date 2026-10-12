@@ -77,6 +77,10 @@ if(TTNX_BUILD_TESTS)
     target_link_libraries(tizentube_nx_audio_gate_tests PRIVATE tizentube_nx_core)
     add_test(NAME audio_gate COMMAND tizentube_nx_audio_gate_tests)
 
+    add_executable(tizentube_nx_aac_mp4_structure_tests tests/aac_mp4_structure_tests.cpp)
+    target_link_libraries(tizentube_nx_aac_mp4_structure_tests PRIVATE tizentube_nx_core)
+    add_test(NAME aac_mp4_structure COMMAND tizentube_nx_aac_mp4_structure_tests)
+
     add_executable(tizentube_nx_hls_cache_tests tests/hls_cache_tests.cpp)
     target_link_libraries(tizentube_nx_hls_cache_tests PRIVATE tizentube_nx_core)
     add_test(NAME hls_cache COMMAND tizentube_nx_hls_cache_tests)

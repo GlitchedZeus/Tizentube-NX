@@ -1,5 +1,6 @@
 #pragma once
 #include "tizentube_nx/playback/hls_probe.hpp"
+#include "tizentube_nx/playback/aac_mp4_structure.hpp"
 #include "tizentube_nx/playback/hls_segment.hpp"
 #include "tizentube_nx/playback/media_chunks.hpp"
 
@@ -72,6 +73,7 @@ private:
     bool muxed_audio_verified_{false};
     bool video_codec_verified_{false};
     std::uint64_t aac_offset_{0}, aac_total_{0};
+    AacMp4Structure aac_structure_{};
     static constexpr std::uint64_t kMaxAacBytes=128ULL*1024*1024;
 };
 

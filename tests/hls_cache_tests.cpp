@@ -68,6 +68,7 @@ struct FakeTransport:net::HttpClient {
 struct FakeAacTransport:playback::MediaChunkTransport {
     int requests{0};
     bool blocked{false};
+    bool corrupt_moov{false};
     int fail_on{0};
     std::uint64_t total_size{2048};
     net::HttpResult perform(const net::HttpRequest& req) override {
@@ -84,8 +85,21 @@ struct FakeAacTransport:playback::MediaChunkTransport {
             req.headers[0].value==expected;
         out.response.status_code=out.ok?206:403;
         out.response.body=std::string(static_cast<std::size_t>(size),'A');
-        if(start==0)
-            out.response.body.replace(0,12,std::string("\0\0\0\x18" "ftypisom",12));
+        // Structurally valid MP4 container spanning as many 206 responses
+        // as needed. The fake does NOT claim that it contains decoded AAC.
+        std::string boxes(48,'\0');
+        const auto write32=[&](std::size_t at,std::uint32_t n) {
+            for(int i=3;i>=0;--i){boxes[at+i]=static_cast<char>(n&255);n>>=8;}
+        };
+        write32(0,24);boxes.replace(4,4,"ftyp");
+        boxes.replace(8,4,"isom");boxes.replace(16,4,"isom");
+        write32(24,16);boxes.replace(28,4,corrupt_moov?"free":"moov");
+        write32(40,static_cast<std::uint32_t>(total_size-40));
+        boxes.replace(44,4,"mdat");
+        for(std::size_t i=0;i<out.response.body.size();++i) {
+            const auto absolute=start+i;
+            if(absolute<boxes.size())out.response.body[i]=boxes[absolute];
+        }
         out.response.headers={
             {"Content-Type","audio/mp4"},
             {"Content-Length",std::to_string(size)},
@@ -171,6 +185,25 @@ void failure_cases() {
         check(job.state()==playback::HlsCacheState::Ready &&
               video.hits==2 && audio.requests==1 && sink.publishes==1,
               "actual direct MPEG-TS H.264 metadata plus complete AAC publishes");
+    }
+    {
+        FakeTransport video;video.ts_h264=true;
+        FakeAacTransport audio;audio.corrupt_moov=true;
+        playback::HlsSegmentReader reader(video);
+        playback::MediaChunkReader aac_reader(audio);
+        Sink sink;playback::HlsCacheJob job(reader,sink,&aac_reader);
+        auto p=plan();
+        p.video_segments.init_segment_url.reset();
+        p.audio_segments.reset();p.selected.audio_playlist_url.clear();
+        p.selected.direct_media_playlist=true;
+        p.source.external_aac_url=base+"external";
+        check(job.start(p),"syntactically corrupted AAC movie fixture stages");
+        for(int i=0;i<12 && job.state()==playback::HlsCacheState::Fetching;++i)
+            (void)job.pump();
+        check(job.state()==playback::HlsCacheState::Failed &&
+              job.error()==playback::HlsCacheFailure::MissingAudio &&
+              video.hits==1 && sink.publishes==0,
+              "full-size AAC lacking moov fails before remaining video download");
     }
     {
         FakeTransport video; // fake MP4 bytes, not MPEG-TS H.264
