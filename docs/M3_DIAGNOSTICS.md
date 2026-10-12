@@ -236,3 +236,13 @@ structure verification and the atomic ready/ swap. Abort closes the file
 before deleting known staging entries. This reduces unnecessary SD syncs
 without exposing partial AAC to libmpv; the accepted playback engine and
 HTTPS source policy remain unchanged.
+
+## Quit-app cleanup: worker join before SD disposal
+
+Quitting from Search while a transfer is still running does not call the
+regular UI completion handler. M3 shutdown now requests cancellation,
+joins the media worker (and its joined parallel AAC/H.264 child), then
+tries to purge app-owned temporary media. If libmpv is still actively
+playing, its exclusive lease prevents unsafe removal; the startup sweep
+on the next launch remains the fallback. Numeric-only CACHE PASS/FAIL phase
+7 indicates whether immediate exit cleanup succeeded.

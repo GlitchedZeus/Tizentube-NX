@@ -13,6 +13,16 @@ MEDIA=(ROOT/"switch/source/media_file_sink.cpp").read_text()
 HLS=(ROOT/"switch/source/hls_cache_sink.cpp").read_text()
 
 class EphemeralPlaybackContract(unittest.TestCase):
+    def test_app_exit_after_cancel_joins_workers_before_media_cleanup(self):
+        shutdown=MAIN.split('    void shutdown_network() {',1)[1].split('        network_busy_.store(false)',1)[0]
+        self.assertLess(shutdown.index('media_cancel_requested_.store(true)'),
+                        shutdown.index('media_worker_.join()'))
+        self.assertLess(shutdown.index('media_worker_.join()'),
+                        shutdown.index('SwitchMediaCacheSink::discard_session_media()'))
+        self.assertLess(shutdown.index('media_worker_.join()'),
+                        shutdown.index('SwitchHlsCacheSink::discard_session_media()'))
+        self.assertIn('mp4_discarded && hls_discarded',shutdown)
+
     def test_abort_cleanup_and_restart_recovery(self):
         self.assertIn('if(!discard_m3_session_media()) {', MAIN)
         self.assertIn('if(!success) {',MAIN)

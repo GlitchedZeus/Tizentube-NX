@@ -319,6 +319,20 @@ public:
 #ifdef TTNX_M3_INTEGRATED
         media_cancel_requested_.store(true);
         if (media_worker_.joinable()) media_worker_.join();
+        // A PLUS-button/app exit from Search does not run the usual UI
+        // completion pump. Sweep the just-cancelled temporary media here,
+        // after the worker and both parallel transfer tasks have joined.
+        // Active libmpv explicitly blocks deletion via its playback lease;
+        // in that case the next boot performs the bounded recovery sweep.
+        const bool mp4_discarded=
+            ttnx::switch_app::SwitchMediaCacheSink::discard_session_media();
+        const bool hls_discarded=
+            ttnx::switch_app::SwitchHlsCacheSink::discard_session_media();
+        ttnx::switch_app::M3Diagnostics::record(
+            ttnx::switch_app::M3Stage::Cache,
+            mp4_discarded && hls_discarded
+                ?ttnx::switch_app::M3Event::Pass:ttnx::switch_app::M3Event::Fail,
+            7,mp4_discarded ? 1 : 0,hls_discarded ? 1 : 0);
         media_busy_.store(false);
         media_done_.store(false);
 #endif
