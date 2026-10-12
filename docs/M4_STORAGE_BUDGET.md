@@ -158,3 +158,20 @@ validated Switch libmpv behavior. Actual 720p/60 hardware throughput,
 separate HLS AAC streams, player-driven segment-release events,
 resume/seek/sleep on device, and overall 100-MB SD accounting remain
 required before enabling this route in the real NRO.
+
+## Real decoder-driven rolling eviction regression
+
+A third offline full-A/V test now starts FFmpeg against a growing local HLS
+playlist and watches decoder progress. After at least five seconds have been
+decoded, it asks the writer to retire segment zero, verifies that the actual
+TS file is unlinked, checks the playlist's moving
+`EXT-X-MEDIA-SEQUENCE:1`, and requires the decoder to reach at least
+11 seconds without losing either track. The writer does **not** discard the
+remaining media until the test signals that the decoder has closed.
+Normal and ASan/UBSan local execution passed all **three** live-decoder
+tests, including early cancellation and zero-cache teardown.
+
+This is host proof of HLS reload/eviction under FFmpeg. It does not prove
+libmpv's FDs are released at the same point on Switch; per-segment decoder
+lifetime and FAT rename behavior must pass on real hardware before live
+eviction is enabled for users.

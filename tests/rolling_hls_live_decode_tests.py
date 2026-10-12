@@ -120,6 +120,40 @@ class RollingHlsLiveDecodeTests(unittest.TestCase):
                              24 * 1024 * 1024,
                              "Live app-owned buffer exceeded reserved SD quota")
 
+    def test_playback_survives_old_segment_eviction(self):
+        self.assertTrue(until(lambda: "v_00001.ts" in LOCAL_PLAYLIST.read_text()))
+        log = self.directory / "decoder-progress.log"
+        log.unlink(missing_ok=True)
+        proc = subprocess.Popen([
+            "ffmpeg", "-hide_banner", "-nostats", "-loglevel", "error",
+            "-protocol_whitelist", "file,crypto,data", "-i", str(LOCAL_PLAYLIST),
+            "-map", "0:v:0", "-map", "0:a:0", "-progress", str(log),
+            "-f", "null", "-"
+        ], stderr=subprocess.PIPE, text=True)
+        try:
+            def played_five_seconds():
+                if not log.exists():
+                    return False
+                return any(int(x) >= 5_000_000 for x in
+                           re.findall(r"out_time_us=(\d+)", log.read_text()))
+            self.assertTrue(until(played_five_seconds, 18),
+                            "FFmpeg did not advance past old segment safely")
+            (self.control / "retire_first").touch()
+            old = LOCAL_PLAYLIST.parent / "v_00000.ts"
+            self.assertTrue(until(lambda: not old.exists(), 12),
+                            "Old decoded segment was not actually unlinked")
+            _, err = proc.communicate(timeout=28)
+            self.assertEqual(proc.returncode, 0, err)
+            recorded = [int(x) for x in re.findall(
+                r"out_time_us=(\d+)", log.read_text())]
+            self.assertTrue(recorded and max(recorded) >= 11_000_000,
+                            "Decoder failed after the old segment was evicted")
+            self.assertIn("#EXT-X-MEDIA-SEQUENCE:1", LOCAL_PLAYLIST.read_text())
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.communicate()
+
     def test_early_cancel_purges_private_media(self):
         self.assertTrue(until(lambda: "v_00001.ts" in LOCAL_PLAYLIST.read_text()))
         (self.control / "cancel").touch()

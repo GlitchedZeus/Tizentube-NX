@@ -18,6 +18,16 @@ int main(int argc, char** argv) {
     RollingHlsSink sink;
     if (!sink.begin(2000)) return 3;
     bool cancelled = false;
+    bool retired = false;
+    const auto maybe_retire = [&]() {
+        if(!retired && fs::exists(control / "retire_first") &&
+           sink.active_segments()>=2) {
+            if(!sink.retire_before(1))return false;
+            retired=true;
+            std::cout << "retired=0" << std::endl;
+        }
+        return true;
+    };
     for (int i=0; i<6; ++i) {
         if (fs::exists(control / "cancel")) {cancelled=true;break;}
         char name[32]{};
@@ -28,6 +38,7 @@ int main(int argc, char** argv) {
         if (!sink.append(static_cast<std::size_t>(i),2000,bytes)) return 5;
         std::cout << "segment=" << i << std::endl;
         for(int j=0;j<9;++j) {
+            if(!maybe_retire())return 8;
             if (fs::exists(control / "cancel")) {cancelled=true;break;}
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
@@ -38,6 +49,7 @@ int main(int argc, char** argv) {
     // decoder has closed and the test signals confirmation.
     bool permitted=false;
     for(int i=0;i<300;++i) {
+        if(!maybe_retire())return 8;
         if(fs::exists(control / "decoder_closed")) {permitted=true;break;}
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
