@@ -285,7 +285,9 @@ void failure_cases() {
         for(int i=0;i<12 && job.state()==playback::HlsCacheState::Fetching;++i)
             (void)job.pump();
         check(job.state()==playback::HlsCacheState::Ready &&
-              video.hits==2 && audio.requests==1 && sink.publishes==1,
+              video.hits==2 && audio.requests==1 && sink.publishes==1 &&
+              job.startup_buffer_prepared() &&
+              job.startup_buffer_ms()==12000,
               "actual direct MPEG-TS H.264 metadata plus complete AAC publishes");
     }
     {

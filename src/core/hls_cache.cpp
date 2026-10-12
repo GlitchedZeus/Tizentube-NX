@@ -34,6 +34,7 @@ bool HlsCacheJob::start(const HlsProbePlan& plan) {
     aac_offset_=0;
     aac_total_=0;
     aac_structure_.reset();
+    startup_buffer_.reset();
     completed_=0;
     total_segments_=0;
     next_segment_=0;
@@ -72,6 +73,11 @@ bool HlsCacheJob::start(const HlsProbePlan& plan) {
        (!plan.selected.audio_playlist_url.empty() && !plan.audio_segments) ||
        (plan.selected.audio_playlist_url.empty() && plan.audio_segments))
         return false;
+    std::vector<std::uint64_t> durations;
+    durations.reserve(plan.video_segments.segments.size());
+    for(const auto& item:plan.video_segments.segments)
+        durations.push_back(item.duration_ms);
+    if(!startup_buffer_.configure(durations))return false;
     if(!sink_.begin(plan)) {
         error_=HlsCacheFailure::UnableToStage;
         sink_.abort();
@@ -112,6 +118,7 @@ HlsCacheState HlsCacheJob::pump() {
         if(aac_total_ && aac_offset_==aac_total_) {
             if(!aac_structure_.complete())
                 return failed(HlsCacheFailure::MissingAudio);
+            startup_buffer_.mark_complete_audio(true);
             // The audio is ready, but no public cache exists until ALL
             // remaining video segments have been fetched and validated.
             track_=0;
@@ -220,7 +227,11 @@ HlsCacheState HlsCacheJob::pump() {
         const auto streams=inspect_mpeg_ts(bytes.bytes);
         if(streams.recognized && streams.h264) {
             video_codec_verified_=true;
-            if(streams.aac)muxed_audio_verified_=true;
+            startup_buffer_.mark_video_codec(true);
+            if(streams.aac) {
+                muxed_audio_verified_=true;
+                startup_buffer_.mark_complete_audio(true);
+            }
         }
         // PAT/PMT recognition is only an early codec gate, never a claim
         // that actual H.264 frames or AAC samples decode successfully.
@@ -235,7 +246,17 @@ HlsCacheState HlsCacheJob::pump() {
     bytes_+=bytes.bytes.size();
     request_succeeded();
     if(is_init)init_pending_=false;
-    else {++next_segment_;++completed_;}
+    else {
+        if(track_==0) {
+            // Only valid TS codec and fully verified audio can unlock
+            // future startup buffering. fMP4 remains conservative.
+            (void)startup_buffer_.add_video(
+                next_segment_,playlist.segments[next_segment_].duration_ms,
+                bytes.bytes.size());
+        }
+        ++next_segment_;
+        ++completed_;
+    }
     // Direct TS with neither external nor muxed AAC cannot be played.
     // Fail after the first verified segment, not the entire silent VOD.
     if(track_==0 && !is_init && next_segment_==1 &&
@@ -275,6 +296,7 @@ void HlsCacheJob::cancel() noexcept {
         state_=HlsCacheState::Cancelled;
     }
     active_.reset();
+    startup_buffer_.reset();
     transient_attempts_=0;
     retry_delay_ms_=0;
 }

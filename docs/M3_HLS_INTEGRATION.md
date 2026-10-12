@@ -414,3 +414,14 @@ H.264 source, and complete AAC; no partial cache is currently exposed
 to the native player. It is a preparation contract, not an assertion
 that Switch libmpv can refresh a growing HLS event playlist.
 The accepted full-cache transaction remains unchanged.
+
+### Downloader integration of startup-buffer readiness
+
+`HlsCacheJob` now feeds the tested startup-buffer tracker from
+real, successfully persisted video segment completions and
+independently completed AAC downloads. The verified TS codec is
+required. The tracker does not modify the SD-cache transaction
+or permit opening any unfinished media in libmpv; it provides
+an auditable readiness state for the subsequent append-only
+streaming milestone. Existing automatic full-cache playback
+and user hardware acceptance are unchanged.

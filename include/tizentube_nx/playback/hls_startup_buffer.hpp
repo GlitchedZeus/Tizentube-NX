@@ -33,12 +33,12 @@ public:
         if(!configured_ || index!=next_index_ || !duration ||
            duration>60000 || !bytes || bytes>16ULL*1024*1024)
             return false;
-        ++next_index_;
         if(index<prefix_count_) {
             if(bytes>kMaxPrefixBytes-prefix_bytes_)return false;
             prefix_bytes_+=bytes;
             prefix_ms_+=duration;
         }
+        ++next_index_;
         return true;
     }
     [[nodiscard]] bool prepared() const noexcept {

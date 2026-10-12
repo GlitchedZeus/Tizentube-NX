@@ -1,6 +1,7 @@
 #pragma once
 #include "tizentube_nx/playback/hls_probe.hpp"
 #include "tizentube_nx/playback/aac_mp4_structure.hpp"
+#include "tizentube_nx/playback/hls_startup_buffer.hpp"
 #include "tizentube_nx/playback/hls_segment.hpp"
 #include "tizentube_nx/playback/media_chunks.hpp"
 
@@ -61,6 +62,13 @@ public:
     [[nodiscard]] unsigned retry_delay_ms() const noexcept {return retry_delay_ms_;}
     [[nodiscard]] unsigned transient_attempts() const noexcept {return transient_attempts_;}
     static constexpr unsigned kMaxTransientRetries=2;
+    // Prepared is telemetry, NOT authorization to open pending SD media.
+    [[nodiscard]] bool startup_buffer_prepared() const noexcept {
+        return startup_buffer_.prepared();
+    }
+    [[nodiscard]] std::uint64_t startup_buffer_ms() const noexcept {
+        return startup_buffer_.prefix_ms();
+    }
     static constexpr std::uint64_t kMaxTotalBytes=512ULL*1024*1024;
 private:
     HlsSegmentReader& reader_;
@@ -80,6 +88,7 @@ private:
     bool video_codec_verified_{false};
     std::uint64_t aac_offset_{0}, aac_total_{0};
     AacMp4Structure aac_structure_{};
+    HlsStartupBuffer startup_buffer_{};
     static constexpr std::uint64_t kMaxAacBytes=128ULL*1024*1024;
 };
 
