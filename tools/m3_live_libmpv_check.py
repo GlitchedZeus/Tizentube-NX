@@ -8,6 +8,7 @@ from __future__ import annotations
 import ctypes
 import ctypes.util
 import math
+import os
 import pathlib
 import subprocess
 import sys
@@ -38,7 +39,7 @@ class Event(ctypes.Structure):
               ("data",ctypes.c_void_p)]
 
 
-def verify(video: pathlib.Path,audio: pathlib.Path) -> bool:
+def verify(video: pathlib.Path,audio: pathlib.Path,ready: pathlib.Path | None=None) -> bool:
     libname=ctypes.util.find_library("mpv")
     if not libname or not video.is_file() or not audio.is_file():
         return False
@@ -58,16 +59,34 @@ def verify(video: pathlib.Path,audio: pathlib.Path) -> bool:
     root=video.parent
     if audio.parent!=root:
         return False
-    (root/"video.m3u8").write_text(
+    if ready is None:
+        (root/"video.m3u8").write_text(
         "#EXTM3U\n#EXT-X-VERSION:7\n"
         "#EXT-X-PLAYLIST-TYPE:VOD\n"
         f"#EXT-X-TARGETDURATION:{math.ceil(duration)}\n"
         "#EXT-X-MEDIA-SEQUENCE:0\n"
         f"#EXTINF:{duration:.3f},\n{video.name}\n"
         "#EXT-X-ENDLIST\n")
-    (root/"master.m3u8").write_text(
-        "#EXTM3U\n#EXT-X-VERSION:7\n"
-        "#EXT-X-STREAM-INF:BANDWIDTH=1500000\nvideo.m3u8\n")
+        (root/"master.m3u8").write_text(
+            "#EXTM3U\n#EXT-X-VERSION:7\n"
+            "#EXT-X-STREAM-INF:BANDWIDTH=1500000\nvideo.m3u8\n")
+        playlist=root/"master.m3u8"
+        chosen_audio=audio
+    else:
+        playlist=ready/"master.m3u8"
+        chosen_audio=ready/"external_audio.m4a"
+        if (not playlist.is_file() or not chosen_audio.is_file() or
+                not (ready/"v_00000.ts").is_file() or
+                (ready/"audio_mode.txt").read_text()!="external\n" or
+                (ready/"external_audio.bytes").read_text()!=
+                    str(chosen_audio.stat().st_size)+"\n"):
+            return False
+        master=playlist.read_text()
+        variant=(ready/"video.m3u8").read_text()
+        if any(s in master+variant for s in (
+                "http:", "https:", "googlevideo.com", "../")) or (
+                "video.m3u8" not in master or "v_00000.ts" not in variant):
+            return False
 
     lib=ctypes.CDLL(libname)
     lib.mpv_create.restype=ctypes.c_void_p
@@ -126,7 +145,7 @@ def verify(video: pathlib.Path,audio: pathlib.Path) -> bool:
             ("hwdec","no"),("input-default-bindings","no"),
             ("demuxer-lavf-o","protocol_whitelist=file")]):
             return False
-        raw_path=str(audio).encode()
+        raw_path=str(chosen_audio).encode()
         item=Node(NodeValue(string=raw_path),1)
         entries=(Node*1)(item)
         items=NodeList(1,entries,None)
@@ -137,7 +156,7 @@ def verify(video: pathlib.Path,audio: pathlib.Path) -> bool:
         if lib.mpv_initialize(player)<0:
             return False
         args=(ctypes.c_char_p*4)(
-            b"loadfile",str(root/"master.m3u8").encode(),
+            b"loadfile",str(playlist).encode(),
             b"replace",None)
         if lib.mpv_command(player,args)<0:
             return False
@@ -166,10 +185,11 @@ def verify(video: pathlib.Path,audio: pathlib.Path) -> bool:
 
 
 def main():
-    if len(sys.argv)!=3:return 2
+    if len(sys.argv) not in (3,4):return 2
     try:
+        ready=pathlib.Path(sys.argv[3]) if len(sys.argv)==4 else None
         return 0 if verify(pathlib.Path(sys.argv[1]),
-                           pathlib.Path(sys.argv[2])) else 1
+                           pathlib.Path(sys.argv[2]),ready) else 1
     except (OSError,ValueError,subprocess.CalledProcessError,
             subprocess.TimeoutExpired):
         return 1

@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import tempfile
 import re
@@ -553,12 +554,34 @@ def decode_real_av_pair(video: bytes,audio: bytes) -> bool:
             subprocess.run(["ffmpeg","-nostdin","-hide_banner","-loglevel",
                             "error","-xerror","-protocol_whitelist","file",
                             *args],capture_output=True,check=True,timeout=35)
-        # Finally make real libmpv demux this actual downloaded YouTube
-        # segment as a local HLS playlist with the external AAC selected.
-        checker=pathlib.Path(__file__).with_name("m3_live_libmpv_check.py")
-        subprocess.run([sys.executable,str(checker),
-                        str(video_path),str(audio_path)],
-                       capture_output=True,check=True,timeout=25)
+        # Use the real production Switch HLS SD-cache writer to build the
+        # complete, atomically published playlist + byte-exact AAC sidecar.
+        # There is deliberately NO simplified hand-authored HLS playlist.
+        sink_binary=os.environ.get("TTNX_M3_LIVE_CACHE_PUBLISH")
+        if not sink_binary:
+            return False
+        duration_run=subprocess.run([
+            "ffprobe","-v","error","-protocol_whitelist","file",
+            "-show_entries","format=duration","-of","default=nw=1:nk=1",
+            str(video_path)],capture_output=True,check=True,timeout=20,text=True)
+        milliseconds=round(float(duration_run.stdout.strip())*1000)
+        if not 500<=milliseconds<=120000:
+            return False
+        base=pathlib.Path("/tmp/tizentube-m3-hls-test")
+        ready=base/"switch/TizenTube-NX/media-cache/hls/ready"
+        try:
+            subprocess.run([sink_binary,str(video_path),str(audio_path),
+                            str(milliseconds)],
+                           capture_output=True,check=True,timeout=30)
+            checker=pathlib.Path(__file__).with_name("m3_live_libmpv_check.py")
+            subprocess.run([sys.executable,str(checker),
+                            str(video_path),str(audio_path),str(ready)],
+                           capture_output=True,check=True,timeout=25)
+            print("M3_REAL_SWITCH_CACHE=PASS")
+        finally:
+            # This directory is used only by the host testing build; never
+            # delete a source game, save, user's app cache or real SD data.
+            shutil.rmtree(base,ignore_errors=True)
         print("M3_NATIVE_MEDIA_PARSERS=PASS")
         print("M3_REAL_LIBMPV=PASS")
         return True

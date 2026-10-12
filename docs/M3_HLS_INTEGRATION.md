@@ -339,3 +339,17 @@ protocols are restricted to `file`, video/audio output uses null
 sinks, and no media or URL artifacts survive the temporary directory.
 Host `libmpv` is not the pinned Switch library and does not prove real
 console rendering or speaker output.
+
+### Real published Switch-cache integration (no simulated playlist)
+
+The live H.264/AAC proof now publishes the bounded, downloaded public
+YouTube media through **the actual production `SwitchHlsCacheSink`**
+compiled for the host test directory. It verifies that the app's own
+`pending → ready` transaction creates `v_00000.ts`, native
+`master.m3u8` and `video.m3u8`, `external_audio.m4a`,
+`audio_mode.txt`, and an exact AAC-size sidecar. Only then does host
+libmpv open the **native-generated** local master playlist and select
+the committed AAC. The earlier handcrafted playlist no longer hides
+bugs in production manifest creation. No signed URL is embedded in the
+published media files. The disposable host cache is deleted after
+verification; this does not test actual Switch hardware.
