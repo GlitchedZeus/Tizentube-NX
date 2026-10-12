@@ -99,3 +99,19 @@ HTTP 206 responses followed by storage failures. Phase 4 denotes AAC;
 All values are numeric, with no URLs, titles or media bytes. The offline
 triage script now reports e.g. `AAC_SD_PROMOTE_FAILED` instead of blaming
 the CDN when all promised range bytes arrived.
+
+## Render-loop fix for the original black-video report
+
+The real libmpv render API requires timely update callbacks for
+correct video output. The integrated M3 player previously never
+registered one, and called `mpv_render_context_update()` only from
+the Borealis video widget's `draw()` hook. Audio could progress while
+video updates were starved, and `new_frame_` was cleared before the
+widget could upload a frame if drawing was delayed. The repaired player
+registers an atomic-only video update callback, consumes the queued
+video frame from the app's **main UI tick**, preserves the last RGBA
+frame until NanoVG actually uploads it, and unregisters its callback
+before freeing the mpv context. Periodic typed `RENDER STATUS` entries
+now record the frame flag, count of update notifications and frame
+count separately. This does not assert physical Switch playback without
+a new hardware run.

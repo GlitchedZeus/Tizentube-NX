@@ -11,6 +11,7 @@
 #include <mpv/render.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -130,6 +131,11 @@ public:
             status_=std::string("mpv renderer: ")+mpv_error_string(render_result);
             close();return false;
         }
+        // Upstream libmpv requires a registered update callback for
+        // correct video-frame delivery. The callback runs on an mpv thread:
+        // it ONLY increments an atomic, never touches libmpv or Borealis.
+        mpv_render_context_set_update_callback(
+            renderer_,&CachedMpv::notify_render_update,this);
         M3Diagnostics::record(M3Stage::Render,M3Event::Ready,1,kWidth,kHeight);
         status_="Ready: local verified cache";
         return true;
@@ -341,12 +347,20 @@ public:
         }
     }
     const std::vector<unsigned char>& render() {
-        new_frame_=false;
+        // Run from the main UI tick, independently of whether Borealis
+        // happened to redraw the video widget this frame. Never clear
+        // pending texture state here: the last decoded image is retained
+        // until the widget actually uploads it to NanoVG.
         if(!renderer_)return pixels_;
+        const auto notifications=render_notifications_.exchange(
+            0,std::memory_order_acq_rel);
         const auto flags=mpv_render_context_update(renderer_);
         ++render_calls_;
         if(render_calls_%120==0)
-            M3Diagnostics::record(M3Stage::Render,M3Event::Status,static_cast<std::int64_t>(flags),static_cast<std::int64_t>(frames_),have_frame_ ? 1 : 0);
+            M3Diagnostics::record(M3Stage::Render,M3Event::Status,
+                static_cast<std::int64_t>(flags),
+                static_cast<std::int64_t>(notifications),
+                static_cast<std::int64_t>(frames_));
         if(flags & MPV_RENDER_UPDATE_FRAME) {
             int size[2]{kWidth,kHeight};
             std::size_t stride=kWidth*4;
@@ -379,6 +393,8 @@ public:
     }
     bool have_frame()const{return have_frame_;}
     bool new_frame()const{return new_frame_;}
+    const std::vector<unsigned char>& pixels()const{return pixels_;}
+    void acknowledge_frame_upload() noexcept {new_frame_=false;}
     const std::string& status()const{return status_;}
     std::string stats()const{
         if(!renderer_)return "Decoder unavailable";
@@ -399,8 +415,15 @@ public:
         return str;
     }
 private:
+    static void notify_render_update(void* context) noexcept {
+        if(context)static_cast<CachedMpv*>(context)->
+            render_notifications_.fetch_add(1,std::memory_order_release);
+    }
     void close() {
-        if(renderer_){mpv_render_context_free(renderer_);renderer_=nullptr;}
+        if(renderer_){
+            mpv_render_context_set_update_callback(renderer_,nullptr,nullptr);
+            mpv_render_context_free(renderer_);renderer_=nullptr;
+        }
         if(handle_){mpv_terminate_destroy(handle_);handle_=nullptr;}
         // Release ONLY after libmpv has closed every file descriptor.
         ready_lease_.release();
@@ -417,6 +440,7 @@ private:
     bool audio_failure_latched_{false};
     unsigned long long frames_{0};
     std::uint64_t pump_ticks_{0},render_calls_{0};
+    std::atomic<std::uint64_t> render_notifications_{0};
     unsigned mpv_warns_{0};
 };
 class VideoFrame final:public brls::View {
@@ -425,14 +449,16 @@ public:
     void draw(NVGcontext* vg,float x,float y,float w,float h,
               brls::Style,brls::FrameContext*) override {
         ++draw_calls_;
-        const auto& pixels=player_.render();
+        const auto& pixels=player_.pixels();
         if(image_<=0) {
             image_=nvgCreateImageRGBA(vg,kWidth,kHeight,0,pixels.data());
+            if(image_>0)player_.acknowledge_frame_upload();
             if(draw_calls_<=3 || draw_calls_%120==0)
                 M3Diagnostics::record(M3Stage::Ui,
                     image_>0?M3Event::Ready:M3Event::Fail,1,image_,0);
         } else if(player_.new_frame()) {
             nvgUpdateImage(vg,image_,pixels.data());
+            player_.acknowledge_frame_upload();
             ++texture_updates_;
             if(texture_updates_<=3 || texture_updates_%120==0)
                 M3Diagnostics::record(M3Stage::Ui,M3Event::Presented,
@@ -531,6 +557,9 @@ public:
     }
     void tick() {
         player_.pump();
+        // Software frame dequeue must not depend on widget draw invalidation:
+        // audio can advance even when Borealis does not redraw this View.
+        (void)player_.render();
         if((++ticks_%45)==0)update();
     }
     static void tick_current(){if(active_)active_->tick();}
