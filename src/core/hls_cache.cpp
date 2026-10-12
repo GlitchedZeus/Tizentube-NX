@@ -12,6 +12,7 @@ bool HlsCacheJob::start(const HlsProbePlan& plan) {
     active_.reset();
     bytes_=0;
     muxed_audio_verified_=false;
+    video_codec_verified_=false;
     aac_offset_=0;
     aac_total_=0;
     completed_=0;
@@ -110,6 +111,16 @@ HlsCacheState HlsCacheJob::pump() {
     const auto& playlist=track_==0
         ?active_->video_segments:*active_->audio_segments;
     if(next_segment_>=playlist.segments.size() && !init_pending_) {
+        // Direct TS manifests do not advertise a trustworthy codec string.
+        // Never package a random 200-OK response as playable H.264.
+        if(track_==0 && !active_->video_segments.init_segment_url &&
+           !video_codec_verified_) {
+            sink_.abort();
+            state_=HlsCacheState::Failed;
+            error_=HlsCacheFailure::UnsupportedVideo;
+            active_.reset();
+            return state_;
+        }
         if(track_==0 && !active_->audio_segments) {
             if(!active_->source.external_aac_url.empty() && aac_reader_) {
                 track_=2; // download, validate and attach standalone AAC
@@ -157,12 +168,15 @@ HlsCacheState HlsCacheJob::pump() {
         active_.reset();
         return state_;
     }
-    if(track_==0 && !is_init && !active_->audio_segments) {
+    if(track_==0 && !is_init &&
+       !active_->video_segments.init_segment_url) {
         const auto streams=inspect_mpeg_ts(bytes.bytes);
-        if(streams.recognized && streams.h264 && streams.aac)
-            muxed_audio_verified_=true;
-        // No AAC PMT entry -> do not publish a silent video. The caller
-        // must locate a separate reviewed audio rendition first.
+        if(streams.recognized && streams.h264) {
+            video_codec_verified_=true;
+            if(streams.aac)muxed_audio_verified_=true;
+        }
+        // PAT/PMT recognition is only an early codec gate, never a claim
+        // that actual H.264 frames or AAC samples decode successfully.
     }
     if(!sink_.write_segment(track_==1,is_init,next_segment_,bytes.bytes)) {
         sink_.abort();
@@ -194,6 +208,7 @@ const char* describe_hls_cache_failure(HlsCacheFailure reason) noexcept {
         case HlsCacheFailure::TotalSizeExceeded:return "Video exceeds the safe offline cache limit.";
         case HlsCacheFailure::UnableToPublish:return "Completed media cache could not be published.";
         case HlsCacheFailure::MissingAudio:return "No supported AAC audio was available.";
+        case HlsCacheFailure::UnsupportedVideo:return "No verified H.264 video track was found.";
     }
     return "Media preparation failed safely.";
 }

@@ -13,6 +13,21 @@ void check(bool result,const char* desc) {
     if(!result){++failures;std::cerr<<"FAIL "<<desc<<"\n";}
 }
 const std::string base="https://r1.googlevideo.com/videoplayback?";
+std::string ts_video_fixture(bool include_aac) {
+    std::string bytes(188*2,static_cast<char>(0xff));
+    auto put=[&](std::size_t pos,std::initializer_list<unsigned char> input) {
+        for(unsigned char v:input)bytes[pos++]=static_cast<char>(v);
+    };
+    put(0,{0x47,0x40,0x00,0x10,0,
+           0x00,0xb0,0x0d,0,1,0xc1,0,0,0,1,0xe1,0,0,0,0,0});
+    put(188,{0x47,0x41,0x00,0x10,0,
+             0x02,0xb0,static_cast<unsigned char>(include_aac?23:18),
+             0,1,0xc1,0,0,0xe1,1,0xf0,0,
+             0x1b,0xe1,1,0xf0,0});
+    if(include_aac)put(188+5+17,{0x0f,0xe1,2,0xf0,0});
+    return bytes;
+}
+
 playback::HlsProbePlan plan() {
     playback::HlsProbePlan p;
     p.source.video_id="2kD9v7Q3vec";
@@ -35,14 +50,16 @@ playback::HlsProbePlan plan() {
 struct FakeTransport:net::HttpClient {
     int hits{0};
     int fail_after{0};
+    bool ts_h264{false},ts_aac{false};
     net::HttpResult perform(const net::HttpRequest& request) override {
         ++hits;
         net::HttpResult out;
         out.ok=fail_after==0 || hits!=fail_after;
         out.response.status_code=out.ok?200:403;
-        out.response.body=std::string("\0\0\0\x18ftypisom0000",16);
-        out.response.headers={{"Content-Type","video/mp4"},
-                              {"Content-Length","16"}};
+        out.response.body=ts_h264?ts_video_fixture(ts_aac):
+            std::string("\0\0\0\x18ftypisom0000",16);
+        out.response.headers={{"Content-Type",ts_h264?"video/mp2t":"video/mp4"},
+                              {"Content-Length",std::to_string(out.response.body.size())}};
         if(request.url.find("googlevideo.com/")==std::string::npos)
             out.ok=false;
         return out;
@@ -136,6 +153,43 @@ void full() {
     check(sink.publishes==1,"completed video cache cannot publish twice");
 }
 void failure_cases() {
+    {
+        FakeTransport video;video.ts_h264=true;
+        FakeAacTransport audio;
+        playback::HlsSegmentReader reader(video);
+        playback::MediaChunkReader aac_reader(audio);
+        Sink sink;playback::HlsCacheJob job(reader,sink,&aac_reader);
+        auto p=plan();
+        p.video_segments.init_segment_url.reset();
+        p.audio_segments.reset();p.selected.audio_playlist_url.clear();
+        p.selected.direct_media_playlist=true;
+        p.source.external_aac_url=base+"external";
+        check(job.start(p),"real TS PMT and separate AAC fixture stages");
+        for(int i=0;i<12 && job.state()==playback::HlsCacheState::Fetching;++i)
+            (void)job.pump();
+        check(job.state()==playback::HlsCacheState::Ready &&
+              video.hits==2 && audio.requests==1 && sink.publishes==1,
+              "actual direct MPEG-TS H.264 metadata plus complete AAC publishes");
+    }
+    {
+        FakeTransport video; // fake MP4 bytes, not MPEG-TS H.264
+        FakeAacTransport audio;
+        playback::HlsSegmentReader reader(video);
+        playback::MediaChunkReader aac_reader(audio);
+        Sink sink;playback::HlsCacheJob job(reader,sink,&aac_reader);
+        auto p=plan();
+        p.video_segments.init_segment_url.reset();
+        p.audio_segments.reset();p.selected.audio_playlist_url.clear();
+        p.selected.direct_media_playlist=true;
+        p.source.external_aac_url=base+"external";
+        check(job.start(p),"corrupt TS source fixture staged");
+        for(int i=0;i<12 && job.state()==playback::HlsCacheState::Fetching;++i)
+            (void)job.pump();
+        check(job.state()==playback::HlsCacheState::Failed &&
+              job.error()==playback::HlsCacheFailure::UnsupportedVideo &&
+              audio.requests==0 && sink.publishes==0,
+              "unverified H.264 direct TS rejected before downloading AAC");
+    }
     {
         FakeTransport transport;transport.fail_after=2;
         playback::HlsSegmentReader reader(transport);

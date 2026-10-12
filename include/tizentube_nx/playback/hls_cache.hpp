@@ -29,7 +29,7 @@ public:
 enum class HlsCacheState { Idle, Fetching, Ready, Failed, Cancelled };
 enum class HlsCacheFailure {
     None, InvalidPlaylist, UnableToStage, MediaFetch, MediaWrite,
-    TotalSizeExceeded, UnableToPublish, MissingAudio
+    TotalSizeExceeded, UnableToPublish, MissingAudio, UnsupportedVideo
 };
 [[nodiscard]] const char* describe_hls_cache_failure(HlsCacheFailure reason) noexcept;
 
@@ -65,6 +65,7 @@ private:
     unsigned track_{0}; // 0 HLS video, 1 HLS audio, 2 ranged AAC MP4
     bool init_pending_{false};
     bool muxed_audio_verified_{false};
+    bool video_codec_verified_{false};
     std::uint64_t aac_offset_{0}, aac_total_{0};
     static constexpr std::uint64_t kMaxAacBytes=128ULL*1024*1024;
 };

@@ -205,3 +205,12 @@ rejections, media playlist errors and missing AAC separately. The Search UI
 shows actionable plain language instead of stage integers. Download,
 SD-write, cache-size and atomic-publish failures also map to safe messages.
 Neither signed URLs nor guest tokens enter user-visible diagnostics.
+
+### Direct MPEG-TS codec gate
+
+Direct `hls_variant` playlists often omit codec metadata. Their cached
+MPEG-TS video segments must now expose a PAT/PMT-advertised H.264 stream
+before standalone AAC transfer and cache publication. Corrupt transport
+bytes or an unsupported direct codec fail before costly separate audio
+download. This is metadata validation only; the real FFmpeg/libmpv decoder
+gates remain required. Fragmented MP4 sources retain their existing path.
