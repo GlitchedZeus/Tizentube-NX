@@ -19,6 +19,7 @@
 #include "libnx_http_client.hpp"
 #ifdef TTNX_M3_INTEGRATED
 #include "m3_player_activity.hpp"
+#include "m3_diagnostics.hpp"
 #include "media_file_sink.hpp"
 #include "tizentube_nx/playback/guest_direct_extractor.hpp"
 #include "tizentube_nx/playback/progressive_prepare.hpp"
@@ -1474,6 +1475,8 @@ private:
         }
         if (media_worker_.joinable()) media_worker_.join();
         active_m3_video_id_ = normal_video_id;
+        const bool diagnostic_recording=ttnx::switch_app::M3Diagnostics::begin_session();
+        (void)diagnostic_recording;
         const auto guest = *guest_session_;
         media_cancel_requested_.store(false);
         media_done_.store(false);
@@ -1495,10 +1498,12 @@ private:
                 bool completed=false;
                 bool completed_hls=false;
                 bool completed_adaptive=false;
+                ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Session,ttnx::switch_app::M3Event::Ready,0,0,0);
                 try {
                     ttnx::switch_app::LibnxHlsPlaylistTransport manifests;
                     ttnx::switch_app::LibnxHlsSegmentTransport segments;
                     ttnx::switch_app::LibnxMediaChunkTransport audio_transport;
+                    ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Source,ttnx::switch_app::M3Event::Begin,manifests.ready() ? 1 : 0,segments.ready() ? 1 : 0,audio_transport.ready() ? 1 : 0);
                     if (!manifests.ready() || !segments.ready() ||
                         !audio_transport.ready()) {
                         feedback="M3: native HLS TLS service unavailable.";
@@ -1510,6 +1515,7 @@ private:
                         // that visitor only for HLS source discovery.
                         ttnx::playback::HlsSourceProbe probe(network_client_,manifests,guest);
                         const auto source=probe.inspect(normal_video_id,720,30);
+                        ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Hls,ttnx::switch_app::M3Event::Status,source ? 1 : 0,static_cast<int>(probe.last_error()),0);
                         if (!source) {
                             feedback=ttnx::playback::describe_hls_probe_failure(probe.last_error());
                             // Independent safe MP4 fallback: never bypass
@@ -1524,6 +1530,7 @@ private:
                                 ttnx::playback::GuestDirectExtractor extractor(
                                     network_client_,guest,true);
                                 const auto resolved=extractor.resolve(normal_video_id);
+                                ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Direct,ttnx::switch_app::M3Event::Status,resolved ? 1 : 0,static_cast<int>(extractor.last_failure()),0);
                                 if(!resolved) {
                                     feedback=hls_reason+" | Direct: "+
                                         ttnx::playback::describe_direct_player_failure(
@@ -1554,17 +1561,31 @@ private:
                                             ttnx::playback::VideoCodec::H264 &&
                                         paired.streams->audio_codec==
                                             ttnx::playback::AudioCodec::Aac;
+                                    ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Direct,ttnx::switch_app::M3Event::Selected,have_muxed ? 1 : 0,have_pair ? 1 : 0,static_cast<std::int64_t>(resolved->video.size())*1000+static_cast<std::int64_t>(resolved->audio.size()));
                                     using Cache=ttnx::switch_app::SwitchMediaCacheSink;
                                     ttnx::playback::MediaChunkReader reader(audio_transport);
                                     auto download=[&](const std::string& url,Cache& sink,
                                                       int phase)->bool {
                                         ttnx::playback::MediaDownloadJob job(reader,sink);
-                                        if(!job.start(url))return false;
+                                        ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Transfer,ttnx::switch_app::M3Event::Start,phase,0,0);
+                                        if(!job.start(url)){
+                                            ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Transfer,ttnx::switch_app::M3Event::Fail,phase,static_cast<int>(job.error()),0);
+                                            return false;
+                                        }
                                         media_step_.store(phase);
+                                        std::uint64_t last_reported_mib=0;
                                         while(job.state()==
                                               ttnx::playback::MediaDownloadState::Fetching &&
                                               !media_cancel_requested_.load()) {
                                             (void)job.pump();
+                                            if(job.retry_delay_ms()) {
+                                                ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Transfer,ttnx::switch_app::M3Event::Retry,phase,job.last_http_status(),static_cast<int>(job.last_chunk_failure()));
+                                            }
+                                            const auto mib=job.bytes_received()/(4ULL*1024*1024);
+                                            if(mib>last_reported_mib) {
+                                                last_reported_mib=mib;
+                                                ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Transfer,ttnx::switch_app::M3Event::Progress,phase,static_cast<std::int64_t>(job.bytes_received()),static_cast<std::int64_t>(job.total_bytes()));
+                                            }
                                             if(job.retry_delay_ms() &&
                                                !media_cancel_requested_.load())
                                                 std::this_thread::sleep_for(
@@ -1574,8 +1595,12 @@ private:
                                             media_progress_total_.store(job.total_bytes());
                                         }
                                         if(media_cancel_requested_.load()) {
-                                            job.cancel();return false;
+                                            job.cancel();
+                                            ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Transfer,ttnx::switch_app::M3Event::Cancel,phase,static_cast<std::int64_t>(job.bytes_received()),0);
+                                            return false;
                                         }
+                                        ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Transfer,ttnx::switch_app::M3Event::End,phase,static_cast<int>(job.error())*1000+job.last_http_status(),static_cast<std::int64_t>(job.bytes_received()));
+                                        ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Transfer,ttnx::switch_app::M3Event::Status,phase,static_cast<int>(job.last_chunk_failure()),static_cast<std::int64_t>(job.total_bytes()));
                                         return job.state()==
                                             ttnx::playback::MediaDownloadState::Complete;
                                     };
@@ -1597,12 +1622,16 @@ private:
                                             const bool video_ok=download(
                                                 paired.streams->video_url,video,5);
                                             if(video_ok && Cache::publish_adaptive_pair()) {
+                                                ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Cache,ttnx::switch_app::M3Event::Pass,1,0,0);
                                                 completed=true;
                                                 completed_adaptive=true;
                                                 feedback="M3: video MP4 + separate AAC verified.";
-                                            } else feedback=media_cancel_requested_.load()
-                                                ?"M3 adaptive download cancelled."
-                                                :"M3 adaptive video transfer/MP4 validation failed.";
+                                            } else {
+                                                ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Cache,ttnx::switch_app::M3Event::Fail,static_cast<int>(video_ok),0,0);
+                                                feedback=media_cancel_requested_.load()
+                                                    ?"M3 adaptive download cancelled."
+                                                    :"M3 adaptive video transfer/MP4 validation failed.";
+                                            }
                                         } else feedback=media_cancel_requested_.load()
                                             ?"M3 adaptive download cancelled."
                                             :"M3 adaptive AAC range download failed.";
@@ -1622,6 +1651,7 @@ private:
                             ttnx::switch_app::SwitchHlsCacheSink cache;
                             ttnx::playback::HlsCacheJob job(reader,cache,&audio_reader);
                             if(!job.start(*source)) {
+                                ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Cache,ttnx::switch_app::M3Event::Fail,static_cast<int>(job.error()),0,0);
                                 feedback=ttnx::playback::describe_hls_cache_failure(job.error());
                             } else {
                                 media_step_.store(2);
@@ -1653,18 +1683,22 @@ private:
                                     job.cancel();
                                     feedback="M3 HLS transfer cancelled.";
                                 } else if(job.state()==ttnx::playback::HlsCacheState::Ready) {
+                                    ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Cache,ttnx::switch_app::M3Event::Pass,2,static_cast<std::int64_t>(job.downloaded_bytes()),static_cast<std::int64_t>(job.segments_completed()));
                                     completed=true;
                                     completed_hls=true;
                                     feedback="M3: complete HLS video/AAC locally verified.";
                                 } else {
+                                    ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Cache,ttnx::switch_app::M3Event::Fail,static_cast<int>(job.error()),static_cast<std::int64_t>(job.downloaded_bytes()),0);
                                     feedback=ttnx::playback::describe_hls_cache_failure(job.error());
                                 }
                             }
                         }
                     }
                 } catch (...) {
+                    ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Session,ttnx::switch_app::M3Event::Error,9,0,0);
                     feedback="M3 HLS preparation failed (no ad web-player fallback).";
                 }
+                ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Session,ttnx::switch_app::M3Event::End,completed ? 1 : 0,completed_hls ? 1 : (completed_adaptive ? 3 : 2),media_step_.load());
                 {
                     std::lock_guard<std::mutex> guard(media_mutex_);
                     pending_media_success_=completed;
@@ -1729,6 +1763,9 @@ private:
         }
         media_busy_.store(false);
         media_done_.store(false);
+        if(ttnx::switch_app::M3Diagnostics::available()) {
+            media_feedback_+=" [SD log: m3-playback.log]";
+        }
         publish_m3_feedback_on_ui(active_m3_video_id_);
         if(success && pending_media_hls_)
             ttnx::switch_app::open_m3_completed_hls();
