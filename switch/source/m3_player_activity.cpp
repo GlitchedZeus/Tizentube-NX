@@ -426,10 +426,11 @@ public:
               brls::Style,brls::FrameContext*) override {
         ++draw_calls_;
         const auto& pixels=player_.render();
-        if(image_<0) {
+        if(image_<=0) {
             image_=nvgCreateImageRGBA(vg,kWidth,kHeight,0,pixels.data());
-            M3Diagnostics::record(M3Stage::Ui,
-                image_>=0?M3Event::Ready:M3Event::Fail,1,image_,0);
+            if(draw_calls_<=3 || draw_calls_%120==0)
+                M3Diagnostics::record(M3Stage::Ui,
+                    image_>0?M3Event::Ready:M3Event::Fail,1,image_,0);
         } else if(player_.new_frame()) {
             nvgUpdateImage(vg,image_,pixels.data());
             ++texture_updates_;
@@ -439,7 +440,7 @@ public:
         }
         nvgBeginPath(vg);nvgRoundedRect(vg,x,y,w,h,8);
         nvgFillColor(vg,nvgRGB(8,14,20));nvgFill(vg);
-        if(image_>=0 && player_.have_frame()) {
+        if(image_>0 && player_.have_frame()) {
             const float scale=std::min(w/kWidth,h/kHeight);
             const float vw=kWidth*scale,vh=kHeight*scale;
             const float vx=x+(w-vw)*0.5f,vy=y+(h-vh)*0.5f;
@@ -462,7 +463,7 @@ public:
         if(draw_calls_<=2 || draw_calls_%120==0)
             M3Diagnostics::record(M3Stage::Ui,M3Event::Draw,
                 static_cast<std::int64_t>(draw_calls_),
-                player_.have_frame()?1:0,image_>=0?1:0);
+                player_.have_frame()?1:0,image_>0?1:0);
     }
 private:
     CachedMpv& player_;int image_{-1};
