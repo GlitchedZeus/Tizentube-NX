@@ -365,6 +365,7 @@ private:
     std::atomic_bool media_cancel_requested_{false};
     bool pending_media_success_{false};
     bool pending_media_hls_{false};
+    bool pending_media_adaptive_{false};
     std::string pending_media_feedback_;
     std::string media_feedback_{"Choose a normal video, then Play video (M3)."};
     std::string active_m3_video_id_;
@@ -1493,6 +1494,7 @@ private:
                 std::string feedback="M3 HLS playback source unavailable.";
                 bool completed=false;
                 bool completed_hls=false;
+                bool completed_adaptive=false;
                 try {
                     ttnx::switch_app::LibnxHlsPlaylistTransport manifests;
                     ttnx::switch_app::LibnxHlsSegmentTransport segments;
@@ -1516,38 +1518,91 @@ private:
                             if(ttnx::playback::permits_muxed_mp4_fallback(
                                    probe.last_error()) &&
                                !media_cancel_requested_.load()) {
+                                const std::string hls_reason=
+                                    ttnx::playback::describe_hls_probe_failure(
+                                        probe.last_error());
                                 ttnx::playback::GuestDirectExtractor extractor(
                                     network_client_,guest,true);
-                                ttnx::playback::MediaChunkReader chunk_reader(
-                                    audio_transport);
-                                ttnx::switch_app::SwitchMediaCacheSink mp4_cache;
-                                ttnx::playback::MediaDownloadJob download(
-                                    chunk_reader,mp4_cache);
-                                ttnx::playback::ProgressivePrepareJob prepare(
-                                    extractor,download);
-                                if(!prepare.start(normal_video_id)) {
-                                    feedback="HLS unusable; no approved native muxed MP4 offered.";
+                                const auto resolved=extractor.resolve(normal_video_id);
+                                if(!resolved) {
+                                    feedback=hls_reason+" | Direct: "+
+                                        ttnx::playback::describe_direct_player_failure(
+                                            extractor.last_failure());
                                 } else {
-                                    media_step_.store(3);
-                                    while(prepare.stage()==
-                                          ttnx::playback::ProgressiveStage::Downloading &&
-                                          !media_cancel_requested_.load()) {
-                                        (void)prepare.pump();
-                                        media_progress_bytes_.store(
-                                            prepare.received_bytes());
-                                        media_progress_total_.store(
-                                            prepare.total_bytes());
-                                    }
-                                    if(media_cancel_requested_.load()) {
-                                        prepare.cancel();
-                                        feedback="M3 alternate media download cancelled.";
-                                    } else if(prepare.stage()==
-                                              ttnx::playback::ProgressiveStage::Ready) {
-                                        completed=true;
-                                        feedback="M3: native muxed H.264/AAC MP4 ready.";
-                                    } else {
-                                        feedback="M3 direct MP4 download failed safely.";
-                                    }
+                                    ttnx::playback::QualityPolicy policy;
+                                    policy.max_height=720;policy.max_fps=30;
+                                    policy.permit_vp9=false;policy.prefer_adaptive=false;
+                                    auto muxed=*resolved;
+                                    muxed.audio.clear();
+                                    for(auto& fmt:muxed.video)
+                                        if(fmt.muxed_audio!=ttnx::playback::AudioCodec::Aac)
+                                            fmt.codec=ttnx::playback::VideoCodec::Unknown;
+                                    const auto single=ttnx::playback::select_streams(
+                                        muxed,policy);
+                                    policy.prefer_adaptive=true;
+                                    const auto paired=ttnx::playback::select_streams(
+                                        *resolved,policy);
+                                    const bool have_muxed=single.streams &&
+                                        !single.streams->adaptive &&
+                                        single.streams->video_codec==
+                                            ttnx::playback::VideoCodec::H264 &&
+                                        single.streams->audio_codec==
+                                            ttnx::playback::AudioCodec::Aac;
+                                    const bool have_pair=paired.streams &&
+                                        paired.streams->adaptive &&
+                                        paired.streams->video_codec==
+                                            ttnx::playback::VideoCodec::H264 &&
+                                        paired.streams->audio_codec==
+                                            ttnx::playback::AudioCodec::Aac;
+                                    using Cache=ttnx::switch_app::SwitchMediaCacheSink;
+                                    ttnx::playback::MediaChunkReader reader(audio_transport);
+                                    auto download=[&](const std::string& url,Cache& sink,
+                                                      int phase)->bool {
+                                        ttnx::playback::MediaDownloadJob job(reader,sink);
+                                        if(!job.start(url))return false;
+                                        media_step_.store(phase);
+                                        while(job.state()==
+                                              ttnx::playback::MediaDownloadState::Fetching &&
+                                              !media_cancel_requested_.load()) {
+                                            (void)job.pump();
+                                            media_progress_bytes_.store(job.bytes_received());
+                                            media_progress_total_.store(job.total_bytes());
+                                        }
+                                        if(media_cancel_requested_.load()) {
+                                            job.cancel();return false;
+                                        }
+                                        return job.state()==
+                                            ttnx::playback::MediaDownloadState::Complete;
+                                    };
+                                    if(have_muxed){
+                                        Cache movie;
+                                        completed=download(single.streams->video_url,
+                                                           movie,3);
+                                        feedback=media_cancel_requested_.load()
+                                            ?"M3 download cancelled."
+                                            :completed?"M3: verified muxed MP4 ready."
+                                            :"M3 muxed MP4 signed range or SD error.";
+                                    } else if(have_pair){
+                                        Cache::invalidate_adaptive_pair();
+                                        Cache audio(Cache::Slot::AdaptiveAudio);
+                                        const bool audio_ok=download(
+                                            paired.streams->audio_url,audio,4);
+                                        if(audio_ok) {
+                                            Cache video(Cache::Slot::AdaptiveVideo);
+                                            const bool video_ok=download(
+                                                paired.streams->video_url,video,5);
+                                            if(video_ok && Cache::publish_adaptive_pair()) {
+                                                completed=true;
+                                                completed_adaptive=true;
+                                                feedback="M3: video MP4 + separate AAC verified.";
+                                            } else feedback=media_cancel_requested_.load()
+                                                ?"M3 adaptive download cancelled."
+                                                :"M3 adaptive video transfer/MP4 validation failed.";
+                                        } else feedback=media_cancel_requested_.load()
+                                            ?"M3 adaptive download cancelled."
+                                            :"M3 adaptive AAC range download failed.";
+                                    } else feedback=hls_reason+
+                                        " | no safe muxed or separate H.264/AAC offered.";
                                 }
                             }
                         } else if(media_cancel_requested_.load()) {
@@ -1605,6 +1660,7 @@ private:
                     std::lock_guard<std::mutex> guard(media_mutex_);
                     pending_media_success_=completed;
                     pending_media_hls_=completed && completed_hls;
+                    pending_media_adaptive_=completed && completed_adaptive;
                     pending_media_feedback_=std::move(feedback);
                 }
                 media_done_.store(true);
@@ -1622,10 +1678,15 @@ private:
             const auto now = std::chrono::steady_clock::now();
             if (now - media_last_ui_update_ < std::chrono::milliseconds(700)) return;
             media_last_ui_update_ = now;
-            if (media_step_.load() == 3) {
+            if(media_step_.load()==3 || media_step_.load()==4 ||
+               media_step_.load()==5) {
+                const auto phase=media_step_.load();
                 const auto current=media_progress_bytes_.load();
                 const auto total=media_progress_total_.load();
-                media_feedback_="M3 native H.264/AAC MP4: "+
+                media_feedback_=phase==3?"M3 muxed MP4: ":
+                                phase==4?"M3 separate AAC: ":
+                                         "M3 adaptive H.264 video: ";
+                media_feedback_+=
                     std::to_string(current/1024)+" KiB cached";
                 if(total)media_feedback_+=" / "+std::to_string(total/1024)+" KiB";
                 publish_m3_feedback_on_ui(active_m3_video_id_);
@@ -1660,8 +1721,10 @@ private:
         media_busy_.store(false);
         media_done_.store(false);
         publish_m3_feedback_on_ui(active_m3_video_id_);
-        if (success && pending_media_hls_)
+        if(success && pending_media_hls_)
             ttnx::switch_app::open_m3_completed_hls();
+        else if(success && pending_media_adaptive_)
+            ttnx::switch_app::open_m3_completed_adaptive();
         else if(success)
             ttnx::switch_app::open_m3_completed_media();
     }
