@@ -520,3 +520,15 @@ shares the latest completed green run's artifact rather than issuing
 an NRO after every individual fix. The automatically generated
 artifact expires after 14 days. M2 networking, Shorts exclusion
 and zero-ad/web-player policy remain unchanged.
+
+### Real user-reported manifest failures (diagnostic lane)
+
+The 2026-10-11 device screenshots of three normal public videos
+(`-CuQnpJ4sPg`, `YJABBgpaNts`, `0NktpcjsK58`) all hit the
+preplayback **ManifestRejected** stage. A new CI diagnostic inspects
+the guest VisionOS response and first HLS playlist from those exact
+video IDs, printing only fixed category codes (MIME type family,
+master/media/CRLF/format class, or HTTP category). It does not print
+or retain signed URLs, visitor identifiers, response JSON, or media.
+This diagnostic is deliberately non-gating: CDN restrictions on a
+GitHub runner are not the same as the user's Switch network.

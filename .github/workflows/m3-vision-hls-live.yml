@@ -25,6 +25,13 @@ jobs:
           python-version: '3.12'
       - name: Offline privacy/source/URL contracts
         run: python -m unittest discover -s tests -p vision_hls_live_probe_tests.py -v
+      - name: Field diagnostics for actual normal videos failing on Switch
+        run: |
+          python -m unittest discover -s tests -p m3_public_playlist_diagnostic_tests.py -v
+          python tools/m3_public_playlist_diagnostic.py \
+            --video-id=-CuQnpJ4sPg \
+            --video-id=YJABBgpaNts \
+            --video-id=0NktpcjsK58
       - name: Install real decoder tools for bounded A/V proof
         run: |
           sudo apt-get update -qq
