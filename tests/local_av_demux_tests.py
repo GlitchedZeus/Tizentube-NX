@@ -3,11 +3,14 @@
 This checks actual demux and decode, not signatures alone. The Switch mpv
 option and physical A/V synchronization must still be verified on hardware.
 """
+import ctypes
+import ctypes.util
 import json
 import pathlib
 import re
 import shutil
 import subprocess
+import time
 import tempfile
 import unittest
 
@@ -101,6 +104,110 @@ class LocalAvDemuxTests(unittest.TestCase):
                   "switch/source/m3_player_activity.cpp").read_text()
         self.assertIn('required("audio-files-append",', source)
         self.assertNotIn('required("audio-file",', source)
+
+    def test_host_libmpv_selects_external_aac_and_controls(self):
+        """Exercise libmpv API, not just the FFmpeg command-line demuxer."""
+        library = ctypes.util.find_library("mpv")
+        self.assertIsNotNone(library, "CI must install libmpv2")
+        mpv = ctypes.CDLL(library)
+
+        class Event(ctypes.Structure):
+            _fields_ = [("event_id", ctypes.c_int),
+                        ("error", ctypes.c_int),
+                        ("reply_userdata", ctypes.c_ulonglong),
+                        ("data", ctypes.c_void_p)]
+
+        mpv.mpv_create.restype = ctypes.c_void_p
+        mpv.mpv_set_option_string.argtypes = [ctypes.c_void_p,
+                                                ctypes.c_char_p, ctypes.c_char_p]
+        mpv.mpv_set_option_string.restype = ctypes.c_int
+        mpv.mpv_initialize.argtypes = [ctypes.c_void_p]
+        mpv.mpv_initialize.restype = ctypes.c_int
+        mpv.mpv_command.argtypes = [ctypes.c_void_p,
+                                     ctypes.POINTER(ctypes.c_char_p)]
+        mpv.mpv_command.restype = ctypes.c_int
+        mpv.mpv_wait_event.argtypes = [ctypes.c_void_p, ctypes.c_double]
+        mpv.mpv_wait_event.restype = ctypes.POINTER(Event)
+        mpv.mpv_get_property.argtypes = [ctypes.c_void_p, ctypes.c_char_p,
+                                         ctypes.c_int, ctypes.c_void_p]
+        mpv.mpv_get_property.restype = ctypes.c_int
+        mpv.mpv_get_property_string.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+        mpv.mpv_get_property_string.restype = ctypes.c_void_p
+        mpv.mpv_free.argtypes = [ctypes.c_void_p]
+        mpv.mpv_terminate_destroy.argtypes = [ctypes.c_void_p]
+
+        handle = mpv.mpv_create()
+        self.assertTrue(handle, "mpv_create must return a real handle")
+        def opt(key, value):
+            return mpv.mpv_set_option_string(handle, key.encode(),
+                                             value.encode())
+        def cmd(*words):
+            argv = (ctypes.c_char_p * (len(words) + 1))()
+            for i, word in enumerate(words):
+                argv[i] = str(word).encode()
+            return mpv.mpv_command(handle, argv)
+        def prop(name):
+            raw = mpv.mpv_get_property_string(handle, name.encode())
+            if not raw:
+                return None
+            try:
+                return ctypes.string_at(raw).decode("utf-8", "replace")
+            finally:
+                mpv.mpv_free(raw)
+
+        try:
+            for key, value in [
+                ("config", "no"), ("vo", "null"), ("ao", "null"),
+                ("hwdec", "no"), ("pause", "yes"),
+                ("demuxer-lavf-o", "protocol_whitelist=file"),
+                ("audio-files-append", str(self.ready / "external_audio.m4a"))
+            ]:
+                self.assertGreaterEqual(opt(key, value), 0,
+                    f"libmpv rejected required option {key}")
+            self.assertGreaterEqual(mpv.mpv_initialize(handle), 0,
+                                    "host libmpv initialization")
+            self.assertGreaterEqual(cmd("loadfile",
+                                         str(self.ready / "master.m3u8"), "replace"), 0)
+            loaded = False
+            deadline = time.monotonic() + 18
+            while time.monotonic() < deadline:
+                event = mpv.mpv_wait_event(handle, 0.25).contents
+                if event.event_id == 8:  # MPV_EVENT_FILE_LOADED
+                    loaded = True
+                    break
+                if event.event_id == 7:  # MPV_EVENT_END_FILE before load
+                    self.fail("libmpv ended HLS before FILE_LOADED")
+            self.assertTrue(loaded, "libmpv must demux local HLS playlist")
+            count = ctypes.c_int64()
+            self.assertGreaterEqual(mpv.mpv_get_property(
+                handle, b"track-list/count", 4, ctypes.byref(count)), 0)
+            selected_audio = False
+            video_seen = False
+            for index in range(min(count.value, 24)):
+                prefix = f"track-list/{index}/"
+                kind = prop(prefix + "type")
+                if kind == "video":
+                    video_seen = True
+                if kind == "audio":
+                    selected = ctypes.c_int()
+                    ok = mpv.mpv_get_property(
+                        handle, (prefix + "selected").encode(), 3,
+                        ctypes.byref(selected))
+                    selected_audio |= ok >= 0 and selected.value != 0
+            self.assertTrue(video_seen, "H.264 video track must exist")
+            self.assertTrue(selected_audio,
+                "real libmpv must attach and select the external AAC")
+            self.assertGreaterEqual(cmd("seek", "4", "absolute"), 0,
+                                    "libmpv must support local HLS seeking")
+            self.assertGreaterEqual(cmd("cycle", "pause"), 0,
+                                    "libmpv must support pause/resume")
+            self.assertGreaterEqual(cmd("stop"), 0,
+                                    "libmpv must support stop")
+            self.assertGreaterEqual(cmd("loadfile",
+                                         str(self.ready / "master.m3u8"), "replace"), 0,
+                                    "libmpv must allow replay after stop")
+        finally:
+            mpv.mpv_terminate_destroy(handle)
 
     def test_audio_missing_and_torn_files_are_not_complete(self):
         path = self.ready / "external_audio.m4a"

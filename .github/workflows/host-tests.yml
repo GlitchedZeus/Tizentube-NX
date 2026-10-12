@@ -24,7 +24,7 @@ jobs:
       - name: Install host FFmpeg codec tools for real demux verification
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg
+          sudo apt-get install -y -qq ffmpeg libmpv2
           ffmpeg -version | head -n 1
           ffprobe -version | head -n 1
       - name: Decode synthetic local HLS video + separate AAC (FFmpeg)

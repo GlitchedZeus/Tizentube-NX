@@ -161,6 +161,14 @@ TizenTube NX hardware acceptance.
 
 ### External AAC option correction
 
+The headless host libmpv integration test now requires a real libmpv
+installation, loads the generated local HLS file with
+`protocol_whitelist=file`, uses the same `audio-files-append` option
+through `mpv_set_option_string`, asserts a selected audio and video
+track, and exercises seek, pause, stop and replay. This is a stronger
+functional test than inspecting FFmpeg bytes alone; the host library
+does not replace Switch-specific libmpv 0.36 or hardware testing.
+
 The pinned mpv 0.36 documentation marks `audio-file` as a **CLI/config-only
 alias**, not a reliable libmpv API option. The native player now sets
 `audio-files-append` directly before `mpv_initialize`. The append operation
