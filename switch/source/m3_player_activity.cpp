@@ -119,6 +119,11 @@ public:
             {MPV_RENDER_PARAM_API_TYPE,const_cast<char*>(MPV_RENDER_API_TYPE_SW)},
             {MPV_RENDER_PARAM_INVALID,nullptr}
         };
+        // Capture only numeric categories of upstream libmpv warnings.
+        // Never write the untrusted text: it can contain signed media URLs.
+        const int watch_result=mpv_request_log_messages(handle_,"warn");
+        M3Diagnostics::record(M3Stage::Player,M3Event::Status,
+                              3,watch_result,0);
         const int render_result=mpv_render_context_create(&renderer_,handle_,api);
         if (render_result<0) {
             M3Diagnostics::record(M3Stage::Render,M3Event::Fail,1,render_result,0);
@@ -252,6 +257,21 @@ public:
         for(unsigned i=0;i<32;++i) {
             const mpv_event* e=mpv_wait_event(handle_,0);
             if(!e || e->event_id==MPV_EVENT_NONE)break;
+            if(e->event_id==MPV_EVENT_LOG_MESSAGE && mpv_warns_<64) {
+                const auto* msg=static_cast<const mpv_event_log_message*>(e->data);
+                ++mpv_warns_;
+                // Log message body/prefix are NEVER recorded. Coarse
+                // category and numeric level only, bounded to 64 events.
+                const char* prefix=msg ? msg->prefix : nullptr;
+                const int category=!prefix?0:
+                    std::strstr(prefix,"vd")||std::strstr(prefix,"video")?1:
+                    std::strstr(prefix,"vo")||std::strstr(prefix,"render")?2:
+                    std::strstr(prefix,"lavf")||std::strstr(prefix,"demux")?3:
+                    std::strstr(prefix,"ad")||std::strstr(prefix,"audio")?4:
+                    std::strstr(prefix,"ffmpeg")?5:0;
+                M3Diagnostics::record(M3Stage::Decode,M3Event::Warning,
+                                      category,msg ? msg->log_level : 0,0);
+            }
             if(e->event_id==MPV_EVENT_FILE_LOADED) {
                 M3Diagnostics::record(M3Stage::Decode,M3Event::Loaded,e->error,0,0);
                 if((use_hls_||use_adaptive_) && audio_gate_.state()==
@@ -397,6 +417,7 @@ private:
     bool audio_failure_latched_{false};
     unsigned long long frames_{0};
     std::uint64_t pump_ticks_{0},render_calls_{0};
+    unsigned mpv_warns_{0};
 };
 class VideoFrame final:public brls::View {
 public:
@@ -462,6 +483,9 @@ public:
         label(root,hls_?"Completed offline HLS segments + synchronized AAC":
                    adaptive_?"Verified local video MP4 and separate AAC":
                              "Self-contained H.264/AAC MP4 from verified SD cache",15);
+        label(root,M3Diagnostics::available()
+            ?"Diagnostics: sdmc:/switch/TizenTube-NX/m3-playback.log"
+            :"Diagnostics: SD logging unavailable",12);
         root->addView(new VideoFrame(player_));
         status_=label(root,player_.status(),17);
         info_=label(root,player_.stats(),15);

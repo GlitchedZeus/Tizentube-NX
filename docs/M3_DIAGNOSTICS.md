@@ -62,3 +62,10 @@ category, such as `AUDIO_ONLY_TRACKS`,
 `AAC_DOWNLOAD_FAILED`. It does not access any network service. A
 classification is evidence for the next focused fix, not proof of the
 ultimate decoder bug or DRM compatibility.
+
+**libmpv warning privacy:** The diagnostic player requests `warn`-level
+mpv events, but discards all arbitrary message text and source prefixes
+immediately. Only coarse fixed category numbers (video, render, demux,
+audio, ffmpeg, other) and the integer severity are saved, capped to 64
+warnings per session. This helps distinguish missing decoders from a
+NanoVG presentation failure without ever persisting signed URLs.
