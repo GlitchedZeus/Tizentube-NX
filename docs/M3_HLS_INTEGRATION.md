@@ -325,3 +325,17 @@ parser rejecting genuine media. Successful runs emit the privacy-safe
 `M3_NATIVE_MEDIA_PARSERS=PASS` category; no signed URLs, media or binary
 artifacts are uploaded. Nintendo Switch decoder/runtime behavior is still
 a separate hardware acceptance step.
+
+### Real external AAC attachment in libmpv
+
+The LIVE gate now goes beyond independent FFmpeg codec decoding and the
+native C++ container checks: it creates an ephemeral single-segment,
+local-only HLS master playlist for the actual downloaded YouTube TS
+segment, configures host `libmpv` using the **same typed
+`audio-files` node-array API as the Switch player**, and requires
+an actual selected AAC track, recognized H.264/AAC codecs and a moving
+playback clock. A successful run emits `M3_REAL_LIBMPV=PASS`. Network
+protocols are restricted to `file`, video/audio output uses null
+sinks, and no media or URL artifacts survive the temporary directory.
+Host `libmpv` is not the pinned Switch library and does not prove real
+console rendering or speaker output.

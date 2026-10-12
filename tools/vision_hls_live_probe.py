@@ -553,7 +553,14 @@ def decode_real_av_pair(video: bytes,audio: bytes) -> bool:
             subprocess.run(["ffmpeg","-nostdin","-hide_banner","-loglevel",
                             "error","-xerror","-protocol_whitelist","file",
                             *args],capture_output=True,check=True,timeout=35)
+        # Finally make real libmpv demux this actual downloaded YouTube
+        # segment as a local HLS playlist with the external AAC selected.
+        checker=pathlib.Path(__file__).with_name("m3_live_libmpv_check.py")
+        subprocess.run([sys.executable,str(checker),
+                        str(video_path),str(audio_path)],
+                       capture_output=True,check=True,timeout=25)
         print("M3_NATIVE_MEDIA_PARSERS=PASS")
+        print("M3_REAL_LIBMPV=PASS")
         return True
 
 

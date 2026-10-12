@@ -28,7 +28,7 @@ jobs:
       - name: Install real decoder tools for bounded A/V proof
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg
+          sudo apt-get install -y -qq ffmpeg libmpv2
       - name: Build exact native TS/MP4 parsers for live media verification
         run: |
           c++ -std=c++20 -O2 -Wall -Wextra -Werror             -Iinclude tools/m3_native_media_check.cpp             src/core/ts_streams.cpp             -o "$RUNNER_TEMP/m3-native-media-check"
@@ -44,7 +44,7 @@ jobs:
       - name: No media artifact or user-facing experimental NRO
         if: always()
         run: |
-          echo "LIVE CI checks bounded real H.264 + AAC FFmpeg decode without exporting media."
+          echo "LIVE CI checks bounded native parsers, libmpv and FFmpeg; no media exported."
           echo "A GitHub runner 4xx is NOT proof of a Switch bug."
           echo "Never print or upload visitorData, tokenized CDN URLs, cookies, source JSON."
           echo "Do not upload any NRO from this reference workflow."
