@@ -33,6 +33,7 @@ int main(){
      "growing playlist references only durable local files");
   ck(!sink.retire_before(2),"cannot retire entire visible playback window");
   ck(sink.retire_before(1),"advance window before unlinking consumed chunk");
+  ck(!sink.retire_before(1),"retiring zero new segments is refused");
   const auto next=read(root/"stream.m3u8");
   ck(next.find("#EXT-X-TARGETDURATION:5")!=std::string::npos &&
      next.find("#EXT-X-MEDIA-SEQUENCE:1")!=std::string::npos &&
@@ -41,8 +42,36 @@ int main(){
      sink.bytes()==packet.size(),"rolling playlist sheds already played bytes");
   ck(sink.finish() && read(root/"stream.m3u8").find("#EXT-X-ENDLIST")!=std::string::npos,
      "finished playlist closes cleanly");
+  ck(!sink.finish() && !sink.append(2,3000,packet),
+     "finalized VOD cannot silently append more media");
   ck(RollingHlsSink::discard() && !fs::exists(root),"end of playback leaves no media");
   ck(RollingHlsSink::discard(),"idempotent no-media cleanup");
+  // A poisoned manifest destination simulates rename/publish failure.
+  // The new segment must be unlinked and must not consume invisible quota.
+  {
+    RollingHlsSink transactional;
+    ck(transactional.begin(5000) && transactional.append(0,3000,packet),
+       "transactional fixture begins with a published segment");
+    const auto foreign=root.parent_path()/"manifest-foreign.txt";
+    std::ofstream(foreign)<<"external data";
+    fs::remove(root/"stream.m3u8");
+    fs::create_symlink(foreign,root/"stream.m3u8");
+    ck(!transactional.append(1,3000,packet) &&
+       !fs::exists(root/"v_00001.ts") &&
+       transactional.next_index()==1 &&
+       transactional.bytes()==packet.size() &&
+       read(foreign)=="external data",
+       "manifest publish refusal rolls back newly written media and quota");
+    fs::remove(root/"stream.m3u8");
+    ck(transactional.append(1,3000,packet),
+       "clean destination permits retry of the same segment");
+    ck(transactional.finish(),"transactional stream finalizes");
+    ck(transactional.retire_before(1) &&
+       read(root/"stream.m3u8").find("#EXT-X-ENDLIST")!=std::string::npos,
+       "retiring a segment from a completed video preserves ENDLIST");
+    ck(RollingHlsSink::discard(),"transactional cache fully purged");
+    fs::remove(foreign);
+  }
   RollingHlsSink hour;
   ck(hour.begin(),"long-form session starts");
   const std::string chunk(48*1024,'Z');

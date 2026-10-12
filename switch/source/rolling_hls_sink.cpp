@@ -106,11 +106,12 @@ bool RollingHlsSink::begin(std::uint64_t maximum_segment_ms) {
        !discard() || !ancestors(true))return false;
     segments_.clear();bytes_=0;next_=0;
     target_seconds_=(maximum_segment_ms+999)/1000;started_=true;
+    finished_=false;
     return true;
 }
 bool RollingHlsSink::append(std::size_t index,std::uint64_t duration_ms,
                             std::string_view verified_muxed_ts) {
-    if(!started_ || !ancestors(false) || index!=next_ ||
+    if(!started_ || finished_ || !ancestors(false) || index!=next_ ||
        index>=kMaxSegments || duration_ms==0 ||
        duration_ms>(target_seconds_*1000) ||
        verified_muxed_ts.empty() || verified_muxed_ts.size()>16*1024*1024 ||
@@ -123,7 +124,20 @@ bool RollingHlsSink::append(std::size_t index,std::uint64_t duration_ms,
     }
     segments_.push_back(Segment{index,duration_ms,verified_muxed_ts.size()});
     bytes_+=verified_muxed_ts.size();++next_;
-    return publish(false);
+    if(publish(false))return true;
+    // Roll back an unpublished segment. Without this, a failed manifest
+    // rename leaves untracked SD bytes that can bypass the rolling quota.
+    // Only return quota after verifying the failed-to-publish media file
+    // was removed. A failed unlink poisons this session instead of silently
+    // undercounting bytes in the subsequent appends.
+    if(!remove_file(ready)) {
+        started_=false;
+        return false;
+    }
+    segments_.pop_back();
+    bytes_-=verified_muxed_ts.size();
+    --next_;
+    return false;
 }
 bool RollingHlsSink::publish(bool end_list) {
     if(segments_.empty())return false;
@@ -159,19 +173,23 @@ bool RollingHlsSink::retire_before(std::size_t first_index) {
        first_index>=next_ || !ancestors(false))return false;
     const auto first=std::find_if(segments_.begin(),segments_.end(),
                      [first_index](const Segment& s){return s.index>=first_index;});
-    if(first==segments_.end())return false;
+    if(first==segments_.end() || first==segments_.begin())return false;
     // New playlist must omit old segments before any unlink can happen.
     const auto removed=std::vector<Segment>(segments_.begin(),first);
     const auto old=segments_;
     segments_.erase(segments_.begin(),first);
-    if(!publish(false)) {segments_=old;return false;}
+    if(!publish(finished_)) {segments_=old;return false;}
     for(const auto& s:removed) {
         if(!remove_file(segment_path(s.index)))return false;
         bytes_-=s.bytes;
     }
     return true;
 }
-bool RollingHlsSink::finish() {return started_ && publish(true);}
+bool RollingHlsSink::finish() {
+    if(!started_ || finished_ || !publish(true))return false;
+    finished_=true;
+    return true;
+}
 } // namespace ttnx::switch_app
 
 #endif // opt-in rolling HLS backend

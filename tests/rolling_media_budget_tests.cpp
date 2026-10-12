@@ -92,6 +92,17 @@ int main() {
     check(w.clear_epoch(),"seek resets per-track sequence guard");
     check(w.add(T::Video,0,0,3000,video_chunk)==R::Accepted,
           "new seek epoch starts fresh from segment zero");
+    check(w.clear_epoch(),"startup latch case reset");
+    check(w.add(T::Muxed,0,0,3000,video_chunk)==R::Accepted,
+          "new muxed stream begins from zero");
+    w.set_codec_verification(true,true);
+    check(w.startup_ready(),"codec-verified initial muxed prefix latches readiness");
+    check(w.commit_eviction(T::Muxed,0,6000) &&
+          w.buffered_video_ms()==0 && w.startup_ready(),
+          "evicting the opening clip does not revert active stream to unprimed");
+    check(w.begin_epoch(120000) && !w.startup_ready(),
+          "seeking resets initial-prefix latch and demands new segment checks");
+
     if (errors) std::cerr << errors << " failures\n";
     return errors ? 1 : 0;
 }

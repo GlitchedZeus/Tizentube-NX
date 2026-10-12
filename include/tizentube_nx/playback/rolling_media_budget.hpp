@@ -78,6 +78,9 @@ public:
         previous = LastPiece{true,index,end_ms};
         used_bytes_ += bytes;
         high_water_bytes_ = std::max(high_water_bytes_,used_bytes_);
+        if(verified_video_ && verified_audio_ &&
+           buffered_video_ms()>=kStartupVideoMs &&
+           buffered_audio_ms()>=kStartupAudioMs) startup_latched_=true;
         return AddResult::Accepted;
     }
 
@@ -137,20 +140,22 @@ public:
         last_video_ = last_audio_ = last_muxed_ = {};
         epoch_start_ms_ = 0;
         verified_video_ = verified_audio_ = false;
+        startup_latched_=false;
         return true;
     }
 
     void set_codec_verification(bool video, bool audio) noexcept {
         verified_video_ = video;
         verified_audio_ = audio;
+        if(video && audio && buffered_video_ms()>=kStartupVideoMs &&
+           buffered_audio_ms()>=kStartupAudioMs) startup_latched_=true;
     }
 
-    // Contiguous buffered coverage must begin at the seek epoch for both A/V. Presence
-    // of a byte or a header alone is not evidence of decodable frames.
+    // Latch the first verified A/V prefix. During long-form playback the
+    // producer deletes the opening seconds, but the stream must remain
+    // primed. A new seek/cancel resets the latch before any new media.
     [[nodiscard]] bool startup_ready() const noexcept {
-        return verified_video_ && verified_audio_ &&
-            buffered_video_ms() >= kStartupVideoMs &&
-            buffered_audio_ms() >= kStartupAudioMs;
+        return verified_video_ && verified_audio_ && startup_latched_;
     }
 
     [[nodiscard]] std::uint64_t buffered_video_ms() const noexcept {
@@ -190,6 +195,7 @@ private:
     std::uint64_t used_bytes_{0};
     std::uint64_t high_water_bytes_{0};
     bool verified_video_{false}, verified_audio_{false};
+    bool startup_latched_{false};
 };
 
 } // namespace ttnx::playback

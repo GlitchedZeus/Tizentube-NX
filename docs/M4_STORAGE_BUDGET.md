@@ -98,3 +98,31 @@ reload; validate on Nintendo Switch that replacing the playlist file
 works with SD/FAT; prove a 24-MiB rolling limit and no persistent media
 during 720p playback. Full M3 caching may still exceed 100 MB; this
 new backend is not claimed production-active.
+
+## M4 reviewed-network to rolling-HLS integration (opt-in)
+
+`RollingMuxedHlsSession` connects the existing policy-constrained
+`HlsSegmentReader` to the actual bounded SD segment sink and the
+`RollingStreamCoordinator`. It has a worker-driven, one-fetch-per-pump
+API, a 720p/60fps selection ceiling, pre-request 16-MiB worst-case
+reservations, CDN URL validation, full TS packet sync checking, H.264/AAC
+PAT/PMT evidence, and a three-second metadata-prepared playback prefix.
+No signed URL enters a local playlist.
+
+The current initial transport accepts **only** muxed H.264/AAC MPEG-TS
+VOD, so independent AAC playlists and fragmented MP4 continue using the
+already accepted M3 complete-cache fallback. Consumed segments are
+deletable only after decoder-release confirmation and the two-second
+playback guard. The producer is backpressured without new HTTPS calls
+when the disk reservation is low, and the final teardown requires joined
+workers, a closed player and successful SD cleanup.
+
+The host test runs the real HLS HTTP reader through an offline fake
+HTTP transport, codec-negatives, 403 handling, unsafe-source rejection,
+high-bitrate backpressure, restart-after-consumption, completed HLS
+playlists, and clean exit. Build, CTest and an ASan/UBSan target are
+registered in the host workflow.
+
+This is a real transport-to-files implementation but **NOT YET connected
+to the Switch libmpv demuxer or released as the default player**.
+The full 100 MB and fast-start product acceptance gates remain blocked.

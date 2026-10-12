@@ -281,6 +281,20 @@ if(TTNX_BUILD_TESTS)
             PRIVATE TTNX_M4_ROLLING_HOST_TEST=1)
         add_test(NAME rolling_hls_sink COMMAND tizentube_nx_rolling_hls_sink_tests)
 
+        # Opt-in transport-to-durable-HLS bridge. Real HlsSegmentReader
+        # still enforces the approved HTTPS/CDN and response contracts.
+        add_executable(tizentube_nx_rolling_muxed_hls_tests
+            tests/rolling_muxed_hls_tests.cpp
+            switch/source/rolling_hls_feed.cpp
+            switch/source/rolling_hls_sink.cpp)
+        target_include_directories(tizentube_nx_rolling_muxed_hls_tests
+            PRIVATE switch/source)
+        target_compile_definitions(tizentube_nx_rolling_muxed_hls_tests
+            PRIVATE TTNX_M4_ROLLING_HOST_TEST=1)
+        target_link_libraries(tizentube_nx_rolling_muxed_hls_tests
+            PRIVATE tizentube_nx_core)
+        add_test(NAME rolling_muxed_hls COMMAND tizentube_nx_rolling_muxed_hls_tests)
+
         add_executable(tizentube_nx_storage_tests tests/storage_tests.cpp switch/source/app_storage.cpp)
         target_include_directories(tizentube_nx_storage_tests PRIVATE switch/source)
         target_link_libraries(tizentube_nx_storage_tests PRIVATE tizentube_nx_core)

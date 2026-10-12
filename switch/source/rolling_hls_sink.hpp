@@ -14,7 +14,7 @@ public:
 #else
     static constexpr const char* kRoot = "sdmc:/switch/TizenTube-NX/media-cache/rolling";
 #endif
-    static constexpr std::uint64_t kMaxMediaBytes=24ULL*1024*1024-65536;
+    static constexpr std::uint64_t kMaxMediaBytes=24ULL*1024*1024-131072;
     static constexpr std::size_t kMaxSegments=4096;
     ~RollingHlsSink() = default;
     [[nodiscard]] bool begin(std::uint64_t maximum_segment_ms=6000);
@@ -37,5 +37,6 @@ private:
     std::size_t next_{0};
     std::uint64_t target_seconds_{0};
     bool started_{false};
+    bool finished_{false};
 };
 } // namespace ttnx::switch_app

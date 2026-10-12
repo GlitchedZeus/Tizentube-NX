@@ -63,3 +63,12 @@ jobs:
             switch/source/rolling_hls_sink.cpp \
             -o /tmp/ttnx-rolling-hls-san
           /tmp/ttnx-rolling-hls-san
+      - name: Sanitized reviewed-HTTPS to rolling-HLS integration tests
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-sanitized -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -O1 -g"
+          cmake --build build-sanitized --parallel 2 \
+            --target tizentube_nx_rolling_muxed_hls_tests
+          ASAN_OPTIONS=detect_leaks=1 ctest --test-dir build-sanitized \
+            -R '^rolling_muxed_hls$' --output-on-failure
