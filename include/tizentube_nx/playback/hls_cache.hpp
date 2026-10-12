@@ -31,6 +31,7 @@ enum class HlsCacheFailure {
     None, InvalidPlaylist, UnableToStage, MediaFetch, MediaWrite,
     TotalSizeExceeded, UnableToPublish, MissingAudio
 };
+[[nodiscard]] const char* describe_hls_cache_failure(HlsCacheFailure reason) noexcept;
 
 // Fetches ONE independently verified HTTPS HLS segment per call. The caller
 // must run pump() only on a background worker. No mpv activity is authorized

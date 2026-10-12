@@ -114,7 +114,18 @@ std::optional<HlsProbePlan> HlsSourceProbe::inspect(
     last_error_=HlsProbeError::SourceUnavailable;
     VisionHlsSource source_reader(guest_http_,guest_);
     const auto source=source_reader.resolve(normal_video_id);
-    if(!source)return std::nullopt;
+    if(!source) {
+        switch(source_reader.last_error()) {
+            case HlsSourceError::Transport:
+                last_error_=HlsProbeError::GuestTransport;break;
+            case HlsSourceError::HttpStatus:
+                last_error_=HlsProbeError::GuestHttpStatus;break;
+            case HlsSourceError::ResponseRejected:
+                last_error_=HlsProbeError::GuestPlayabilityRejected;break;
+            default:break;
+        }
+        return std::nullopt;
+    }
 
     const auto master_bytes=fetch_playlist(source->master_playlist_url,true);
     if(!master_bytes)return std::nullopt;
@@ -183,4 +194,21 @@ std::optional<HlsProbePlan> HlsSourceProbe::inspect(
     return HlsProbePlan{*source,*variant,std::move(*video),std::move(audio)};
 }
 
+const char* describe_hls_probe_failure(HlsProbeError reason) noexcept {
+    switch(reason) {
+        case HlsProbeError::None:return "Ready to download video and audio.";
+        case HlsProbeError::SourceUnavailable:return "Guest video source unavailable.";
+        case HlsProbeError::GuestTransport:return "YouTube connection failed. Retry from Search.";
+        case HlsProbeError::GuestHttpStatus:return "YouTube rejected anonymous playback.";
+        case HlsProbeError::GuestPlayabilityRejected:return "This video cannot be played as a guest.";
+        case HlsProbeError::ManifestTransport:return "Media host could not be reached.";
+        case HlsProbeError::ManifestStatus:return "Signed video playlist expired or was refused.";
+        case HlsProbeError::ManifestRejected:return "The video playlist is unsupported or unsafe.";
+        case HlsProbeError::VariantUnavailable:return "No Switch-compatible H.264 video was provided.";
+        case HlsProbeError::VideoSegmentsRejected:return "Video segments are unsupported or unsafe.";
+        case HlsProbeError::AudioSegmentsRejected:return "AAC audio segments are unsupported or unsafe.";
+        case HlsProbeError::InvalidDuration:return "Video and audio duration mismatch.";
+    }
+    return "Video source unavailable.";
+}
 } // namespace ttnx::playback

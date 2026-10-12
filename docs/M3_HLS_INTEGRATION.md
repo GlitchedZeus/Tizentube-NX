@@ -197,3 +197,11 @@ succeeding. The API now sets the real `audio-files` option with
 strings. This preserves the literal Switch `sdmc:` path and avoids colon
 path-list parsing. The CI test also insists that mpv actually discovers and
 selects an audio track; build-only success does not count.
+
+### Playback failure handling
+
+M3 now labels guest transport errors, HTTP refusals, HTTP-200 playability
+rejections, media playlist errors and missing AAC separately. The Search UI
+shows actionable plain language instead of stage integers. Download,
+SD-write, cache-size and atomic-publish failures also map to safe messages.
+Neither signed URLs nor guest tokens enter user-visible diagnostics.

@@ -184,4 +184,17 @@ void HlsCacheJob::cancel() noexcept {
     }
     active_.reset();
 }
+const char* describe_hls_cache_failure(HlsCacheFailure reason) noexcept {
+    switch(reason) {
+        case HlsCacheFailure::None:return "Both media tracks are ready.";
+        case HlsCacheFailure::InvalidPlaylist:return "Video source failed final validation.";
+        case HlsCacheFailure::UnableToStage:return "Unable to stage media on the SD card.";
+        case HlsCacheFailure::MediaFetch:return "Media download failed or expired. Retry.";
+        case HlsCacheFailure::MediaWrite:return "SD media write failed. Check space.";
+        case HlsCacheFailure::TotalSizeExceeded:return "Video exceeds the safe offline cache limit.";
+        case HlsCacheFailure::UnableToPublish:return "Completed media cache could not be published.";
+        case HlsCacheFailure::MissingAudio:return "No supported AAC audio was available.";
+    }
+    return "Media preparation failed safely.";
+}
 } // namespace ttnx::playback

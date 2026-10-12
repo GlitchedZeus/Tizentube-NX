@@ -1497,8 +1497,7 @@ private:
                         ttnx::playback::HlsSourceProbe probe(network_client_,manifests,guest);
                         const auto source=probe.inspect(normal_video_id,720,30);
                         if (!source) {
-                            feedback="M3 HLS source/playlist rejected (stage "+
-                                std::to_string(static_cast<int>(probe.last_error()))+").";
+                            feedback=ttnx::playback::describe_hls_probe_failure(probe.last_error());
                         } else if(media_cancel_requested_.load()) {
                             feedback="M3: video request cancelled.";
                         } else {
@@ -1507,7 +1506,7 @@ private:
                             ttnx::switch_app::SwitchHlsCacheSink cache;
                             ttnx::playback::HlsCacheJob job(reader,cache,&audio_reader);
                             if(!job.start(*source)) {
-                                feedback="M3 HLS SD cache could not stage both tracks.";
+                                feedback=ttnx::playback::describe_hls_cache_failure(job.error());
                             } else {
                                 media_step_.store(2);
                                 while(job.state()==ttnx::playback::HlsCacheState::Fetching &&
@@ -1524,8 +1523,7 @@ private:
                                     completed=true;
                                     feedback="M3: complete HLS video/AAC locally verified.";
                                 } else {
-                                    feedback="M3 HLS cache/segment failure ("+
-                                        std::to_string(static_cast<int>(job.error()))+").";
+                                    feedback=ttnx::playback::describe_hls_cache_failure(job.error());
                                 }
                             }
                         }

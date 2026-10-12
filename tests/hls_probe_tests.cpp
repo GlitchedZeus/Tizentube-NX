@@ -123,6 +123,10 @@ void full_path() {
           data->audio_segments && data->audio_segments->segments.size()==2 &&
           data->audio_segments->total_duration_ms==12000,
           "paired HLS video and audio have compatible finite VOD durations");
+    check(probe.last_error()==playback::HlsProbeError::None &&
+          std::string(playback::describe_hls_probe_failure(probe.last_error()))
+            .find("Ready")!=std::string::npos,
+          "guest source success uses privacy-safe status");
     check(yt.hits==1 && cdn.hits==3,
           "one guest player plus three media manifests, no arbitrary network calls");
 }
@@ -148,8 +152,9 @@ void blocked() {
     {
         GuestHttp yt;MediaHttp cdn;yt.blocked=true;
         playback::HlsSourceProbe probe(yt,cdn,session);
-        check(!probe.inspect(kId) && cdn.hits==0,
-              "guest 403 fails before any CDN requests");
+        check(!probe.inspect(kId) && cdn.hits==0 &&
+              probe.last_error()==playback::HlsProbeError::GuestHttpStatus,
+              "guest 403 reported separately from normal content rejection");
     }
     {
         GuestHttp yt;MediaHttp cdn;cdn.bad_status_on=1;

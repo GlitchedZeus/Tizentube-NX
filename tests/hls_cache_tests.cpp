@@ -112,6 +112,10 @@ struct Sink:playback::HlsCacheSink {
     }
 };
 void full() {
+    check(std::string(playback::describe_hls_cache_failure(
+          playback::HlsCacheFailure::MediaFetch)).find("Retry")!=std::string::npos,
+          "HTTP failures provide actionable feedback without exposing tokens");
+
     FakeTransport transport;
     playback::HlsSegmentReader reader(transport);
     Sink sink;

@@ -19,7 +19,11 @@ enum class HlsProbeError {
     VideoSegmentsRejected,
     AudioSegmentsRejected,
     InvalidDuration,
+    GuestTransport,
+    GuestHttpStatus,
+    GuestPlayabilityRejected,
 };
+[[nodiscard]] const char* describe_hls_probe_failure(HlsProbeError reason) noexcept;
 
 struct HlsProbePlan {
     HlsPlayerSource source;
