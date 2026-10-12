@@ -507,3 +507,16 @@ does not authorize playing unfinished `pending/` files and
 does not alter the M2 browser. Host cache regressions cover
 exclusive acquisition, denied replacement, cleanup, and recovery
 after closing the player.
+
+### Owner-requested major-session NRO packaging
+
+The integrated M3 pipeline now retains one experimental Switch NRO
+artifact for each forward-only development-session **final push**
+on the isolated M3 branch, complete with SHA-256, exact commit and
+a hardware checklist. It is **not** merged into the accepted M2
+branch, not released on the main front page, and not represented as
+hardware-proven merely because the CI build passed. The assistant
+shares the latest completed green run's artifact rather than issuing
+an NRO after every individual fix. The automatically generated
+artifact expires after 14 days. M2 networking, Shorts exclusion
+and zero-ad/web-player policy remain unchanged.

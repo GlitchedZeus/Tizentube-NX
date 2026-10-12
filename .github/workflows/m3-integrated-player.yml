@@ -61,14 +61,43 @@ jobs:
           test ! -e tizentube_nx.nro
           file tizentube_nx_m3_integrated.nro
           sha256sum tizentube_nx_m3_integrated.nro
-      # Build and native-link success is NOT a successful video. Do not
-      # automatically release another unverified Switch NRO on every commit.
-      - name: Upload complete experimental player candidate
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_hardware_candidate }}
+      # One exact-head NRO artifact, not a public release or an automatic
+      # merge. The user requested a candidate following each MAJOR session.
+      # Automatic push builds use this branch's exact HEAD (not PR merge refs).
+      - name: Package exact-head hardware candidate and test instructions
+        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/feature/m3-playback-foundation-20261011') || (github.event_name == 'workflow_dispatch' && inputs.publish_hardware_candidate) }}
+        run: |
+          sha256sum tizentube_nx_m3_integrated.nro > M3-SHA256SUMS.txt
+          printf 'TizenTube NX M3 integrated experimental hardware candidate\nCommit: %s\nWorkflow run: %s\n\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" > M3-HARDWARE-TEST.txt
+          cat >> M3-HARDWARE-TEST.txt <<'EOF'
+          WARNING: Live YouTube video playback has only been proven in CI
+          using real public HLS and AAC with host libmpv, not Switch hardware.
+          This is the ONLY proposed NRO for this development round.
+
+          1. Boot and verify the previously accepted M2 Guest/Search UI.
+          2. Find a normal non-Shorts public YouTube video.
+             Verified guest CI reference: dQw4w9WgXcQ.
+          3. Select Play video (M3). Confirm native download progress
+             and final local HLS+AAC video presentation.
+          4. Check picture, audible stereo, pause/resume, +/-10 sec seeks,
+             Stop, Replay, B returning to Search, and sleep/wake.
+          5. Try one longer non-Shorts video, noting startup delay,
+             playback stability and video/audio synchronization.
+          6. If blocked, provide the category shown by the app;
+             avoid sending signed Googlevideo URLs, cookies or tokens.
+          7. Confirm zero Shorts, ads or ad-bearing web player fallback.
+          The NRO is for experimental hardware validation only.
+          EOF
+      - name: Upload one integrated M3 NRO for the completed work session
+        if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/feature/m3-playback-foundation-20261011') || (github.event_name == 'workflow_dispatch' && inputs.publish_hardware_candidate) }}
         uses: actions/upload-artifact@v4
         with:
-          name: tizentube-nx-m3-REAL-VIDEO-EXPERIMENT
-          path: tizentube_nx_m3_integrated.nro
+          name: TizenTube-NX-M3-${{ github.sha }}
+          path: |
+            tizentube_nx_m3_integrated.nro
+            M3-SHA256SUMS.txt
+            M3-HARDWARE-TEST.txt
+          retention-days: 14
           if-no-files-found: error
       - name: Upload candidate symbols
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_hardware_candidate }}
