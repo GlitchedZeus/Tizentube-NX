@@ -76,3 +76,25 @@ IMPORTANT: **not yet connected to actual libnx HTTP, HLS event demux or
 the native libmpv playback pipeline.** It is a bounded producer/consumer
 admission layer, NOT a proven fast-start video player. The previously
 accepted visible M3 video remains the only hardware-accepted candidate.
+
+## File-backed M4 rolling HLS backend (opt-in, not hardware-proven)
+
+The new `RollingHlsSink` writes verified-by-caller, muxed MPEG-TS data
+into an app-owned rolling directory. It uses exclusive file creation,
+fsync, bounded segment names and relative-only local HLS media playlists.
+The `EXT-X-MEDIA-SEQUENCE` advances as decoded segments retire; the
+playlist excludes consumed segments before their SD files are deleted.
+
+Host regression testing covers 1,200 actual filesystem segment writes and
+window evictions (one hour of three-second segments), a zero-storage final
+discard, oversized writes, segment gaps, symlinked paths, unknown files
+and active decoder leases. Both normal and ASan/UBSan builds passed locally.
+The native sink is disabled unless explicitly compiled for M4, leaving
+the currently hardware-proven M3 player unchanged.
+
+Outstanding acceptance gates: integrate the verified H264/AAC HTTP
+producer, decoder-owned segment pinning, and mpv local HLS live-manifest
+reload; validate on Nintendo Switch that replacing the playlist file
+works with SD/FAT; prove a 24-MiB rolling limit and no persistent media
+during 720p playback. Full M3 caching may still exceed 100 MB; this
+new backend is not claimed production-active.

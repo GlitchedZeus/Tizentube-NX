@@ -272,6 +272,15 @@ if(TTNX_BUILD_TESTS)
         target_link_libraries(tizentube_nx_hls_sd_cache_tests PRIVATE tizentube_nx_core)
         add_test(NAME hls_sd_cache COMMAND tizentube_nx_hls_sd_cache_tests)
 
+        # Opt-in file-backed HLS rolling cache. Accepted M3 path unchanged.
+        add_executable(tizentube_nx_rolling_hls_sink_tests
+            tests/rolling_hls_sink_tests.cpp switch/source/rolling_hls_sink.cpp)
+        target_include_directories(tizentube_nx_rolling_hls_sink_tests
+            PRIVATE switch/source)
+        target_compile_definitions(tizentube_nx_rolling_hls_sink_tests
+            PRIVATE TTNX_M4_ROLLING_HOST_TEST=1)
+        add_test(NAME rolling_hls_sink COMMAND tizentube_nx_rolling_hls_sink_tests)
+
         add_executable(tizentube_nx_storage_tests tests/storage_tests.cpp switch/source/app_storage.cpp)
         target_include_directories(tizentube_nx_storage_tests PRIVATE switch/source)
         target_link_libraries(tizentube_nx_storage_tests PRIVATE tizentube_nx_core)

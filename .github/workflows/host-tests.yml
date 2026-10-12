@@ -53,3 +53,13 @@ jobs:
               -o "/tmp/ttnx-${target}-san"
             "/tmp/ttnx-${target}-san"
           done
+      - name: Sanitized M4 rolling SD and playlist tests
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -Wall -Wextra -Werror -O1 -g \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -DTTNX_M4_ROLLING_HOST_TEST=1 \
+            -Iinclude -Iswitch/source tests/rolling_hls_sink_tests.cpp \
+            switch/source/rolling_hls_sink.cpp \
+            -o /tmp/ttnx-rolling-hls-san
+          /tmp/ttnx-rolling-hls-san

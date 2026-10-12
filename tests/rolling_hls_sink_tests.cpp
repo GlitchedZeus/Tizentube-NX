@@ -1,0 +1,80 @@
+#include "rolling_hls_sink.hpp"
+#include "tizentube_nx/playback/hls_playback_lease.hpp"
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <string>
+#include <cstdlib>
+namespace fs=std::filesystem;
+using ttnx::switch_app::RollingHlsSink;
+namespace {int failures=0;void ck(bool b,const char* s){if(!b){++failures;std::cerr<<"FAIL: "<<s<<'\n';}}
+std::string read(const fs::path& p){std::ifstream f(p,std::ios::binary);return std::string((std::istreambuf_iterator<char>(f)),{});}
+}
+int main(){
+  const fs::path root=RollingHlsSink::kRoot;
+  fs::remove_all("/tmp/ttnx-m4-rolling-test");
+  const std::string packet(188*2,'T'); // Native caller must verify codecs before append.
+  RollingHlsSink sink;
+  ck(sink.begin(),"begin fresh ephemeral rolling directory");
+  ck(sink.append(0,3000,packet),"fsync and publish first verified segment");
+  ck(!sink.append(0,3000,packet),"duplicate segment rejected");
+  ck(!sink.append(2,3000,packet),"segment gap rejected");
+  ck(!sink.append(1,0,packet),"invalid zero duration rejected");
+  ck(!sink.append(1,3000,std::string(17*1024*1024,'v')),"unbounded media chunk rejected");
+  ck(sink.append(1,3000,packet),"second segment published");
+  const auto first=read(root/"stream.m3u8");
+  ck(first.find("#EXT-X-MEDIA-SEQUENCE:0")!=std::string::npos &&
+     first.find("v_00000.ts")!=std::string::npos &&
+     first.find("v_00001.ts")!=std::string::npos &&
+     first.find("#EXT-X-ENDLIST")==std::string::npos,
+     "growing playlist references only durable local files");
+  ck(!sink.retire_before(2),"cannot retire entire visible playback window");
+  ck(sink.retire_before(1),"advance window before unlinking consumed chunk");
+  const auto next=read(root/"stream.m3u8");
+  ck(next.find("#EXT-X-MEDIA-SEQUENCE:1")!=std::string::npos &&
+     next.find("v_00000.ts")==std::string::npos &&
+     !fs::exists(root/"v_00000.ts") &&
+     sink.bytes()==packet.size(),"rolling playlist sheds already played bytes");
+  ck(sink.finish() && read(root/"stream.m3u8").find("#EXT-X-ENDLIST")!=std::string::npos,
+     "finished playlist closes cleanly");
+  ck(RollingHlsSink::discard() && !fs::exists(root),"end of playback leaves no media");
+  ck(RollingHlsSink::discard(),"idempotent no-media cleanup");
+  RollingHlsSink hour;
+  ck(hour.begin(),"long-form session starts");
+  const std::string chunk(48*1024,'Z');
+  for(std::size_t i=0;i<1200;++i){
+    ck(hour.append(i,3000,chunk),"hour-long HLS segment write and publish");
+    if(i>=3)ck(hour.retire_before(i-1),"hour-long segment eviction after playhead");
+    ck(hour.bytes()<=RollingHlsSink::kMaxMediaBytes && hour.active_segments()<=3,
+       "hour-long session stays inside bounded SD ring");
+  }
+  ck(hour.finish(),"hour-long live manifest becomes final VOD");
+  ck(RollingHlsSink::discard() && !fs::exists(root),"hour-long playback leaves zero media");
+  ck(sink.begin()==false,"active sink can't silently restart over foreign session");
+  fs::create_directories(root);
+  std::ofstream(root/"v_00000.ts")<<"app owned";
+  std::ofstream(root/"my_notes.txt")<<"leave untouched";
+  ck(!RollingHlsSink::discard() && fs::exists(root/"v_00000.ts") &&
+     fs::exists(root/"my_notes.txt"),"unknown file aborts entire cleanup preflight");
+  fs::remove(root/"my_notes.txt");
+  ck(RollingHlsSink::discard(),"valid cleanup succeeds after poison removed");
+  fs::create_directories(root);
+  std::ofstream(root/"v_00000.ts")<<"hold";
+  {ttnx::playback::HlsPlaybackLease lease;
+   ck(lease.acquire() && !RollingHlsSink::discard() && fs::exists(root/"v_00000.ts"),
+      "active media decoder lease blocks deletion");}
+  ck(RollingHlsSink::discard(),"release decoder lease then clear storage");
+  const fs::path foreign="/tmp/ttnx-m4-rolling-foreign";
+  fs::remove_all(foreign);
+  fs::create_directories(foreign);
+  std::ofstream(foreign/"v_00000.ts")<<"foreign";
+  fs::create_directories(root.parent_path());
+  fs::create_directory_symlink(foreign,root);
+  ck(!RollingHlsSink::discard() && !RollingHlsSink().begin() &&
+     fs::exists(foreign/"v_00000.ts"),"symlinked media root cannot redirect write or deletion");
+  fs::remove(root);
+  fs::remove_all("/tmp/ttnx-m4-rolling-test");
+  fs::remove_all(foreign);
+  if(failures)std::cerr<<failures<<" rolling HLS sink failures\n";
+  return failures?EXIT_FAILURE:EXIT_SUCCESS;
+}
