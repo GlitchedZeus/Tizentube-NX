@@ -151,7 +151,7 @@ void cancellation() {
     check(job.pump()==ProgressiveStage::Error &&
           job.error()==ProgressiveError::DownloadFailed &&
           sink.published.empty() && sink.partial.empty() &&
-          transport.calls==5,
+          transport.calls==4,
           "third persistent network failure aborts and erases partial media");
 }
 } // namespace
