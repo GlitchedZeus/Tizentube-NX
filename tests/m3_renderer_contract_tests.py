@@ -29,7 +29,7 @@ class M3NativeRendererContract(unittest.TestCase):
         self.assertNotIn('!required("hwdec","auto")',SOURCE)
 
     def test_unuploaded_frame_latches_until_texture_upload(self):
-        renderer=SOURCE.split("const std::vector<unsigned char>& render()",1)[1].split("std::string stats()",1)[0]
+        renderer=SOURCE.split("const std::vector<unsigned char>& render()",1)[1].split("    bool have_frame()const",1)[0]
         self.assertNotIn("new_frame_=false;",renderer)
         self.assertIn("new_frame_=true;",renderer)
         self.assertIn("player_.acknowledge_frame_upload();",SOURCE)
