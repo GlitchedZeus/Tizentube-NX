@@ -50,8 +50,11 @@ int main(){
         ttnx::playback::HlsPlaybackLease watching;
         check(watching.acquire(),"libmpv exclusive playback lease acquired");
         SwitchMediaCacheSink another(Slot::AdaptiveVideo);
-        check(!another.begin() && !SwitchMediaCacheSink::publish_adaptive_pair(),
-              "downloads and cache replacement refused during playback");
+        SwitchMediaCacheSink::invalidate_adaptive_pair();
+        check(!another.begin() && !SwitchMediaCacheSink::publish_adaptive_pair() &&
+              SwitchMediaCacheSink::adaptive_pair_valid() &&
+              fs::exists(marker),
+              "active libmpv prevents replacement and marker invalidation");
     }
     check(stage(Slot::AdaptiveAudio,body)&&
           !SwitchMediaCacheSink::adaptive_pair_valid(),

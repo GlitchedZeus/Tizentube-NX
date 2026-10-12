@@ -77,7 +77,9 @@ const char* SwitchMediaCacheSink::complete() const noexcept {
     return kComplete;
 }
 void SwitchMediaCacheSink::invalidate_adaptive_pair() noexcept {
-    // Invalidate the two-file transaction before either side is replaced.
+    // Refuse to invalidate a published marker while libmpv might still
+    // use either file. This also protects Replay from a second Search.
+    if(playback::HlsPlaybackLease::is_active())return;
     (void)std::remove(kAdaptiveMarker);
 }
 bool SwitchMediaCacheSink::adaptive_pair_valid() noexcept {

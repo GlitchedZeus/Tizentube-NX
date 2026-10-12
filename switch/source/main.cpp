@@ -1607,7 +1607,11 @@ private:
                                             ?"M3 adaptive download cancelled."
                                             :"M3 adaptive AAC range download failed.";
                                     } else feedback=hls_reason+
-                                        " | no safe muxed or separate H.264/AAC offered.";
+                                        " | no safe muxed/separate H.264+AAC; "+
+                                        std::to_string(resolved->video.size())+
+                                        " video, "+
+                                        std::to_string(resolved->audio.size())+
+                                        " audio candidates.";
                                 }
                             }
                         } else if(media_cancel_requested_.load()) {
