@@ -68,12 +68,20 @@ struct MediaHttp:net::HttpClient {
     int bad_mime_on{0};
     int bad_length_on{0};
     int bad_status_on{0};
+    int temporary_left{0},temporary_status{0};
+    int permanent_status{302};
     bool protect_video{false};
     bool audio_duration_mismatch{false};
     net::HttpResult perform(const net::HttpRequest& r) override {
         ++hits;
         net::HttpResult out;
-        out.ok=true;out.response.status_code=hits==bad_status_on?302:200;
+        out.ok=true;
+        out.response.status_code=hits==bad_status_on?permanent_status:200;
+        if(temporary_left>0) {
+            --temporary_left;
+            out.response.status_code=temporary_status;
+            out.ok=temporary_status!=0;
+        }
         if(r.method!=net::HttpMethod::Get ||
            r.headers.size()!=2 ||
            r.headers[1].name!="Accept-Encoding" ||
@@ -149,6 +157,30 @@ void direct_media_vod() {
 
 void blocked() {
     auto session=guest();
+    {
+        GuestHttp yt;MediaHttp cdn;
+        cdn.temporary_left=1;cdn.temporary_status=503;
+        playback::HlsSourceProbe probe(yt,cdn,session);
+        const auto result=probe.inspect(kId);
+        check(result && cdn.hits==4 && yt.hits==1,
+              "transient 503 on HLS master retries, then resolves A/V");
+    }
+    {
+        GuestHttp yt;MediaHttp cdn;
+        cdn.temporary_left=3;cdn.temporary_status=429;
+        playback::HlsSourceProbe probe(yt,cdn,session);
+        check(!probe.inspect(kId) && cdn.hits==3 &&
+              probe.last_error()==playback::HlsProbeError::ManifestStatus,
+              "persistent 429 has a strict three-request upper bound");
+    }
+    {
+        GuestHttp yt;MediaHttp cdn;
+        cdn.bad_status_on=1;cdn.permanent_status=403;
+        playback::HlsSourceProbe probe(yt,cdn,session);
+        check(!probe.inspect(kId) && cdn.hits==1 &&
+              probe.last_error()==playback::HlsProbeError::ManifestStatus,
+              "signed HLS 403 never retried, even when no socket error");
+    }
     {
         GuestHttp yt;MediaHttp cdn;yt.blocked=true;
         playback::HlsSourceProbe probe(yt,cdn,session);

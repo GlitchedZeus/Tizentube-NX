@@ -4,7 +4,9 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <chrono>
 #include <string>
+#include <thread>
 
 namespace ttnx::playback {
 namespace {
@@ -50,13 +52,25 @@ std::optional<std::string> HlsSourceProbe::fetch_playlist(
         {"Accept","application/vnd.apple.mpegurl"},
         {"Accept-Encoding","identity"},
     };
-    const auto response=media_http_.perform(request);
-    if(!response.ok) {
-        last_error_=HlsProbeError::ManifestTransport;
-        return std::nullopt;
-    }
-    if(response.response.status_code!=200) {
-        last_error_=HlsProbeError::ManifestStatus;
+    net::HttpResult response;
+    for(unsigned attempt=0;attempt<3;++attempt) {
+        response=media_http_.perform(request);
+        const int status=response.response.status_code;
+        if(response.ok && status==200)break;
+        const bool temporary=(!response.ok && status==0) ||
+            status==429 || status==500 || status==502 ||
+            status==503 || status==504;
+        if(temporary && attempt<2) {
+            // Source probing is worker-only. Delay each request rather than
+            // hammering a throttled signed playlist endpoint or blocking UI.
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(250*(attempt+1)));
+            continue;
+        }
+        // Preserve the distinction between HTTP refusal and an absent
+        // connection, without ever reflecting bearer URLs in diagnostics.
+        last_error_=status?HlsProbeError::ManifestStatus:
+                           HlsProbeError::ManifestTransport;
         return std::nullopt;
     }
     if(response.response.body.empty() ||

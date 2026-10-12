@@ -372,3 +372,14 @@ socket adapter reports `!ok`. This prevents a backend-reported 403 from
 being misclassified as a dropped connection, while allowing a bounded
 retry on an actual 503. Numeric status is never accompanied by the
 signed CDN URL in the UI or logs.
+
+### Playlist-stage CDN resilience
+
+The first signed master/variant/media playlist fetch now shares the
+same fail-closed bounded retry treatment as the segment downloader.
+One dropped connection or HTTP 429/500/502/503/504 can be retried twice
+on the media worker, with bounded 250/500 ms pacing. A signed HTTP 403
+or redirection is never retried or followed; bad MIME, broken duration,
+missing media or forbidden manifest tags fail immediately. The YouTube
+guest browsing client and its strict www.youtube.com policy are unchanged.
+Host tests exercise recoverable 503, persistent 429 and terminal 403.
