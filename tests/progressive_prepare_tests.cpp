@@ -140,9 +140,19 @@ void cancellation() {
           "cancelled job does not resume socket read");
     check(job.start(kId),"can start fresh source after cancellation");
     transport.fail=true;
+    check(job.pump()==ProgressiveStage::Downloading &&
+          cache.transient_attempts()==1 && cache.retry_delay_ms()==250 &&
+          sink.published.empty(),
+          "first temporary failure retains private partial media for bounded retry");
+    check(job.pump()==ProgressiveStage::Downloading &&
+          cache.transient_attempts()==2 && cache.retry_delay_ms()==500 &&
+          sink.published.empty(),
+          "second temporary failure remains bounded and unpublished");
     check(job.pump()==ProgressiveStage::Error &&
           job.error()==ProgressiveError::DownloadFailed &&
-          sink.published.empty(),"source network failure keeps old incomplete media hidden");
+          sink.published.empty() && sink.partial.empty() &&
+          transport.calls==5,
+          "third persistent network failure aborts and erases partial media");
 }
 } // namespace
 int main() {
