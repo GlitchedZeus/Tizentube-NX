@@ -239,6 +239,13 @@ if(TTNX_BUILD_TESTS)
     add_test(NAME playback_foundation COMMAND tizentube_nx_playback_foundation_tests)
 
     if(UNIX)
+        add_executable(tizentube_nx_m3_diagnostics_tests
+            tests/m3_diagnostics_tests.cpp switch/source/m3_diagnostics.cpp)
+        target_include_directories(tizentube_nx_m3_diagnostics_tests PRIVATE switch/source)
+        target_compile_definitions(tizentube_nx_m3_diagnostics_tests PRIVATE
+            TTNX_M3_DIAG_HOST_TEST=1)
+        add_test(NAME m3_diagnostics COMMAND tizentube_nx_m3_diagnostics_tests)
+
         add_executable(tizentube_nx_adaptive_sd_cache_tests
             tests/adaptive_sd_cache_tests.cpp switch/source/media_file_sink.cpp)
         target_include_directories(tizentube_nx_adaptive_sd_cache_tests PRIVATE switch/source)
