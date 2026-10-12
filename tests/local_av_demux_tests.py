@@ -246,7 +246,9 @@ class LocalAvDemuxTests(unittest.TestCase):
                     handle, b"time-pos", 5, ctypes.byref(seconds)) >= 0
                 last_observation = (v, a, position_ok,
                                     seconds.value if position_ok else None)
-                if ("h264" in v and "aac" in a and position_ok and
+                video_h264 = any(marker in v for marker in
+                                 ("h264", "h.264", "avc"))
+                if (video_h264 and "aac" in a and position_ok and
                         seconds.value >= 29):
                     decoded = True
                     break
