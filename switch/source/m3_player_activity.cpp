@@ -1,5 +1,6 @@
 #ifdef TTNX_M3_INTEGRATED
 #include "m3_player_activity.hpp"
+#include "m3_diagnostics.hpp"
 #include "media_file_sink.hpp"
 #include "hls_cache_sink.hpp"
 #include "tizentube_nx/playback/audio_gate.hpp"
@@ -32,13 +33,16 @@ public:
         pixels_(kWidth*kHeight*4,0),use_hls_(hls),use_adaptive_(adaptive){}
     ~CachedMpv() { close(); }
     bool init() {
+        M3Diagnostics::record(M3Stage::Player,M3Event::Start,use_hls_ ? 2 : (use_adaptive_ ? 3 : 1),0,0);
         if (handle_) return renderer_!=nullptr;
         if(!ready_lease_.acquire()) {
+            M3Diagnostics::record(M3Stage::Player,M3Event::Refused,1,0,0);
             status_="Another completed media file is already playing";
             return false;
         }
         handle_=mpv_create();
         if (!handle_) {
+            M3Diagnostics::record(M3Stage::Player,M3Event::Fail,2,0,0);
             status_="mpv_create failed";
             ready_lease_.release();
             return false;
@@ -50,6 +54,7 @@ public:
                 (!std::strcmp(key,"load-scripts") || !std::strcmp(key,"ytdl")))
                 return true;
             if (result>=0) return true;
+            M3Diagnostics::record(M3Stage::Player,M3Event::Error,1,result,0);
             status_=std::string("mpv option ")+key+": "+mpv_error_string(result);
             return false;
         };
@@ -64,7 +69,9 @@ public:
             close();return false;
         }
         if(use_adaptive_) {
-            if(!SwitchMediaCacheSink::adaptive_pair_valid() ||
+            const bool pair_ready=SwitchMediaCacheSink::adaptive_pair_valid();
+            M3Diagnostics::record(M3Stage::Cache,M3Event::Status,3,pair_ready ? 1 : 0,0);
+            if(!pair_ready ||
                !attach_external_aac(SwitchMediaCacheSink::kAdaptiveAudio)) {
                 status_="Adaptive H.264/AAC files incomplete or unverified";
                 close();return false;
@@ -104,6 +111,7 @@ public:
         }
         const int init_result=mpv_initialize(handle_);
         if (init_result<0) {
+            M3Diagnostics::record(M3Stage::Player,M3Event::Error,2,init_result,0);
             status_=std::string("mpv initialize: ")+mpv_error_string(init_result);
             close();return false;
         }
@@ -113,9 +121,11 @@ public:
         };
         const int render_result=mpv_render_context_create(&renderer_,handle_,api);
         if (render_result<0) {
+            M3Diagnostics::record(M3Stage::Render,M3Event::Fail,1,render_result,0);
             status_=std::string("mpv renderer: ")+mpv_error_string(render_result);
             close();return false;
         }
+        M3Diagnostics::record(M3Stage::Render,M3Event::Ready,1,kWidth,kHeight);
         status_="Ready: local verified cache";
         return true;
     }
@@ -132,6 +142,7 @@ public:
         array.format=MPV_FORMAT_NODE_ARRAY;
         array.u.list=&elements;
         const int rc=mpv_set_option(handle_,"audio-files",MPV_FORMAT_NODE,&array);
+        M3Diagnostics::record(M3Stage::Decode,M3Event::Selected,2,rc,0);
         if(rc<0) {
             status_=std::string("External audio config: ")+mpv_error_string(rc);
             return false;
@@ -145,13 +156,18 @@ public:
             : use_adaptive_?SwitchMediaCacheSink::kAdaptiveVideo:
                            SwitchMediaCacheSink::kComplete;
         std::FILE* file=std::fopen(path,"rb");
-        if (!file) {status_="Cache missing: retry video from Search";return false;}
+        if (!file) {
+            M3Diagnostics::record(M3Stage::Cache,M3Event::Fail,4,0,0);
+            status_="Cache missing: retry video from Search";return false;
+        }
         bool ok=std::fseek(file,0,SEEK_END)==0;
         const long bytes=ok?std::ftell(file):-1;
         std::fclose(file);
         const long max_size=use_hls_?1024L*1024:512L*1024*1024;
         const long minimum=use_hls_?20:1024;
+        M3Diagnostics::record(M3Stage::Cache,M3Event::Status,use_hls_ ? 2 : (use_adaptive_ ? 3 : 1),bytes,0);
         if (bytes<minimum || bytes>max_size) {
+            M3Diagnostics::record(M3Stage::Cache,M3Event::Fail,5,bytes,0);
             status_="Completed local media missing or exceeds bounds";
             return false;
         }
@@ -159,7 +175,9 @@ public:
         audio_gate_.reset();
         audio_failure_latched_=false;
         have_frame_=false;
-        if (mpv_command(handle_,cmd)<0) {
+        const int load_rc=mpv_command(handle_,cmd);
+        M3Diagnostics::record(M3Stage::Player,M3Event::Begin,load_rc,0,0);
+        if(load_rc<0) {
             status_="mpv rejected completed cache";return false;
         }
         status_=use_hls_?"Opening fully cached HLS + AAC playlists...":
@@ -170,18 +188,21 @@ public:
     void pause() {
         if(!handle_)return;
         const char* cmd[]={"cycle","pause",nullptr};
-        (void)mpv_command(handle_,cmd);
+        const int result=mpv_command(handle_,cmd);
+        M3Diagnostics::record(M3Stage::Player,M3Event::Pause,result,0,0);
     }
     void seek(int sec) {
         if(!handle_)return;
         const auto arg=std::to_string(sec);
         const char* cmd[]={"seek",arg.c_str(),"relative",nullptr};
-        (void)mpv_command(handle_,cmd);
+        const int result=mpv_command(handle_,cmd);
+        M3Diagnostics::record(M3Stage::Player,M3Event::Seek,sec,result,0);
     }
     void stop() {
         if(!handle_)return;
         const char* cmd[]={"stop",nullptr};
-        (void)mpv_command(handle_,cmd);
+        const int result=mpv_command(handle_,cmd);
+        M3Diagnostics::record(M3Stage::Player,M3Event::Stop,result,0,0);
         audio_gate_.reset();
         audio_failure_latched_=false;
         have_frame_=false;
@@ -191,6 +212,23 @@ public:
     // instantly trip the missing-AAC timeout after a long suspend.
     // Query the selected audio stream on each active UI tick, rather than
     // assuming the first PLAYBACK_RESTART event has finalized all tracks.
+    bool selected_video_track() const {
+        if(!handle_)return false;
+        std::int64_t count=0;
+        if(mpv_get_property(handle_,"track-list/count",MPV_FORMAT_INT64,&count)<0)
+            return false;
+        for(std::int64_t i=0;i<count && i<32;++i) {
+            const auto prefix="track-list/"+std::to_string(i)+"/";
+            char* type=mpv_get_property_string(handle_,(prefix+"type").c_str());
+            const bool is_video=type && std::strcmp(type,"video")==0;
+            if(type)mpv_free(type);
+            int selected=0;
+            if(is_video && mpv_get_property(handle_,(prefix+"selected").c_str(),
+                                            MPV_FORMAT_FLAG,&selected)>=0 &&
+               selected)return true;
+        }
+        return false;
+    }
     bool selected_audio_track() const {
         if(!handle_)return false;
         std::int64_t count=0;
@@ -210,10 +248,12 @@ public:
     }
     void pump() {
         if(!handle_)return;
+        ++pump_ticks_;
         for(unsigned i=0;i<32;++i) {
             const mpv_event* e=mpv_wait_event(handle_,0);
             if(!e || e->event_id==MPV_EVENT_NONE)break;
             if(e->event_id==MPV_EVENT_FILE_LOADED) {
+                M3Diagnostics::record(M3Stage::Decode,M3Event::Loaded,e->error,0,0);
                 if((use_hls_||use_adaptive_) && audio_gate_.state()==
                    playback::AudioSelectionGate::State::Idle)
                     audio_gate_.begin(playback_clock_ms());
@@ -221,6 +261,7 @@ public:
                 if(!use_hls_&&!use_adaptive_)status_="Local MP4 loaded";
             }
             if(e->event_id==MPV_EVENT_PLAYBACK_RESTART) {
+                M3Diagnostics::record(M3Stage::Decode,M3Event::Restart,e->error,0,0);
                 if(use_hls_||use_adaptive_) {
                     if(audio_gate_.state()!=
                        playback::AudioSelectionGate::State::Checking)
@@ -228,9 +269,16 @@ public:
                     status_="Verifying video and AAC track selection...";
                 } else status_="Playing";
             }
+            if(e->event_id==MPV_EVENT_VIDEO_RECONFIG) {
+                M3Diagnostics::record(M3Stage::Decode,M3Event::Status,1,e->error,0);
+            }
+            if(e->event_id==MPV_EVENT_AUDIO_RECONFIG) {
+                M3Diagnostics::record(M3Stage::Decode,M3Event::Status,2,e->error,0);
+            }
             if(e->event_id==MPV_EVENT_END_FILE) {
                 audio_gate_.reset();
                 const auto* end=static_cast<const mpv_event_end_file*>(e->data);
+                M3Diagnostics::record(M3Stage::Decode,M3Event::End,end ? end->reason : -1,end ? end->error : 0,0);
                 if(!audio_failure_latched_)
                     status_=(end && end->reason==MPV_END_FILE_REASON_ERROR)
                         ?"Decoder error opening local media":
@@ -242,9 +290,11 @@ public:
             const auto outcome=audio_gate_.observe(
                 selected_audio_track(),playback_clock_ms());
             if(outcome==playback::AudioSelectionGate::State::Ready) {
+                M3Diagnostics::record(M3Stage::Decode,M3Event::Selected,selected_video_track() ? 1 : 0,selected_audio_track() ? 1 : 0,0);
                 status_=use_adaptive_?"Playing: H.264 MP4 with selected AAC":
                                       "Playing: HLS video with selected AAC track";
             } else if(outcome==playback::AudioSelectionGate::State::Missing) {
+                M3Diagnostics::record(M3Stage::Decode,M3Event::NoAudio,selected_video_track() ? 1 : 0,0,0);
                 audio_failure_latched_=true;
                 status_="No selected AAC audio after initialization; playback stopped";
                 const char* cmd[]={"stop",nullptr};
@@ -252,11 +302,31 @@ public:
                 have_frame_=false;
             }
         }
+        // A/V liveness is not the same as audio-only playback. Capture
+        // selected tracks, decoded geometry, actual rendered frames and
+        // time position independently every ~2 seconds.
+        if((pump_ticks_%120)==0) {
+            std::int64_t width=0,height=0;
+            const int wrc=mpv_get_property(handle_,"video-params/w",
+                                           MPV_FORMAT_INT64,&width);
+            const int hrc=mpv_get_property(handle_,"video-params/h",
+                                           MPV_FORMAT_INT64,&height);
+            M3Diagnostics::record(M3Stage::Decode,M3Event::Status,wrc>=0 ? width : 0,hrc>=0 ? height : 0,selected_video_track() ? 1 : 0);
+            double time=0;
+            const bool have_time=mpv_get_property(handle_,"time-pos",
+                                          MPV_FORMAT_DOUBLE,&time)>=0;
+            M3Diagnostics::record(M3Stage::Player,M3Event::Progress,have_time ? static_cast<std::int64_t>(time*1000) : -1,selected_audio_track() ? 1 : 0,static_cast<std::int64_t>(frames_));
+            if(selected_audio_track() && !selected_video_track())
+                M3Diagnostics::record(M3Stage::Decode,M3Event::NoVideo,0,1,static_cast<std::int64_t>(frames_));
+        }
     }
     const std::vector<unsigned char>& render() {
         new_frame_=false;
         if(!renderer_)return pixels_;
         const auto flags=mpv_render_context_update(renderer_);
+        ++render_calls_;
+        if(render_calls_%120==0)
+            M3Diagnostics::record(M3Stage::Render,M3Event::Status,static_cast<std::int64_t>(flags),static_cast<std::int64_t>(frames_),have_frame_ ? 1 : 0);
         if(flags & MPV_RENDER_UPDATE_FRAME) {
             int size[2]{kWidth,kHeight};
             std::size_t stride=kWidth*4;
@@ -271,8 +341,17 @@ public:
             if(result>=0) {
                 for(std::size_t i=3;i<pixels_.size();i+=4)pixels_[i]=255;
                 have_frame_=true;new_frame_=true;++frames_;
+                // A successful render call can still paint entirely black.
+                // Sample a small grid; never write any image pixels to SD.
+                unsigned bright=0;
+                for(std::size_t i=0;i<pixels_.size();i+=65536) {
+                    if(pixels_[i] || pixels_[i+1] || pixels_[i+2])++bright;
+                }
+                if(frames_<=3 || frames_%120==0)
+                    M3Diagnostics::record(M3Stage::Render,M3Event::Frame,static_cast<std::int64_t>(frames_),bright,static_cast<std::int64_t>(flags));
                 mpv_render_context_report_swap(renderer_);
             } else {
+                M3Diagnostics::record(M3Stage::Render,M3Event::Error,result,static_cast<std::int64_t>(flags),0);
                 status_=std::string("Render: ")+mpv_error_string(result);
             }
         }
@@ -288,7 +367,9 @@ public:
         const char* a=mpv_get_property_string(handle_,"audio-codec");
         double seconds=0;
         const bool time=mpv_get_property(handle_,"time-pos",MPV_FORMAT_DOUBLE,&seconds)>=0;
-        const auto str=std::string("HW ")+(h?h:"unknown")+
+        const auto str=std::string("V ")+(selected_video_track()?"yes":"no")+
+            " A "+(selected_audio_track()?"yes":"no")+
+            " | HW "+(h?h:"unknown")+
             " | "+(v?v:"--")+" / "+(a?a:"--")+
             " | "+(time?std::to_string(static_cast<int>(seconds)):"--")+"s"+
             " | frames "+std::to_string(frames_);
@@ -303,6 +384,7 @@ private:
         if(handle_){mpv_terminate_destroy(handle_);handle_=nullptr;}
         // Release ONLY after libmpv has closed every file descriptor.
         ready_lease_.release();
+        M3Diagnostics::record(M3Stage::Player,M3Event::End,static_cast<std::int64_t>(frames_),0,0);
     }
     mpv_handle* handle_{nullptr};
     mpv_render_context* renderer_{nullptr};
@@ -314,17 +396,33 @@ private:
     playback::HlsPlaybackLease ready_lease_{};
     bool audio_failure_latched_{false};
     unsigned long long frames_{0};
+    std::uint64_t pump_ticks_{0},render_calls_{0};
 };
 class VideoFrame final:public brls::View {
 public:
     explicit VideoFrame(CachedMpv& player):player_(player){setHeight(294);}
     void draw(NVGcontext* vg,float x,float y,float w,float h,
               brls::Style,brls::FrameContext*) override {
+        ++draw_calls_;
         const auto& pixels=player_.render();
         if(image_<0)image_=nvgCreateImageRGBA(vg,kWidth,kHeight,0,pixels.data());
         else if(player_.new_frame())nvgUpdateImage(vg,image_,pixels.data());
         nvgBeginPath(vg);nvgRoundedRect(vg,x,y,w,h,8);
         nvgFillColor(vg,nvgRGB(8,14,20));nvgFill(vg);
+        // Always-on diagnostic R/G/B calibration strip. If the screen is
+        // black and these native NanoVG blocks are also missing, suspect
+        // UI drawing/compositing rather than the H.264 decoder alone.
+        const float strip=std::min(w*0.15f,125.0f);
+        const NVGcolor colors[]={nvgRGB(235,55,60),
+                                 nvgRGB(40,235,80),
+                                 nvgRGB(40,95,240)};
+        for(int i=0;i<3;++i) {
+            nvgBeginPath(vg);
+            nvgRect(vg,x+8+i*(strip/3.0f),y+8,strip/3.0f-1,14);
+            nvgFillColor(vg,colors[i]);nvgFill(vg);
+        }
+        if(draw_calls_<=2 || draw_calls_%120==0)
+            M3Diagnostics::record(M3Stage::Ui,M3Event::Draw,static_cast<std::int64_t>(draw_calls_),player_.have_frame() ? 1 : 0,image_>=0 ? 1 : 0);
         if(image_<0||!player_.have_frame())return;
         const float scale=std::min(w/kWidth,h/kHeight);
         const float vw=kWidth*scale,vh=kHeight*scale;
@@ -335,6 +433,7 @@ public:
     }
 private:
     CachedMpv& player_;int image_{-1};
+    std::uint64_t draw_calls_{0};
 };
 brls::Label* label(brls::Box* box,const std::string& s,int size) {
     auto* v=new brls::Label();
