@@ -174,6 +174,13 @@ std::string master_text(const playback::HlsProbePlan& plan) {
 
 bool SwitchHlsCacheSink::discard_session_media() noexcept {
     if(playback::HlsPlaybackLease::is_active())return false;
+    struct stat parent{},media{},root{};
+    if(lstat(kParent,&parent)!=0)return errno==ENOENT;
+    if(!S_ISDIR(parent.st_mode))return false;
+    if(lstat(kMediaDir,&media)!=0)return errno==ENOENT;
+    if(!S_ISDIR(media.st_mode))return false;
+    if(lstat(kRoot,&root)!=0)return errno==ENOENT;
+    if(!S_ISDIR(root.st_mode))return false;
     // This whitelist is deliberately narrower than the overall app folder.
     // Do not remove a file/dir with an unexpected name or type.
     const bool pending=discard_known_directory(kPending);

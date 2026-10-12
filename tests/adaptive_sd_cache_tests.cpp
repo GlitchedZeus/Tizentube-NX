@@ -143,6 +143,18 @@ int main(){
           fs::exists(folder/"unrelated-settings.ini") &&
           fs::exists(folder/"do-not-delete"),
           "restart sweep removes crash leftovers, preserves unrelated files");
+    // No ancestor of the app-owned media folder may be a symlink.
+    fs::remove_all(folder/"do-not-delete");
+    fs::remove(folder/"unrelated-settings.ini");
+    fs::remove_all(folder);
+    const auto outside=fs::path("/tmp/ttnx-adaptive-cache-test/external-media");
+    fs::create_directories(outside);
+    std::ofstream(outside/"active.mp4")<<"do not erase";
+    fs::create_directory_symlink(outside,folder);
+    check(!SwitchMediaCacheSink::discard_session_media() &&
+          fs::exists(outside/"active.mp4"),
+          "symlink cache root is rejected; unrelated data preserved");
+    fs::remove(folder);
     fs::remove_all("/tmp/ttnx-adaptive-cache-test");
     return errors?EXIT_FAILURE:EXIT_SUCCESS;
 }

@@ -20,7 +20,7 @@ bool ensure_folder(const char* path) {
     if (mkdir(path, 0700) == 0) return true;
     if (errno != EEXIST) return false;
     struct stat st{};
-    return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+    return lstat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 } // namespace
 
@@ -100,6 +100,18 @@ const char* SwitchMediaCacheSink::backup() const noexcept {
 }
 bool SwitchMediaCacheSink::discard_session_media() noexcept {
     if(playback::HlsPlaybackLease::is_active())return false;
+    // A symlinked cache folder must never redirect our known-name unlinks
+    // into unrelated SD locations. lstat every traversed app-owned root.
+    struct stat parent{},root{};
+#ifdef TTNX_M3_CACHE_HOST_TEST
+    constexpr const char* app="/tmp/ttnx-adaptive-cache-test/switch/TizenTube-NX";
+#else
+    constexpr const char* app="sdmc:/switch/TizenTube-NX";
+#endif
+    if(lstat(app,&parent)!=0)return errno==ENOENT;
+    if(!S_ISDIR(parent.st_mode))return false;
+    if(lstat(kFolder,&root)!=0)return errno==ENOENT;
+    if(!S_ISDIR(root.st_mode))return false;
     // Never enumerate arbitrary SD contents, remove unknown filenames,
     // follow symlinks, or touch configuration, logs or emulators.
     static constexpr const char* names[]={

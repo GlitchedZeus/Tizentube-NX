@@ -345,6 +345,16 @@ int main() {
     ck(switch_app::SwitchHlsCacheSink::discard_session_media() &&
        !fs::exists(base/"ready"),
        "cleanup resumes after unknown entry removed");
+    const auto elsewhere=base.parent_path()/"elsewhere";
+    fs::create_directories(elsewhere);
+    std::ofstream(elsewhere/"v_00000.ts")<<"do not erase";
+    fs::create_directory_symlink(elsewhere,base/"ready");
+    ck(!switch_app::SwitchHlsCacheSink::discard_session_media() &&
+       fs::exists(elsewhere/"v_00000.ts"),
+       "HLS symlinked child directory cannot cause external deletion");
+    fs::remove(base/"ready");
+    ck(switch_app::SwitchHlsCacheSink::discard_session_media(),
+       "cleanup recovers after symlink removed");
     fs::remove_all("/tmp/tizentube-m3-hls-test");
     if(failures)std::cerr<<failures<<" SD cache contract failures\n";
     return failures?EXIT_FAILURE:EXIT_SUCCESS;
