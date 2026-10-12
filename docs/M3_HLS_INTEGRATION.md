@@ -302,3 +302,14 @@ before fetching the rest of the video or publishing any cache. This rejects
 truncated or bogus responses that previously could pass an MP4 signature
 test. It is **container validation**, not a substitute for FFmpeg decode
 or independent physical Switch A/V acceptance.
+
+### Native-parity AAC acquisition in the LIVE decoder proof
+
+The live real-A/V proof now uses the **same contiguous 1 MiB HTTP 206 Range
+sequence** as the native AAC transport. A full un-ranged GET could produce a
+misleading success/failure that would not reproduce on Switch. Each chunk
+must have a complete non-overlapping `Content-Range`, an exact body length
+and the same <=16 MiB total size; redirects, unexpected HTTP 200, partial
+or changing resources are rejected without disclosing signed URLs.
+Offline mocked-transport tests cover multi-range reconstruction and
+discontinuous responses.

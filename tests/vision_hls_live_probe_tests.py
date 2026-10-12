@@ -7,6 +7,7 @@ import tempfile
 import pathlib
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]/"tools"))
 import vision_hls_live_probe as probe
@@ -73,6 +74,46 @@ class ProofContracts(unittest.TestCase):
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):
                     probe.get_complete_media(value)
+
+    def test_native_audio_range_reconstruction_and_bounds(self):
+        source="https://r1.googlevideo.com/videoplayback?itag=140"
+        audio=b"A"*(1048576+40)
+        seen=[]
+        class Response:
+            def __init__(self,start,end):
+                actual_end=min(end,len(audio)-1)
+                self.status=206
+                self.headers={
+                    "Content-Range":f"bytes {start}-{actual_end}/{len(audio)}",
+                    "Content-Length":str(actual_end-start+1)}
+                self.chunk=audio[start:actual_end+1]
+            def __enter__(self): return self
+            def __exit__(self,*_): return None
+            def read(self,count): return self.chunk[:count]
+        class Opener:
+            def open(self,request,timeout):
+                pair=request.get_header("Range").removeprefix("bytes=").split("-")
+                start,end=map(int,pair)
+                seen.append((start,end))
+                return Response(start,end)
+        with mock.patch.object(probe.urllib.request,"build_opener",
+                               return_value=Opener()):
+            self.assertEqual(probe.get_complete_aac_ranges(source),audio)
+        self.assertEqual(seen,[(0,1048575),(1048576,2097151)])
+
+    def test_partial_aac_range_is_rejected(self):
+        source="https://r1.googlevideo.com/videoplayback?itag=140"
+        class BrokenResponse:
+            status=206
+            headers={"Content-Range":"bytes 1-100/2048",
+                     "Content-Length":"100"}
+            def __enter__(self):return self
+            def __exit__(self,*_):return None
+            def read(self,count):return b"A"*100
+        with mock.patch.object(probe.urllib.request,"build_opener") as factory:
+            factory.return_value.open.return_value=BrokenResponse()
+            with self.assertRaises(ValueError):
+                probe.get_complete_aac_ranges(source)
 
     def test_hls_master_and_segments_checked(self):
         master=(

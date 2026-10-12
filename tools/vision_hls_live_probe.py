@@ -452,6 +452,55 @@ def get_complete_media(url: str) -> bytes:
         return contents
 
 
+
+def get_complete_aac_ranges(url: str) -> bytes:
+    """Reproduce the native 1 MiB HTTP 206 AAC download contract.
+
+    This deliberately does NOT use a full un-ranged GET: Googlevideo may
+    allow one and reject the other. Every response must be contiguous and
+    exactly bounded by its verified Content-Range / total resource length.
+    """
+    if not approved_hls(url) or "/videoplayback" not in url:
+        raise ValueError("DECODE_AUDIO_URL_REJECTED")
+    result=bytearray()
+    total=None
+    opener=urllib.request.build_opener(NoRedirect())
+    while total is None or len(result)<total:
+        start=len(result)
+        end=start+1048575
+        request=urllib.request.Request(url,method="GET",headers={
+            "Range":f"bytes={start}-{end}",
+            "Accept":"application/octet-stream",
+            "Accept-Encoding":"identity",
+        })
+        with opener.open(request,timeout=25) as response:
+            if response.status!=206:
+                raise ValueError("DECODE_AUDIO_NOT_PARTIAL")
+            if response.headers.get("Content-Encoding","identity").lower()!="identity":
+                raise ValueError("DECODE_AUDIO_ENCODING")
+            cr=response.headers.get("Content-Range","")
+            match=re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)",cr)
+            if not match:
+                raise ValueError("DECODE_AUDIO_RANGE_INVALID")
+            actual_start,actual_end,declared=map(int,match.groups())
+            if declared<1024 or declared>MAX_DECODE_MEDIA or (
+                    total is not None and declared!=total):
+                raise ValueError("DECODE_AUDIO_TOTAL_INVALID")
+            total=declared
+            expected_end=min(end,total-1)
+            if actual_start!=start or actual_end!=expected_end:
+                raise ValueError("DECODE_AUDIO_DISCONTINUITY")
+            chunk=response.read(1048576+1)
+            if len(chunk)!=expected_end-start+1:
+                raise ValueError("DECODE_AUDIO_TRUNCATED")
+            length=response.headers.get("Content-Length")
+            if length is not None and (
+                    not length.isdigit() or int(length)!=len(chunk)):
+                raise ValueError("DECODE_AUDIO_LENGTH_INVALID")
+            result.extend(chunk)
+    return bytes(result)
+
+
 def decode_real_av_pair(video: bytes,audio: bytes) -> bool:
     """Decode actual A/V samples with file-only FFmpeg and discard all bytes.
 
@@ -576,7 +625,7 @@ def one_source(video_id: str,visitor: str,decode_real: bool=False) -> str:
                 if decode_real:
                     stage="REAL_AV_DOWNLOAD"
                     full_video=get_complete_media(segment)
-                    full_audio=get_complete_media(audio)
+                    full_audio=get_complete_aac_ranges(audio)
                     stage="REAL_AV_DECODE"
                     try:
                         if decode_real_av_pair(full_video,full_audio):
