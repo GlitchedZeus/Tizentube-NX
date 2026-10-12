@@ -560,3 +560,12 @@ different playback profile as a bypass. Download progress clearly
 identifies direct MP4 rather than HLS. The feature does not guarantee
 that YouTube offers a safe muxed MP4 for every video; if it does not,
 the app reports that category honestly instead of claiming success.
+
+### Shared native-media playback lease
+
+The disposable `active.mp4` cache and complete HLS `ready/`
+cache now share the same exclusive libmpv playback lease. A
+new MP4 download cannot overwrite a file in use; the lease is
+held until `mpv_terminate_destroy` closes media FDs. Host
+tests check exclusive ownership across HLS and muxed MP4 route
+transitions. The last accepted hardware M2 path is untouched.

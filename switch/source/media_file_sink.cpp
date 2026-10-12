@@ -1,6 +1,7 @@
 #ifdef TTNX_M3_MEDIA_PLANE
 
 #include "media_file_sink.hpp"
+#include "tizentube_nx/playback/hls_playback_lease.hpp"
 
 #include <cerrno>
 #include <cstdio>
@@ -18,6 +19,9 @@ bool ensure_folder(const char* path) {
 } // namespace
 
 bool SwitchMediaCacheSink::begin() {
+    // The native player also acquires this lease for completed MP4.
+    // Never overwrite a file while libmpv could have its descriptors open.
+    if(playback::HlsPlaybackLease::is_active())return false;
     abort();
     // No user-input path manipulation. The only SD writes stay under this
     // app-owned disposable cache folder, never a save/emulator directory.
@@ -42,7 +46,8 @@ bool SwitchMediaCacheSink::append(std::string_view bytes) {
 }
 
 bool SwitchMediaCacheSink::finish() {
-    if (!file_ || size_ == 0) return false;
+    if (!file_ || size_ == 0 ||
+        playback::HlsPlaybackLease::is_active())return false;
     // Commit only after all media bytes have been received and durably flushed.
     if (std::fflush(file_) != 0) return false;
     if (fsync(fileno(file_)) != 0) return false;

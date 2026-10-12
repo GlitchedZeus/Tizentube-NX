@@ -32,8 +32,8 @@ public:
     ~CachedMpv() { close(); }
     bool init() {
         if (handle_) return renderer_!=nullptr;
-        if(use_hls_ && !ready_lease_.acquire()) {
-            status_="Completed HLS video cache is already playing";
+        if(!ready_lease_.acquire()) {
+            status_="Another completed media file is already playing";
             return false;
         }
         handle_=mpv_create();
