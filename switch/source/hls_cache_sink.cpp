@@ -254,13 +254,15 @@ bool SwitchHlsCacheSink::append_external_aac(std::string_view bytes) {
        external_audio_bytes_>128ULL*1024*1024 ||
        bytes.size()>128ULL*1024*1024-external_audio_bytes_)
         return false;
-    const std::string file=std::string(kPending)+"/external_audio.m4a";
-    auto* out=std::fopen(file.c_str(),"ab");
-    if(!out)return false;
-    const bool okay=std::fwrite(bytes.data(),1,bytes.size(),out)==bytes.size() &&
-                    std::fflush(out)==0 && fsync(fileno(out))==0;
-    const bool closed=std::fclose(out)==0;
-    if(!okay || !closed)return false;
+    // Keep AAC private in pending/ across bounded chunks. One mandatory
+    // fsync at publish is substantially cheaper than one fsync/1 MiB.
+    if(!external_aac_file_) {
+        const auto file=std::string(kPending)+"/external_audio.m4a";
+        external_aac_file_=std::fopen(file.c_str(),"wb");
+        if(!external_aac_file_)return false;
+    }
+    if(std::fwrite(bytes.data(),1,bytes.size(),external_aac_file_)
+       !=bytes.size())return false;
     external_audio_bytes_+=bytes.size();
     return true;
 }
@@ -306,6 +308,15 @@ bool SwitchHlsCacheSink::publish(const playback::HlsProbePlan& plan) {
     const bool external=!plan.audio_segments &&
                         !plan.source.external_aac_url.empty();
     if(!external && external_audio_bytes_!=0)return false;
+    if(external_aac_file_) {
+        // Seal the file before validation or publishing any media. A torn
+        // SD sync fails closed and leaves the original ready/ untouched.
+        bool sealed=std::fflush(external_aac_file_)==0;
+        if(sealed)sealed=fsync(fileno(external_aac_file_))==0;
+        if(std::fclose(external_aac_file_)!=0)sealed=false;
+        external_aac_file_=nullptr;
+        if(!sealed)return false;
+    }
     if(external) {
         struct stat audio{};
         const std::string file=std::string(kPending)+"/external_audio.m4a";
@@ -354,6 +365,10 @@ bool SwitchHlsCacheSink::publish(const playback::HlsProbePlan& plan) {
     return true;
 }
 void SwitchHlsCacheSink::abort() noexcept {
+    if(external_aac_file_) {
+        (void)std::fclose(external_aac_file_);
+        external_aac_file_=nullptr;
+    }
     if(staged_)(void)discard_known_directory(kPending);
     staged_=false;
     wrote_video_=false;

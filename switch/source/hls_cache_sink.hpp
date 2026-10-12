@@ -2,6 +2,7 @@
 #ifdef TTNX_M3_MEDIA_PLANE
 #include "tizentube_nx/playback/hls_cache.hpp"
 
+#include <cstdio>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -50,6 +51,7 @@ public:
         "sdmc:/switch/TizenTube-NX/media-cache/hls/ready/external_audio.m4a";
 #endif
 private:
+    std::FILE* external_aac_file_{nullptr};
     bool staged_{false};
     bool wrote_video_{false};
     std::uint64_t external_audio_bytes_{0};

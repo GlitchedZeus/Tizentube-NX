@@ -226,3 +226,13 @@ Unknown files are preserved and cause a fail-closed result. This deletion
 is ordinary filesystem unlinking, not forensic secure-erasure of SD flash.
 A future streaming/ring-buffer player can remove the need for complete
 pre-downloads; that work must be hardware-tested independently.
+
+## M3 HLS external-AAC SD startup optimization
+
+A pending HLS external-AAC download now buffers its bounded chunks in one
+private file descriptor instead of reopening and fsyncing for every 1 MiB.
+At publish, fflush/fsync/close must succeed **before** length and MP4
+structure verification and the atomic ready/ swap. Abort closes the file
+before deleting known staging entries. This reduces unnecessary SD syncs
+without exposing partial AAC to libmpv; the accepted playback engine and
+HTTPS source policy remain unchanged.

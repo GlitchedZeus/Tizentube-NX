@@ -174,7 +174,8 @@ int main() {
         ck(sink.begin(paired) &&
            sink.write_segment(false,false,0,"TS-VIDEO-SEGMENT-A") &&
            sink.write_segment(false,false,1,"TS-VIDEO-SEGMENT-B") &&
-           sink.append_external_aac(signed_audio_file) &&
+           sink.append_external_aac(std::string_view(signed_audio_file).substr(0,1024)) &&
+           sink.append_external_aac(std::string_view(signed_audio_file).substr(1024)) &&
            sink.publish(paired),
            "direct HLS+external AAC stages and publishes one local transaction");
         ck(fs::is_regular_file(base/"ready/external_audio.m4a") &&
@@ -318,6 +319,24 @@ int main() {
         retry.abort();
         ck(read(base/"ready/master.m3u8")==original,
            "failed replacement leaves original completed media untouched");
+    }
+    {
+        auto paired=plan();
+        paired.selected.direct_media_playlist=true;
+        paired.audio_segments.reset();
+        paired.selected.audio_playlist_url.clear();
+        paired.video_segments.init_segment_url.reset();
+        paired.source.external_aac_url=
+            "https://r1.googlevideo.com/videoplayback?itag=140";
+        switch_app::SwitchHlsCacheSink sink;
+        const auto bytes=valid_external_aac();
+        ck(sink.begin(paired) &&
+           sink.append_external_aac(std::string_view(bytes).substr(0,1024)),
+           "buffered AAC first chunk remains private pending media");
+        sink.abort();
+        ck(!fs::exists(base/"pending") &&
+           fs::exists(base/"ready/master.m3u8"),
+           "abort closes buffered AAC and removes it without damaging ready");
     }
     // Exiting a player must not leave the completed HLS media, or any
     // failed/incomplete candidate, on SD. Only app-owned known files go.
