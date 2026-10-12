@@ -103,6 +103,16 @@ void normal() {
     check(from_http.has_value() && http.calls==1 &&
           http.request.url=="https://www.youtube.com/youtubei/v1/player?prettyPrint=false&alt=json",
           "guest player extractor uses approved M2 native HTTPS origin");
+    // The optional M3 fallback uses the same already-reviewed VisionOS
+    // identity as the original HLS attempt. It is not a privilege or
+    // guest-login bypass and still checks ID/Shorts/DRM/media URL policy.
+    GuestDirectExtractor vision(http,s,true);
+    const auto vision_result=vision.resolve("IzJ7R4EnYmI");
+    check(vision_result && http.calls==2 &&
+          http.request.url=="https://www.youtube.com/youtubei/v1/player?prettyPrint=false" &&
+          http.request.body.find("\"clientName\":\"VISIONOS\"")!=std::string::npos &&
+          http.request.body.find("\"visitorData\":\"anonymous-test\"")!=std::string::npos,
+          "M3 fallback requests only reviewed VisionOS guest player with original visitor");
     http.succeed=false;
     check(!extractor.resolve("IzJ7R4EnYmI"),
           "failed HTTP never becomes usable source");

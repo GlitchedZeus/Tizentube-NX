@@ -569,3 +569,13 @@ new MP4 download cannot overwrite a file in use; the lease is
 held until `mpv_terminate_destroy` closes media FDs. Host
 tests check exclusive ownership across HLS and muxed MP4 route
 transitions. The last accepted hardware M2 path is untouched.
+
+### Consistent anonymous player identity for native MP4 fallback
+
+The optional, separately safe muxed-MP4 route now uses the *same
+reviewed VisionOS guest client request* that produced the HLS source,
+rather than unexpectedly switching to an unrelated WEB /player profile.
+It keeps the original guest visitor, video ID, no credentials,
+normal-only/Shorts exclusion, signed CDN allowlist and existing
+H.264/AAC filtering. The accepted M2 direct WEB extractor behavior
+remains unchanged for its own tests and consumers.

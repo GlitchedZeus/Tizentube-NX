@@ -40,8 +40,10 @@ enum class DirectPlayerFailure {
 class GuestDirectExtractor final : public Extractor {
 public:
     GuestDirectExtractor(net::HttpClient& browse_http,
-                         const youtube::GuestSession& session)
-        : browse_http_(browse_http), session_(session) {}
+                         const youtube::GuestSession& session,
+                         bool visionos_profile=false)
+        : browse_http_(browse_http), session_(session),
+          visionos_profile_(visionos_profile) {}
     [[nodiscard]] std::optional<ExtractionResult> resolve(
         std::string_view normal_video_id) override;
     [[nodiscard]] DirectPlayerFailure last_failure() const noexcept { return last_failure_; }
@@ -51,6 +53,7 @@ private:
     const youtube::GuestSession& session_;
     DirectPlayerFailure last_failure_{DirectPlayerFailure::None};
     int last_http_status_{0};
+    bool visionos_profile_{false};
 };
 
 } // namespace ttnx::playback

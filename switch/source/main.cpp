@@ -1517,7 +1517,7 @@ private:
                                    probe.last_error()) &&
                                !media_cancel_requested_.load()) {
                                 ttnx::playback::GuestDirectExtractor extractor(
-                                    network_client_,guest);
+                                    network_client_,guest,true);
                                 ttnx::playback::MediaChunkReader chunk_reader(
                                     audio_transport);
                                 ttnx::switch_app::SwitchMediaCacheSink mp4_cache;

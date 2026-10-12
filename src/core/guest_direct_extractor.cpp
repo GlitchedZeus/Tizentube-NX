@@ -398,7 +398,9 @@ std::optional<ExtractionResult> GuestDirectExtractor::resolve(
     std::string_view normal_video_id) {
     last_http_status_=0;
     last_failure_=DirectPlayerFailure::InvalidRequest;
-    const auto request=youtube::make_player_request(session_,normal_video_id);
+    const auto request=visionos_profile_
+        ?youtube::make_m3_visionos_player_request(session_,normal_video_id)
+        :youtube::make_player_request(session_,normal_video_id);
     if (!request) return std::nullopt;
     const auto result=browse_http_.perform(*request);
     if (!result.ok) {
