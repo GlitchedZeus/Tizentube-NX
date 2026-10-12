@@ -24,6 +24,11 @@ public:
     // Separate AAC MP4 is appended only under the same pending clip
     // transaction; default refuses audio until a reviewed sink supports it.
     virtual bool append_external_aac(std::string_view) { return false; }
+    // Optional, non-playable metadata snapshot. It MUST stay in the
+    // disposable staging directory; existing ready/ media stays untouched.
+    virtual bool stage_startup_event(const HlsProbePlan&,std::size_t) {
+        return false;
+    }
     virtual bool publish(const HlsProbePlan& plan)=0;
     virtual void abort() noexcept=0;
 };
@@ -69,6 +74,9 @@ public:
     [[nodiscard]] std::uint64_t startup_buffer_ms() const noexcept {
         return startup_buffer_.prefix_ms();
     }
+    [[nodiscard]] bool startup_event_staged() const noexcept {
+        return startup_event_staged_;
+    }
     static constexpr std::uint64_t kMaxTotalBytes=512ULL*1024*1024;
 private:
     HlsSegmentReader& reader_;
@@ -89,6 +97,7 @@ private:
     std::uint64_t aac_offset_{0}, aac_total_{0};
     AacMp4Structure aac_structure_{};
     HlsStartupBuffer startup_buffer_{};
+    bool startup_event_attempted_{false},startup_event_staged_{false};
     static constexpr std::uint64_t kMaxAacBytes=128ULL*1024*1024;
 };
 

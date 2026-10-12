@@ -35,6 +35,7 @@ bool HlsCacheJob::start(const HlsProbePlan& plan) {
     aac_total_=0;
     aac_structure_.reset();
     startup_buffer_.reset();
+    startup_event_attempted_=startup_event_staged_=false;
     completed_=0;
     total_segments_=0;
     next_segment_=0;
@@ -257,6 +258,15 @@ HlsCacheState HlsCacheJob::pump() {
         ++next_segment_;
         ++completed_;
     }
+    // A completed AAC and verified video prefix may create a private,
+    // never-user-opened EVENT snapshot in pending/. Do not interpret
+    // this as permission to switch the active player from ready/.
+    if(track_==0 && startup_buffer_.prepared() &&
+       !startup_event_attempted_) {
+        startup_event_attempted_=true;
+        startup_event_staged_=sink_.stage_startup_event(
+            *active_,startup_buffer_.required_segments());
+    }
     // Direct TS with neither external nor muxed AAC cannot be played.
     // Fail after the first verified segment, not the entire silent VOD.
     if(track_==0 && !is_init && next_segment_==1 &&
@@ -297,6 +307,7 @@ void HlsCacheJob::cancel() noexcept {
     }
     active_.reset();
     startup_buffer_.reset();
+    startup_event_attempted_=startup_event_staged_=false;
     transient_attempts_=0;
     retry_delay_ms_=0;
 }

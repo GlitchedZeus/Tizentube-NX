@@ -22,6 +22,8 @@ public:
     bool write_segment(bool audio,bool init,
                        std::size_t index,std::string_view bytes) override;
     bool append_external_aac(std::string_view bytes) override;
+    bool stage_startup_event(const playback::HlsProbePlan& plan,
+                             std::size_t prefix_count) override;
     bool publish(const playback::HlsProbePlan& plan) override;
     void abort() noexcept override;
 

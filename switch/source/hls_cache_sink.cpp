@@ -1,5 +1,6 @@
 #ifdef TTNX_M3_MEDIA_PLANE
 #include "hls_cache_sink.hpp"
+#include "tizentube_nx/playback/hls_event_playlist.hpp"
 
 #include <algorithm>
 #include <cerrno>
@@ -39,6 +40,7 @@ bool known_filename(std::string_view file) {
     if(file=="master.m3u8" || file=="video.m3u8" ||
        file=="audio.m3u8" || file=="external_audio.m4a" ||
        file=="audio_mode.txt" || file=="external_audio.bytes" ||
+       file=="video_event.m3u8" || file=="video_event.tmp" ||
        file=="v_init.m4s" || file=="a_init.m4s")return true;
     // Recognize only our fixed numbered media names: v_00000.ts or
     // v_00000.m4s. No user-supplied filename enters deletion.
@@ -208,6 +210,33 @@ bool SwitchHlsCacheSink::append_external_aac(std::string_view bytes) {
     return true;
 }
 
+bool SwitchHlsCacheSink::stage_startup_event(
+    const playback::HlsProbePlan& plan,std::size_t prefix_count) {
+    if(!staged_ || prefix_count==0 ||
+       prefix_count>video_written_.size() ||
+       video_written_.size()!=plan.video_segments.segments.size() ||
+       (video_init_needed_ && !video_init_written_) ||
+       plan.audio_segments ||
+       (!plan.source.external_aac_url.empty() &&
+        external_audio_bytes_<1024) ||
+       !std::all_of(video_written_.begin(),
+                    video_written_.begin()+prefix_count,
+                    [](bool has_bytes){return has_bytes;}))
+        return false;
+    const auto snapshot=playback::make_hls_event_snapshot(
+        plan.video_segments,prefix_count,false,video_ext_=="ts");
+    if(!snapshot)return false;
+    const auto temp=std::string(kPending)+"/video_event.tmp";
+    const auto ready=std::string(kPending)+"/video_event.m3u8";
+    if(!persist(temp,*snapshot))return false;
+    // Readers never see a truncated playlist: first fsync, then rename.
+    if(rename(temp.c_str(),ready.c_str())!=0) {
+        (void)unlink(temp.c_str());
+        return false;
+    }
+    return true;
+}
+
 bool SwitchHlsCacheSink::publish(const playback::HlsProbePlan& plan) {
     if(!staged_ || !wrote_video_ ||
        video_written_.size()!=plan.video_segments.segments.size() ||
@@ -231,6 +260,12 @@ bool SwitchHlsCacheSink::publish(const playback::HlsProbePlan& plan) {
            static_cast<std::uint64_t>(audio.st_size)!=external_audio_bytes_)
             return false;
     }
+    // The incomplete/event timeline is never exposed as a finished VOD.
+    // Active future streaming will require a stable, separate directory.
+    const auto staged_event=std::string(kPending)+"/video_event.m3u8";
+    const auto staged_temp=std::string(kPending)+"/video_event.tmp";
+    if((unlink(staged_event.c_str())!=0 && errno!=ENOENT) ||
+       (unlink(staged_temp.c_str())!=0 && errno!=ENOENT))return false;
     // Commit a byte-exact external AAC length, so torn post-publish files
     // cannot be mistaken for complete audio simply by having an MP4 header.
     if(external && !persist(std::string(kPending)+"/external_audio.bytes",

@@ -171,6 +171,42 @@ int main() {
            "signed audio URL is never leaked into local mpv playlist");
     }
     {
+        // Stage a local-only growing EVENT timeline beside existing
+        // pending segments; it must never be shipped inside ready/.
+        auto paired=plan();
+        paired.selected.direct_media_playlist=true;
+        paired.audio_segments.reset();
+        paired.selected.audio_playlist_url.clear();
+        paired.video_segments.init_segment_url.reset();
+        paired.source.external_aac_url=
+            "https://r1.googlevideo.com/videoplayback?itag=140";
+        switch_app::SwitchHlsCacheSink sink;
+        const std::string aac(2048,'A');
+        ck(sink.begin(paired) &&
+           sink.write_segment(false,false,0,"TS-FIRST") &&
+           sink.append_external_aac(aac) &&
+           sink.stage_startup_event(paired,1),
+           "native SD cache safely stages first local event segment");
+        auto first=read(base/"pending/video_event.m3u8");
+        ck(first.find("v_00000.ts")!=std::string::npos &&
+           first.find("v_00001.ts")==std::string::npos &&
+           first.find("googlevideo")==std::string::npos &&
+           first.find("ENDLIST")==std::string::npos &&
+           !fs::exists(base/"ready/video_event.m3u8"),
+           "pending EVENT timeline excludes signed URLs and completed cache");
+        ck(!sink.stage_startup_event(paired,2) &&
+           read(base/"pending/video_event.m3u8")==first,
+           "missing video segment cannot overwrite good event snapshot");
+        ck(sink.write_segment(false,false,1,"TS-SECOND") &&
+           sink.stage_startup_event(paired,2) &&
+           sink.publish(paired),
+           "atomic event snapshot grows and final full-cache commit succeeds");
+        ck(!fs::exists(base/"ready/video_event.m3u8") &&
+           fs::exists(base/"ready/master.m3u8") &&
+           !fs::exists(base/"pending"),
+           "partial event timeline stripped before publishing final VOD");
+    }
+    {
         // A short AAC download must never replace the previous good clip.
         auto paired=plan();
         paired.selected.direct_media_playlist=true;

@@ -452,3 +452,21 @@ This is a host feasibility test, not a console implementation.
 The production app still waits for full-cache publication until
 Switch-specific buffer lifetime, seeks and AAC synchronization
 are accepted.
+
+### Native SD event snapshot staging (not yet player-visible)
+
+The production `SwitchHlsCacheSink` can now write an atomic,
+local-only `pending/video_event.m3u8` snapshot after a verified
+12-second H.264/AAC startup prefix has actually been persisted.
+The downloader records whether the optional snapshot was staged,
+but **continues fetching every remaining segment** as before.
+The staged playlist uses a fsynced temporary file and rename;
+missing segments never replace the previous snapshot. The final
+full-cache commit strips the EVENT snapshot before renaming
+`pending` to `ready`, and abort cleans up its known scratch
+filenames. This means existing complete playback cannot mistake
+a partial EVENT for a finished video. Host tests cover atomic
+growth, missing segments, local-only URLs and final cleanup.
+Switch live streaming remains disabled until stable active
+directory lifetime and incremental libmpv refresh are validated
+on device.
