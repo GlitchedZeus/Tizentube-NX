@@ -364,7 +364,9 @@ void failure_cases() {
               "partial clip not visible if atomic manifest publishing fails");
     }
     {
-        FakeTransport transport;
+        FakeTransport transport;transport.ts_h264=true;
+        // This regression asserts missing audio on otherwise valid TS,
+        // not the earlier unrelated fake-MP4/unsupported-video error.
         playback::HlsSegmentReader reader(transport);
         Sink sink;playback::HlsCacheJob job(reader,sink);
         auto source=plan();
