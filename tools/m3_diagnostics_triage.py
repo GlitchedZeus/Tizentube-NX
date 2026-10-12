@@ -30,6 +30,15 @@ def assess(text: str):
     failed=of("TRANSFER","FAIL")
     if failed:
         return "DOWNLOAD_START_FAILURE","Safe CDN range or SD staging rejected before transfer."
+    cache_errors=[x for x in of("CACHE","FAIL") if x[2] in (3,4,5)]
+    for row in cache_errors:
+        phase,stage,os_error=row[2:]
+        causes={1:"OPEN",2:"WRITE",3:"FLUSH",4:"SYNC",5:"CLOSE",
+                6:"FILE_SIZE",7:"BACKUP",8:"PROMOTE",9:"RESTORE"}
+        if stage in causes:
+            return ("AAC_SD_" if phase==4 else "VIDEO_SD_")+causes[stage]+"_FAILED", (
+                f"SD finalization failed in {causes[stage]} (numeric errno {os_error}); "
+                "no network retry can repair this local failure.")
     for row in transfer:
         phase,code,bytes_read=row[2:]
         # a=phase (3 muxed, 4 AAC, 5 video),

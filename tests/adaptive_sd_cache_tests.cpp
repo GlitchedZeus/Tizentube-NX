@@ -4,6 +4,7 @@
 #include <cstring>
 #include <filesystem>
 #include <iostream>
+#include <fstream>
 #include <string>
 namespace fs=std::filesystem;
 namespace {
@@ -62,7 +63,54 @@ int main(){
     check(SwitchMediaCacheSink::publish_adaptive_pair()&&
           SwitchMediaCacheSink::adaptive_pair_valid(),
           "retry publishes new matched complete pair");
+    // Horizon SD rename may not overwrite a destination that already exists.
+    // A real prior completed AAC must survive either a successful
+    // replacement or an injected promotion/fsync fault.
+    const std::string audio_path=SwitchMediaCacheSink::kAdaptiveAudio;
+    auto read_audio=[&](){
+        std::ifstream in(audio_path,std::ios::binary);
+        return std::string((std::istreambuf_iterator<char>(in)),
+                            std::istreambuf_iterator<char>());
+    };
     const auto old=body;
+    std::string newer=body;
+    newer.back()='Z';
+    check(stage(Slot::AdaptiveAudio,newer) &&
+          read_audio()==newer &&
+          !fs::exists(audio_path+".previous"),
+          "existing AAC destination safely replaced without rename-overwrite");
+    {
+        SwitchMediaCacheSink failing(Slot::AdaptiveAudio);
+        SwitchMediaCacheSink::test_fail_on(SwitchMediaCacheSink::StorageStep::Promote);
+        check(failing.begin() && failing.append(body) &&
+              !failing.finish() &&
+              failing.last_storage_error()==
+                  SwitchMediaCacheSink::StorageStep::Promote &&
+              read_audio()==newer &&
+              !fs::exists(audio_path+".previous"),
+              "promotion failure restores previous AAC before exposing media");
+        SwitchMediaCacheSink::test_fail_on(SwitchMediaCacheSink::StorageStep::None);
+    }
+    {
+        SwitchMediaCacheSink failing(Slot::AdaptiveAudio);
+        SwitchMediaCacheSink::test_fail_on(SwitchMediaCacheSink::StorageStep::Sync);
+        check(failing.begin() && failing.append(body) &&
+              !failing.finish() &&
+              failing.last_storage_error()==
+                  SwitchMediaCacheSink::StorageStep::Sync &&
+              read_audio()==newer,
+              "fsync failure is specifically classified and old AAC retained");
+        SwitchMediaCacheSink::test_fail_on(SwitchMediaCacheSink::StorageStep::None);
+    }
+    {
+        const auto backup=audio_path+".previous";
+        check(std::rename(audio_path.c_str(),backup.c_str())==0,
+              "interrupted replacement leaves a prior backup");
+        SwitchMediaCacheSink resumed(Slot::AdaptiveAudio);
+        check(resumed.begin() && read_audio()==newer,
+              "cache begin restores previous audio after interrupted rename");
+        resumed.abort();
+    }
     check(stage(Slot::AdaptiveVideo,std::string(2048,'X')) &&
           !SwitchMediaCacheSink::publish_adaptive_pair() &&
           !SwitchMediaCacheSink::adaptive_pair_valid(),

@@ -40,6 +40,19 @@ class M3TriageTests(unittest.TestCase):
                    ("RENDER","FRAME",9,2,1),
                    ("UI","DRAW",20,1,1))
         self.assertEqual(assess(log)[0],"TEXTURE_UPLOAD_NOT_OBSERVED")
+    def test_post_download_rename_failure(self):
+        log=events(("SESSION","START",1,1,0),
+                   ("TRANSFER","PROGRESS",4,9814141,9814141),
+                   ("CACHE","FAIL",4,8,17),
+                   ("TRANSFER","END",4,2206,9814141))
+        code,summary=assess(log)
+        self.assertEqual(code,"AAC_SD_PROMOTE_FAILED")
+        self.assertIn("local failure",summary)
+    def test_post_download_fsync_failure(self):
+        log=events(("SESSION","START",1,1,0),
+                   ("CACHE","FAIL",4,4,5),
+                   ("TRANSFER","END",4,2206,9814141))
+        self.assertEqual(assess(log)[0],"AAC_SD_SYNC_FAILED")
     def test_range_failure(self):
         log=events(("SESSION","START",1,1,0),
                    ("TRANSFER","END",4,1033,4096))

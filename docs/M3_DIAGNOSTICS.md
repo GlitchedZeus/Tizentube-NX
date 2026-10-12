@@ -89,3 +89,13 @@ If promotion fails, it restores the prior complete file and never opens
 a truncated one. A new download can recover a prior file after an
 interrupted promotion. It still requires successful `fflush` and
 `fsync`, and keeps the active libmpv lease protection.
+
+### Exact post-download SD failure codes
+
+New `CACHE FAIL <phase> <stage> <errno>` entries accompany successful
+HTTP 206 responses followed by storage failures. Phase 4 denotes AAC;
+5 is H.264 video, 3 is a muxed MP4. Storage stages are 1 open, 2 write,
+3 flush, 4 sync, 5 close, 6 size, 7 backup, 8 promotion, 9 rollback.
+All values are numeric, with no URLs, titles or media bytes. The offline
+triage script now reports e.g. `AAC_SD_PROMOTE_FAILED` instead of blaming
+the CDN when all promised range bytes arrived.
