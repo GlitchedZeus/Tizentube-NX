@@ -239,3 +239,16 @@ test converted a display-formatted `time-pos` string into a Python float.
 The test now reads `time-pos` with `MPV_FORMAT_DOUBLE`, matching the
 documented native API, and includes the last H.264/AAC and position state in
 failure diagnostics. No production decoder behavior was bypassed.
+
+### Native libmpv asynchronous audio readiness
+
+The integrated Switch player previously treated one
+`MPV_EVENT_PLAYBACK_RESTART` without an immediately selected AAC track
+as a fatal silent-video condition. That event can arrive before asynchronous
+track selection has stabilized. The player now uses a pure, host-tested
+4-second readiness gate: once a local HLS file loads, AAC track selection is
+rechecked on successive UI ticks, early unselected states remain pending,
+and a sustained missing track stops playback without falling back to an
+ad-bearing web player. Stop, replay and seeks reset the gate; fatal audio
+errors are preserved in the UI rather than being overwritten by the
+subsequent expected stop event.

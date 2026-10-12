@@ -2,12 +2,14 @@
 #include "m3_player_activity.hpp"
 #include "media_file_sink.hpp"
 #include "hls_cache_sink.hpp"
+#include "tizentube_nx/playback/audio_gate.hpp"
 
 #include <borealis.hpp>
 #include <mpv/client.h>
 #include <mpv/render.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -18,6 +20,11 @@
 namespace ttnx::switch_app {
 namespace {
 constexpr int kWidth=640, kHeight=360;
+std::uint64_t playback_clock_ms() {
+    using namespace std::chrono;
+    return static_cast<std::uint64_t>(
+        duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count());
+}
 class CachedMpv {
 public:
     explicit CachedMpv(bool hls=false):pixels_(kWidth*kHeight*4,0),use_hls_(hls){}
@@ -131,6 +138,8 @@ public:
             return false;
         }
         const char* cmd[]={"loadfile",path,"replace",nullptr};
+        audio_gate_.reset();
+        audio_failure_latched_=false;
         have_frame_=false;
         if (mpv_command(handle_,cmd)<0) {
             status_="mpv rejected completed cache";return false;
@@ -154,43 +163,71 @@ public:
         if(!handle_)return;
         const char* cmd[]={"stop",nullptr};
         (void)mpv_command(handle_,cmd);
+        audio_gate_.reset();
+        audio_failure_latched_=false;
         have_frame_=false;
         status_="Stopped. A replays completed cache.";
+    }
+    // Query the selected audio stream on each active UI tick, rather than
+    // assuming the first PLAYBACK_RESTART event has finalized all tracks.
+    bool selected_audio_track() const {
+        if(!handle_)return false;
+        std::int64_t count=0;
+        if(mpv_get_property(handle_,"track-list/count",MPV_FORMAT_INT64,&count)<0)
+            return false;
+        for(std::int64_t track=0;track<count && track<32;++track) {
+            const std::string prefix="track-list/"+std::to_string(track)+"/";
+            char* type=mpv_get_property_string(handle_,(prefix+"type").c_str());
+            const bool audio=type && std::strcmp(type,"audio")==0;
+            if(type)mpv_free(type);
+            int selected=0;
+            if(audio && mpv_get_property(handle_,(prefix+"selected").c_str(),
+                                         MPV_FORMAT_FLAG,&selected)>=0 && selected)
+                return true;
+        }
+        return false;
     }
     void pump() {
         if(!handle_)return;
         for(unsigned i=0;i<32;++i) {
             const mpv_event* e=mpv_wait_event(handle_,0);
             if(!e || e->event_id==MPV_EVENT_NONE)break;
-            if(e->event_id==MPV_EVENT_FILE_LOADED)status_="Local YouTube media loaded";
+            if(e->event_id==MPV_EVENT_FILE_LOADED) {
+                if(use_hls_ && audio_gate_.state()==
+                   playback::AudioSelectionGate::State::Idle)
+                    audio_gate_.begin(playback_clock_ms());
+                status_="Local media loaded; validating selected AAC audio...";
+                if(!use_hls_)status_="Local MP4 loaded";
+            }
             if(e->event_id==MPV_EVENT_PLAYBACK_RESTART) {
-                // A successfully set audio-file option is not proof of playback.
-                bool selected_audio=false;
-                std::int64_t count=0;
-                if(mpv_get_property(handle_,"track-list/count",MPV_FORMAT_INT64,&count)>=0) {
-                    for(std::int64_t track=0;track<count && track<32;++track) {
-                        const std::string prefix="track-list/"+std::to_string(track)+"/";
-                        char* type=mpv_get_property_string(handle_,(prefix+"type").c_str());
-                        int selected=0;
-                        const bool is_audio=type && std::strcmp(type,"audio")==0;
-                        if(type)mpv_free(type);
-                        if(is_audio &&
-                           mpv_get_property(handle_,(prefix+"selected").c_str(),
-                                            MPV_FORMAT_FLAG,&selected)>=0 && selected)
-                            selected_audio=true;
-                    }
-                }
-                if(use_hls_ && !selected_audio) {
-                    status_="HLS clip has no selected audio track; playback stopped";
-                    const char* stop_cmd[]={"stop",nullptr};
-                    (void)mpv_command(handle_,stop_cmd);
-                    have_frame_=false;
+                if(use_hls_) {
+                    if(audio_gate_.state()!=
+                       playback::AudioSelectionGate::State::Checking)
+                        audio_gate_.begin(playback_clock_ms());
+                    status_="Verifying video and AAC track selection...";
                 } else status_="Playing";
             }
             if(e->event_id==MPV_EVENT_END_FILE) {
+                audio_gate_.reset();
                 const auto* end=static_cast<const mpv_event_end_file*>(e->data);
-                status_=(end && end->reason==MPV_END_FILE_REASON_ERROR)
-                    ?"Decoder error":"Video stopped or finished";
+                if(!audio_failure_latched_)
+                    status_=(end && end->reason==MPV_END_FILE_REASON_ERROR)
+                        ?"Decoder error opening local media":
+                         "Video stopped or finished";
+            }
+        }
+        if(use_hls_ && audio_gate_.state()==
+                       playback::AudioSelectionGate::State::Checking) {
+            const auto outcome=audio_gate_.observe(
+                selected_audio_track(),playback_clock_ms());
+            if(outcome==playback::AudioSelectionGate::State::Ready) {
+                status_="Playing: HLS video with selected AAC track";
+            } else if(outcome==playback::AudioSelectionGate::State::Missing) {
+                audio_failure_latched_=true;
+                status_="No selected AAC audio after initialization; playback stopped";
+                const char* cmd[]={"stop",nullptr};
+                (void)mpv_command(handle_,cmd);
+                have_frame_=false;
             }
         }
     }
@@ -249,6 +286,8 @@ private:
     bool use_hls_{false};
     std::string status_{"Starting libmpv..."};
     bool have_frame_{false},new_frame_{false};
+    playback::AudioSelectionGate audio_gate_{};
+    bool audio_failure_latched_{false};
     unsigned long long frames_{0};
 };
 class VideoFrame final:public brls::View {
