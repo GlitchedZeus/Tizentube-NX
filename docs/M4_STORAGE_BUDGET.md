@@ -126,3 +126,35 @@ registered in the host workflow.
 This is a real transport-to-files implementation but **NOT YET connected
 to the Switch libmpv demuxer or released as the default player**.
 The full 100 MB and fast-start product acceptance gates remain blocked.
+
+## Verified progressive **real** H264/AAC host decode (M4 acceptance evidence)
+
+The `rolling_hls_live_decode_tests.py` suite now generates a fully local
+12-second H264/AAC video from FFmpeg's synthetic video and sine generators,
+splits it into six 2-second TS segments, and drives the **actual**
+`RollingHlsSink` via a compiled C++ writer as the video becomes available.
+A separate FFmpeg process opens the incomplete local playlist after the
+first two segments. With the network protocol whitelist restricted to
+`file,crypto,data`, it incrementally decodes both tracks, reloads the
+growing manifest and reaches at least 11 seconds before teardown.
+The measured host proof reached approximately 12.03 seconds without errors.
+
+The companion cancellation test interrupts the writer before ENDLIST,
+confirms that incomplete media is *not* advertised as a finished VOD, and
+waits for explicit decoder-close confirmation before reclaiming all media.
+Both tests passed in normal and ASan/UBSan-compiled writer modes locally.
+These tests are registered as separate required host CI steps following
+the existing FFmpeg installation.
+
+A second correction prevents metadata exhaustion in long videos:
+`RollingStreamCoordinator` now treats its 192-segment ledger limit as
+pre-fetch **backpressure**, not a fatal failure after writing the next
+segment. An independent normal and sanitizer regression exercises filling
+the ledger, refusing the 193rd network request, retiring one played item,
+and resuming downloads without losing the session.
+
+**Current limits:** this is a real host FFmpeg A/V decode proof, NOT
+validated Switch libmpv behavior. Actual 720p/60 hardware throughput,
+separate HLS AAC streams, player-driven segment-release events,
+resume/seek/sleep on device, and overall 100-MB SD accounting remain
+required before enabling this route in the real NRO.

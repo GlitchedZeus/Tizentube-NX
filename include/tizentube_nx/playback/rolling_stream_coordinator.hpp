@@ -50,6 +50,14 @@ public:
         if(state_==State::Idle || state_==State::Failed ||
            state_==State::Cancelled)return Admission::Inactive;
         if(pending_)return Admission::Busy;
+        // The metadata ledger itself is bounded. Refuse network I/O before
+        // reaching its fixed 192-piece limit, even for tiny TS segments.
+        // Otherwise the transfer would reach committed() and fail fatally
+        // after writing a valid file despite plenty of SD byte capacity.
+        if(budget_.pieces()>=RollingMediaBudget::kMaxPieces) {
+            state_=State::Backpressure;
+            return Admission::Backpressure;
+        }
         if(from_ms<epoch_ms_ || to_ms<=from_ms ||
            to_ms-from_ms>60000 || index>=4096 ||
            !content_length || content_length>kMaxSegmentBytes ||

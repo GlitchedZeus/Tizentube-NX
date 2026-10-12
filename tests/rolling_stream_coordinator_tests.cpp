@@ -105,5 +105,26 @@ int main(){
        "one-hour video's temporary media remains a few MiB, not many GiB");
     ck(r.cancel(true) && r.media_bytes()==0,
        "stop after verified purge drops all accounting");
+    ck(r.begin(0,720,30),"tiny-segment accounting ledger starts");
+    for(std::uint32_t i=0;i<RollingMediaBudget::kMaxPieces;++i) {
+        const auto begin=1000ULL*i;
+        ck(r.advance_playhead(begin),"tiny-segment playhead advances");
+        ck(r.reserve(Track::Muxed,i,begin,begin+1000,128)==Admission::Accepted,
+           "small segment admitted before the metadata ceiling");
+        auto ticket=*r.pending_ticket();
+        ck(r.committed(ticket,128,true,true),"tiny segment accounted");
+    }
+    ck(r.advance_playhead(192000),"playhead reaches the ledger ceiling");
+    ck(r.reserve(Track::Muxed,192,192000,193000,128)==Admission::Backpressure &&
+       !r.pending_ticket().has_value() && r.reserved_bytes()==192*128 &&
+       r.state()==R::State::Backpressure,
+       "192-piece metadata ceiling blocks I/O before transfer, not after a write");
+    ck(r.acknowledge_unlinked(Track::Muxed,0),
+       "decoder-confirmed old file release frees one metadata slot");
+    ck(r.reserve(Track::Muxed,192,192000,193000,128)==Admission::Accepted,
+       "small-segment network request resumes when ledger space becomes available");
+    auto resumed=*r.pending_ticket();
+    ck(r.committed(resumed,128,true,true),"recovered metadata ledger commits");
+    ck(r.cancel(true),"metadata backpressure teardown clears the session");
     return errors?1:0;
 }
