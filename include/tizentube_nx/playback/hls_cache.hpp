@@ -56,6 +56,11 @@ public:
     [[nodiscard]] bool downloading_external_aac() const noexcept {
         return state_==HlsCacheState::Fetching && track_==2;
     }
+    // One network operation per pump; worker sleeps this many milliseconds
+    // before retrying a transient error on exactly the same media object.
+    [[nodiscard]] unsigned retry_delay_ms() const noexcept {return retry_delay_ms_;}
+    [[nodiscard]] unsigned transient_attempts() const noexcept {return transient_attempts_;}
+    static constexpr unsigned kMaxTransientRetries=2;
     static constexpr std::uint64_t kMaxTotalBytes=512ULL*1024*1024;
 private:
     HlsSegmentReader& reader_;
@@ -69,6 +74,7 @@ private:
     std::size_t total_segments_{0};
     std::size_t next_segment_{0};
     unsigned track_{0}; // 0 HLS video, 1 HLS audio, 2 ranged AAC MP4
+    unsigned transient_attempts_{0},retry_delay_ms_{0};
     bool init_pending_{false};
     bool muxed_audio_verified_{false};
     bool video_codec_verified_{false};

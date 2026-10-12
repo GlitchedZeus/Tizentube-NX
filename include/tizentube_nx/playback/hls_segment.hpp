@@ -15,6 +15,7 @@ enum class HlsSegmentFailure {
 struct HlsSegmentBytes {
     HlsSegmentFailure failure{HlsSegmentFailure::InvalidSource};
     std::string bytes;
+    int http_status{0}; // only numeric status, never a bearer URL
     [[nodiscard]] bool ok() const noexcept { return failure==HlsSegmentFailure::None; }
 };
 

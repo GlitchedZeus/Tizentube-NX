@@ -7,6 +7,24 @@
 #include <utility>
 
 namespace ttnx::playback {
+namespace {
+bool transient_http(int status) {
+    return status==429 || status==500 || status==502 ||
+           status==503 || status==504;
+}
+bool transient_segment(const HlsSegmentBytes& bytes) {
+    return (bytes.failure==HlsSegmentFailure::Transport &&
+            bytes.http_status==0) ||
+           (bytes.failure==HlsSegmentFailure::HttpStatus &&
+            transient_http(bytes.http_status));
+}
+bool transient_aac(const MediaReadResult& audio) {
+    return (audio.failure==MediaReadFailure::TransportError &&
+            audio.http_status==0) ||
+           (audio.failure==MediaReadFailure::UnexpectedStatus &&
+            transient_http(audio.http_status));
+}
+}
 bool HlsCacheJob::start(const HlsProbePlan& plan) {
     cancel();
     active_.reset();
@@ -20,6 +38,8 @@ bool HlsCacheJob::start(const HlsProbePlan& plan) {
     total_segments_=0;
     next_segment_=0;
     track_=0;
+    transient_attempts_=0;
+    retry_delay_ms_=0;
     error_=HlsCacheFailure::InvalidPlaylist;
     state_=HlsCacheState::Failed;
     const auto count=plan.video_segments.segments.size()+
@@ -69,6 +89,17 @@ bool HlsCacheJob::start(const HlsProbePlan& plan) {
 
 HlsCacheState HlsCacheJob::pump() {
     if(state_!=HlsCacheState::Fetching || !active_)return state_;
+    retry_delay_ms_=0;
+    const auto temporary_failure=[this]() {
+        if(transient_attempts_>=kMaxTransientRetries)return false;
+        ++transient_attempts_;
+        retry_delay_ms_=250*transient_attempts_;
+        return true;
+    };
+    const auto request_succeeded=[this]() {
+        transient_attempts_=0;
+        retry_delay_ms_=0;
+    };
 
     // Standalone AAC from the SAME validated visionOS player response is
     // transferred through the already reviewed bounded CDN Range client.
@@ -91,8 +122,10 @@ HlsCacheState HlsCacheJob::pump() {
         const auto range=next_media_range(aac_offset_,aac_total_);
         if(!range)return failed(HlsCacheFailure::MediaFetch);
         const auto audio=aac_reader_->read(active_->source.external_aac_url,*range);
-        if(!audio.ok() || audio.bytes.empty())
+        if(!audio.ok() || audio.bytes.empty()) {
+            if(transient_aac(audio) && temporary_failure())return state_;
             return failed(HlsCacheFailure::MediaFetch);
+        }
         if(audio.resource_size==0 || audio.resource_size>kMaxAacBytes ||
            (aac_total_ && audio.resource_size!=aac_total_) ||
            audio.bytes.size()>kMaxTotalBytes-bytes_)
@@ -111,6 +144,7 @@ HlsCacheState HlsCacheJob::pump() {
             return failed(HlsCacheFailure::MediaWrite);
         aac_offset_+=audio.bytes.size();
         bytes_+=audio.bytes.size();
+        request_succeeded();
         if(aac_offset_>aac_total_)
             return failed(HlsCacheFailure::MediaFetch);
         return state_;
@@ -167,6 +201,7 @@ HlsCacheState HlsCacheJob::pump() {
                                      playlist.segments[next_segment_].url;
     const auto bytes=reader_.fetch(url);
     if(!bytes.ok()) {
+        if(transient_segment(bytes) && temporary_failure())return state_;
         sink_.abort();
         state_=HlsCacheState::Failed;
         error_=HlsCacheFailure::MediaFetch;
@@ -198,6 +233,7 @@ HlsCacheState HlsCacheJob::pump() {
         return state_;
     }
     bytes_+=bytes.bytes.size();
+    request_succeeded();
     if(is_init)init_pending_=false;
     else {++next_segment_;++completed_;}
     // Validate one real video segment first. If a separately signed AAC
@@ -225,6 +261,8 @@ void HlsCacheJob::cancel() noexcept {
         state_=HlsCacheState::Cancelled;
     }
     active_.reset();
+    transient_attempts_=0;
+    retry_delay_ms_=0;
 }
 const char* describe_hls_cache_failure(HlsCacheFailure reason) noexcept {
     switch(reason) {

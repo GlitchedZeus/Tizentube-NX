@@ -353,3 +353,16 @@ the committed AAC. The earlier handcrafted playlist no longer hides
 bugs in production manifest creation. No signed URL is embedded in the
 published media files. The disposable host cache is deleted after
 verification; this does not test actual Switch hardware.
+
+### Transient video and AAC transport resilience
+
+The integrated worker now retries dropped media sockets and HTTP
+429/500/502/503/504 responses **at most twice for each same signed segment
+or AAC byte range**, with 250/500 ms worker-only delays. Each `pump()`
+still makes at most one bounded HTTPS request. Video/AAC progress advances
+only after a validated transfer is persisted. Permanent HTTP 403,
+unsafe URLs, malformed media/headers and failed SD writes never retry.
+A failed retry sequence aborts staged media and preserves the previous
+published clip. Host regressions cover one-off socket drops, AAC throttling,
+permanent refusals and exhausted 503 budgets. An expired signed URL
+still requires a fresh authorized source; no token bypass is attempted.

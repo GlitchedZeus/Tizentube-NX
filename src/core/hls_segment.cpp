@@ -39,8 +39,12 @@ HlsSegmentBytes HlsSegmentReader::fetch(std::string_view url) const {
         {"Accept-Encoding","identity"},
     };
     const auto response=http_.perform(request);
+    out.http_status=response.response.status_code;
     if(!response.ok) {
-        out.failure=HlsSegmentFailure::Transport;
+        // 403 received through a !ok transport result is still a
+        // permanent HTTP refusal, not a transient socket failure.
+        out.failure=out.http_status>=400
+            ?HlsSegmentFailure::HttpStatus:HlsSegmentFailure::Transport;
         return out;
     }
     if(response.response.status_code!=200) {

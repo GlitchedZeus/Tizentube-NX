@@ -50,12 +50,18 @@ playback::HlsProbePlan plan() {
 struct FakeTransport:net::HttpClient {
     int hits{0};
     int fail_after{0};
+    int temporary_left{0},temporary_status{0};
     bool ts_h264{false},ts_aac{false};
     net::HttpResult perform(const net::HttpRequest& request) override {
         ++hits;
         net::HttpResult out;
         out.ok=fail_after==0 || hits!=fail_after;
         out.response.status_code=out.ok?200:403;
+        if(temporary_left>0) {
+            --temporary_left;
+            out.ok=temporary_status!=0;
+            out.response.status_code=temporary_status;
+        }
         out.response.body=ts_h264?ts_video_fixture(ts_aac):
             std::string("\0\0\0\x18ftypisom0000",16);
         out.response.headers={{"Content-Type",ts_h264?"video/mp2t":"video/mp4"},
@@ -70,20 +76,29 @@ struct FakeAacTransport:playback::MediaChunkTransport {
     bool blocked{false};
     bool corrupt_moov{false};
     int fail_on{0};
+    int temporary_left{0},temporary_status{0};
     std::uint64_t total_size{2048};
     net::HttpResult perform(const net::HttpRequest& req) override {
         ++requests;
         net::HttpResult out;
-        const std::uint64_t start=(static_cast<std::uint64_t>(requests)-1)*1048576;
+        const auto range=req.headers.at(0).value;
+        const auto dash=range.find('-',6);
+        const std::uint64_t start=std::stoull(range.substr(6,dash-6));
         const auto end=start<total_size?
             std::min<std::uint64_t>(start+1048575,total_size-1):start;
         const auto size=end-start+1;
         const std::string expected="bytes="+std::to_string(start)+"-"+
-            std::to_string(requests==1?1048575:std::min<std::uint64_t>(start+1048575,total_size-1));
+            std::to_string(start==0?1048575:
+                std::min<std::uint64_t>(start+1048575,total_size-1));
         out.ok=!blocked && requests!=fail_on && start<total_size &&
             req.method==net::HttpMethod::Get && req.headers.size()==3 &&
             req.headers[0].value==expected;
         out.response.status_code=out.ok?206:403;
+        if(temporary_left>0) {
+            --temporary_left;
+            out.ok=temporary_status!=0;
+            out.response.status_code=temporary_status;
+        }
         out.response.body=std::string(static_cast<std::size_t>(size),'A');
         // Structurally valid MP4 container spanning as many 206 responses
         // as needed. The fake does NOT claim that it contains decoded AAC.
@@ -168,6 +183,64 @@ void full() {
     check(sink.publishes==1,"completed video cache cannot publish twice");
 }
 void failure_cases() {
+    {
+        FakeTransport video;video.temporary_left=1;
+        playback::HlsSegmentReader reader(video);
+        Sink sink;playback::HlsCacheJob job(reader,sink);
+        check(job.start(plan()),"transient video retry stages");
+        check(job.pump()==playback::HlsCacheState::Fetching &&
+              job.retry_delay_ms()==250 && job.transient_attempts()==1 &&
+              job.downloaded_bytes()==0 && sink.writes==0,
+              "transient drop triggers bounded worker delay and no partial SD write");
+        for(int i=0;i<12 && job.state()==playback::HlsCacheState::Fetching;++i)
+            (void)job.pump();
+        check(job.state()==playback::HlsCacheState::Ready &&
+              video.hits==7 && sink.publishes==1 &&
+              job.transient_attempts()==0,
+              "retry recovers all six HLS media files exactly once");
+    }
+    {
+        FakeTransport video;video.temporary_left=3;video.temporary_status=503;
+        playback::HlsSegmentReader reader(video);
+        Sink sink;playback::HlsCacheJob job(reader,sink);
+        check(job.start(plan()),"503 retry budget fixture starts");
+        for(int i=0;i<10 && job.state()==playback::HlsCacheState::Fetching;++i)
+            (void)job.pump();
+        check(job.state()==playback::HlsCacheState::Failed &&
+              job.error()==playback::HlsCacheFailure::MediaFetch &&
+              video.hits==3 && job.downloaded_bytes()==0 &&
+              sink.publishes==0 && sink.aborts>0,
+              "exhausted 503 budget fails closed instead of retry loop");
+    }
+    {
+        FakeTransport video;video.fail_after=1;
+        playback::HlsSegmentReader reader(video);
+        Sink sink;playback::HlsCacheJob job(reader,sink);
+        check(job.start(plan()),"403 permanent refusal fixture stages");
+        check(job.pump()==playback::HlsCacheState::Failed &&
+              video.hits==1 && job.retry_delay_ms()==0 &&
+              sink.writes==0,
+              "permanent 403 never retried even with !ok transport");
+    }
+    {
+        FakeTransport video;video.ts_h264=true;
+        FakeAacTransport audio;audio.temporary_left=1;
+        audio.temporary_status=429;
+        playback::HlsSegmentReader reader(video);
+        playback::MediaChunkReader aac(audio);
+        Sink sink;playback::HlsCacheJob job(reader,sink,&aac);
+        auto p=plan();p.video_segments.init_segment_url.reset();
+        p.audio_segments.reset();p.selected.audio_playlist_url.clear();
+        p.selected.direct_media_playlist=true;
+        p.source.external_aac_url=base+"external";
+        check(job.start(p),"transient AAC range retry stages");
+        for(int i=0;i<15 && job.state()==playback::HlsCacheState::Fetching;++i)
+            (void)job.pump();
+        check(job.state()==playback::HlsCacheState::Ready &&
+              audio.requests==2 && video.hits==2 &&
+              sink.audio_appends==1 && sink.publishes==1,
+              "429 AAC retry preserves byte-exact append and avoids duplication");
+    }
     {
         FakeTransport video;video.ts_h264=true;
         FakeAacTransport audio;

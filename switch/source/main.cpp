@@ -1522,6 +1522,13 @@ private:
                                     // Exactly one bounded HTTPS segment per
                                     // loop: UI remains on the other thread.
                                     (void)job.pump();
+                                    // Retry policy runs only on the media
+                                    // worker, never on the Borealis UI thread.
+                                    if(job.retry_delay_ms() &&
+                                       !media_cancel_requested_.load())
+                                        std::this_thread::sleep_for(
+                                            std::chrono::milliseconds(
+                                                job.retry_delay_ms()));
                                     media_progress_bytes_.store(job.downloaded_bytes());
                                     media_segments_done_.store(
                                         static_cast<unsigned>(job.segments_completed()));
