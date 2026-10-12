@@ -370,6 +370,9 @@ private:
     std::atomic<int> media_step_{0}; // 0 resolver, 1 media URL accepted, 2 downloading
     std::atomic<std::uint64_t> media_progress_bytes_{0};
     std::atomic<std::uint64_t> media_progress_total_{0};
+    std::atomic<unsigned> media_segments_done_{0};
+    std::atomic<unsigned> media_segments_total_{0};
+    std::atomic_bool media_external_aac_phase_{false};
     std::chrono::steady_clock::time_point media_last_ui_update_ =
         std::chrono::steady_clock::now();
     brls::Label* m3_status_label_{nullptr};
@@ -1474,6 +1477,9 @@ private:
         media_step_.store(0);
         media_progress_bytes_.store(0);
         media_progress_total_.store(0);
+        media_segments_done_.store(0);
+        media_segments_total_.store(0);
+        media_external_aac_phase_.store(false);
         media_feedback_ = "M3: locating approved guest HLS video/audio streams...";
         publish_m3_feedback_on_ui(normal_video_id);
 
@@ -1509,12 +1515,18 @@ private:
                                 feedback=ttnx::playback::describe_hls_cache_failure(job.error());
                             } else {
                                 media_step_.store(2);
+                                media_segments_total_.store(
+                                    static_cast<unsigned>(job.total_segments()));
                                 while(job.state()==ttnx::playback::HlsCacheState::Fetching &&
                                       !media_cancel_requested_.load()) {
                                     // Exactly one bounded HTTPS segment per
                                     // loop: UI remains on the other thread.
                                     (void)job.pump();
                                     media_progress_bytes_.store(job.downloaded_bytes());
+                                    media_segments_done_.store(
+                                        static_cast<unsigned>(job.segments_completed()));
+                                    media_external_aac_phase_.store(
+                                        job.downloading_external_aac());
                                 }
                                 if(media_cancel_requested_.load()) {
                                     job.cancel();
@@ -1555,8 +1567,14 @@ private:
             if (media_step_.load() == 2) {
                 const auto current = media_progress_bytes_.load();
                 const auto total = media_progress_total_.load();
-                media_feedback_ = "M3 HLS video+AAC caching: " +
-                    std::to_string(current / 1024) + " KiB";
+                const auto done=media_segments_done_.load();
+                const auto count=media_segments_total_.load();
+                media_feedback_ = media_external_aac_phase_.load()
+                    ? "M3 caching verified external AAC"
+                    : "M3 HLS media segments: " + std::to_string(done) +
+                      "/" + std::to_string(count);
+                media_feedback_ += " | " + std::to_string(current / 1024) +
+                                   " KiB downloaded";
                 if (total) media_feedback_ += " / " + std::to_string(total / 1024) + " KiB";
                 publish_m3_feedback_on_ui(active_m3_video_id_);
             }

@@ -16,6 +16,7 @@ bool HlsCacheJob::start(const HlsProbePlan& plan) {
     aac_offset_=0;
     aac_total_=0;
     completed_=0;
+    total_segments_=0;
     next_segment_=0;
     track_=0;
     error_=HlsCacheFailure::InvalidPlaylist;
@@ -55,6 +56,7 @@ bool HlsCacheJob::start(const HlsProbePlan& plan) {
         sink_.abort();
         return false;
     }
+    total_segments_=count;
     active_=plan;
     track_=0;
     next_segment_=0;

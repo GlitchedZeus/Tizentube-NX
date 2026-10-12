@@ -139,6 +139,7 @@ void full() {
     playback::HlsCacheJob job(reader,sink);
     check(job.start(plan()),"validated full A/V HLS clip starts cache staging");
     check(job.state()==playback::HlsCacheState::Fetching &&
+          job.total_segments()==4 && job.segments_completed()==0 &&
           transport.hits==0 && sink.publishes==0,
           "start stages but never makes network calls on UI thread");
     for(int i=0;i<10 && job.state()==playback::HlsCacheState::Fetching;++i)
@@ -301,6 +302,8 @@ void failure_cases() {
         for(int i=0;i<15 && job.state()==playback::HlsCacheState::Fetching &&
                          audio.requests==0;++i)(void)job.pump();
         check(audio.requests==1 && sink.audio_appends==1 &&
+              job.downloading_external_aac() &&
+              job.total_segments()==2 &&
               job.state()==playback::HlsCacheState::Fetching,
               "first one-MiB audio range precedes final AAC publication");
         job.cancel();

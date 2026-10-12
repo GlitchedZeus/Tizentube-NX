@@ -51,6 +51,10 @@ public:
     [[nodiscard]] HlsCacheFailure error() const noexcept {return error_;}
     [[nodiscard]] std::uint64_t downloaded_bytes() const noexcept {return bytes_;}
     [[nodiscard]] std::size_t segments_completed() const noexcept {return completed_;}
+    [[nodiscard]] std::size_t total_segments() const noexcept {return total_segments_;}
+    [[nodiscard]] bool downloading_external_aac() const noexcept {
+        return state_==HlsCacheState::Fetching && track_==2;
+    }
     static constexpr std::uint64_t kMaxTotalBytes=512ULL*1024*1024;
 private:
     HlsSegmentReader& reader_;
@@ -61,6 +65,7 @@ private:
     HlsCacheFailure error_{HlsCacheFailure::None};
     std::uint64_t bytes_{0};
     std::size_t completed_{0};
+    std::size_t total_segments_{0};
     std::size_t next_segment_{0};
     unsigned track_{0}; // 0 HLS video, 1 HLS audio, 2 ranged AAC MP4
     bool init_pending_{false};

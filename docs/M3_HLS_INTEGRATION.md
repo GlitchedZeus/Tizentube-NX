@@ -214,3 +214,12 @@ before standalone AAC transfer and cache publication. Corrupt transport
 bytes or an unsupported direct codec fail before costly separate audio
 download. This is metadata validation only; the real FFmpeg/libmpv decoder
 gates remain required. Fragmented MP4 sources retain their existing path.
+
+### Large-clip transfer visibility
+
+Before progressive buffering exists, M3 continues to require a complete,
+bounded cache. The Search screen now distinguishes HLS segment download from
+external AAC download and displays completed/total segments plus downloaded
+KiB. This makes lengthy transfers visibly cancellable without claiming that
+the full media is already playable; full playback still starts only after
+atomic video+audio publication. No network or decoder permissions are widened.
