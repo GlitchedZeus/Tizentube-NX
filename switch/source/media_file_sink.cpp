@@ -76,6 +76,28 @@ const char* SwitchMediaCacheSink::complete() const noexcept {
     if(slot_==Slot::AdaptiveAudio)return kAdaptiveAudio;
     return kComplete;
 }
+const char* SwitchMediaCacheSink::backup() const noexcept {
+#ifdef TTNX_M3_CACHE_HOST_TEST
+    switch(slot_) {
+      case Slot::MuxedVideo:
+        return "/tmp/ttnx-adaptive-cache-test/switch/TizenTube-NX/media-cache/active.mp4.previous";
+      case Slot::AdaptiveVideo:
+        return "/tmp/ttnx-adaptive-cache-test/switch/TizenTube-NX/media-cache/adaptive_video.mp4.previous";
+      case Slot::AdaptiveAudio:
+        return "/tmp/ttnx-adaptive-cache-test/switch/TizenTube-NX/media-cache/adaptive_audio.m4a.previous";
+    }
+#else
+    switch(slot_) {
+      case Slot::MuxedVideo:
+        return "sdmc:/switch/TizenTube-NX/media-cache/active.mp4.previous";
+      case Slot::AdaptiveVideo:
+        return "sdmc:/switch/TizenTube-NX/media-cache/adaptive_video.mp4.previous";
+      case Slot::AdaptiveAudio:
+        return "sdmc:/switch/TizenTube-NX/media-cache/adaptive_audio.m4a.previous";
+    }
+#endif
+    return kComplete;
+}
 void SwitchMediaCacheSink::invalidate_adaptive_pair() noexcept {
     // Refuse to invalidate a published marker while libmpv might still
     // use either file. This also protects Replay from a second Search.
@@ -118,6 +140,8 @@ bool SwitchMediaCacheSink::publish_adaptive_pair() noexcept {
 }
 
 bool SwitchMediaCacheSink::begin() {
+    last_error_step_=StorageStep::None;
+    last_error_errno_=0;
     // The native player also acquires this lease for completed MP4.
     // Never overwrite a file while libmpv could have its descriptors open.
     if(playback::HlsPlaybackLease::is_active())return false;
@@ -133,10 +157,25 @@ bool SwitchMediaCacheSink::begin() {
     if(!ensure_folder("sdmc:/switch/TizenTube-NX") ||
        !ensure_folder(kFolder))return false;
 #endif
+    // Recover a previous complete cache file after power loss between
+    // backup and promotion. Only these fixed app-owned paths are touched.
+    struct stat current{},previous{};
+    const bool exists=lstat(complete(),&current)==0;
+    const bool saved=lstat(backup(),&previous)==0;
+    if((exists && !S_ISREG(current.st_mode)) ||
+       (saved && !S_ISREG(previous.st_mode))) {
+        record_failure(StorageStep::Open,EINVAL);
+        return false;
+    }
+    if(!exists && saved && std::rename(backup(),complete())!=0) {
+        record_failure(StorageStep::Restore,errno);
+        return false;
+    }
     if(slot_!=Slot::MuxedVideo)invalidate_adaptive_pair();
     (void)std::remove(partial());
     file_=std::fopen(partial(),"wb");
     size_ = 0;
+    if(!file_)record_failure(StorageStep::Open,errno);
     return file_ != nullptr;
 }
 
@@ -147,24 +186,91 @@ bool SwitchMediaCacheSink::append(std::string_view bytes) {
         bytes.size() > playback::MediaDownloadJob::kMaxFileBytes - size_)
         return false;
     const auto written = std::fwrite(bytes.data(), 1, bytes.size(), file_);
-    if (written != bytes.size()) return false;
+    if (written != bytes.size()) {
+        record_failure(StorageStep::Write,errno ? errno : EIO);
+        return false;
+    }
     size_ += written;
     return true;
 }
 
 bool SwitchMediaCacheSink::finish() {
-    if (!file_ || size_ == 0 ||
-        playback::HlsPlaybackLease::is_active())return false;
-    // Commit only after all media bytes have been received and durably flushed.
-    if (std::fflush(file_) != 0) return false;
-    if (fsync(fileno(file_)) != 0) return false;
-    if (std::fclose(file_) != 0) {
-        file_ = nullptr;
+    if (!file_ || size_ == 0 || playback::HlsPlaybackLease::is_active()) {
+        record_failure(StorageStep::Flush,EBUSY);
         return false;
     }
-    file_ = nullptr;
-    if (std::rename(partial(),complete()) != 0) return false;
-    size_ = 0;
+    // Flush and sync before closing; never weaken SD integrity requirements.
+#ifdef TTNX_M3_CACHE_HOST_TEST
+    if(test_failure_==StorageStep::Flush) {
+        record_failure(StorageStep::Flush,EIO);return false;
+    }
+#endif
+    if(std::fflush(file_)!=0) {
+        record_failure(StorageStep::Flush,errno);return false;
+    }
+#ifdef TTNX_M3_CACHE_HOST_TEST
+    if(test_failure_==StorageStep::Sync) {
+        record_failure(StorageStep::Sync,EIO);return false;
+    }
+#endif
+    if(fsync(fileno(file_))!=0) {
+        record_failure(StorageStep::Sync,errno);return false;
+    }
+#ifdef TTNX_M3_CACHE_HOST_TEST
+    if(test_failure_==StorageStep::Close) {
+        record_failure(StorageStep::Close,EIO);return false;
+    }
+#endif
+    const int close_rc=std::fclose(file_);
+    file_=nullptr;
+    if(close_rc!=0) {
+        record_failure(StorageStep::Close,errno);return false;
+    }
+    // The download may be complete in RAM while the underlying SD file
+    // is shorter. Reject it before replacing an existing playable file.
+    struct stat pending{},old{},saved{};
+    if(lstat(partial(),&pending)!=0 ||
+       !S_ISREG(pending.st_mode) ||
+       pending.st_size<0 ||
+       static_cast<std::uint64_t>(pending.st_size)!=size_) {
+        record_failure(StorageStep::Size,errno ? errno : EIO);return false;
+    }
+    // Horizon's fsFsRenameFile does not provide the POSIX guarantee
+    // that rename(src, existing_dst) atomically replaces dst. Preserve
+    // an older completed cache, free the destination, then promote;
+    // rollback on failure. This is only for fixed disposable media paths.
+    const bool have_old=lstat(complete(),&old)==0;
+    if(have_old && !S_ISREG(old.st_mode)) {
+        record_failure(StorageStep::Backup,EINVAL);return false;
+    }
+    if(lstat(backup(),&saved)==0) {
+        if(!S_ISREG(saved.st_mode) || std::remove(backup())!=0) {
+            record_failure(StorageStep::Backup,errno ? errno : EINVAL);return false;
+        }
+    }
+    if(have_old) {
+        if(std::rename(complete(),backup())!=0) {
+            record_failure(StorageStep::Backup,errno);return false;
+        }
+    }
+#ifdef TTNX_M3_CACHE_HOST_TEST
+    const bool simulated=test_failure_==StorageStep::Promote;
+    if(simulated)errno=EIO;
+#else
+    const bool simulated=false;
+#endif
+    if(simulated || std::rename(partial(),complete())!=0) {
+        const int promotion_errno=errno;
+        if(have_old && std::rename(backup(),complete())!=0) {
+            record_failure(StorageStep::Restore,errno);return false;
+        }
+        record_failure(StorageStep::Promote,promotion_errno);
+        return false;
+    }
+    if(have_old)(void)std::remove(backup());
+    last_error_step_=StorageStep::None;
+    last_error_errno_=0;
+    size_=0;
     return true;
 }
 

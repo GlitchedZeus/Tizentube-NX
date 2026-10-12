@@ -16,6 +16,12 @@ namespace ttnx::switch_app {
 class SwitchMediaCacheSink final : public playback::MediaChunkSink {
 public:
     enum class Slot { MuxedVideo, AdaptiveVideo, AdaptiveAudio };
+    // Numeric codes are written to M3 field log; no file names, URLs,
+    // account data or arbitrary libc text ever leave the SD cache layer.
+    enum class StorageStep : int {
+        None=0, Open=1, Write=2, Flush=3, Sync=4, Close=5,
+        Size=6, Backup=7, Promote=8, Restore=9
+    };
     explicit SwitchMediaCacheSink(Slot slot=Slot::MuxedVideo):slot_(slot) {}
     ~SwitchMediaCacheSink() override { abort(); }
     SwitchMediaCacheSink(const SwitchMediaCacheSink&) = delete;
@@ -25,6 +31,16 @@ public:
     bool append(std::string_view data) override;
     bool finish() override;
     void abort() noexcept override;
+    [[nodiscard]] StorageStep last_storage_error() const noexcept {
+        return last_error_step_;
+    }
+    [[nodiscard]] int last_storage_errno() const noexcept {
+        return last_error_errno_;
+    }
+#ifdef TTNX_M3_CACHE_HOST_TEST
+    // Deterministic fault injection for exact SD finalization stages.
+    static void test_fail_on(StorageStep stage) noexcept {test_failure_=stage;}
+#endif
 
 #ifdef TTNX_M3_CACHE_HOST_TEST
     static constexpr const char* kFolder="/tmp/ttnx-adaptive-cache-test/switch/TizenTube-NX/media-cache";
@@ -50,7 +66,17 @@ public:
 private:
     [[nodiscard]] const char* partial() const noexcept;
     [[nodiscard]] const char* complete() const noexcept;
+    [[nodiscard]] const char* backup() const noexcept;
+    void record_failure(StorageStep stage,int error_code) noexcept {
+        last_error_step_=stage;
+        last_error_errno_=error_code;
+    }
+#ifdef TTNX_M3_CACHE_HOST_TEST
+    static inline StorageStep test_failure_{StorageStep::None};
+#endif
     Slot slot_{Slot::MuxedVideo};
+    StorageStep last_error_step_{StorageStep::None};
+    int last_error_errno_{0};
     std::FILE* file_{nullptr};
     std::uint64_t size_{0};
 };

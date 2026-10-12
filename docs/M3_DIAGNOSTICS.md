@@ -75,3 +75,17 @@ The native video view logs `UI READY` on its NanoVG texture creation,
 independently of decoded content. A video can have audio, a selected
 H.264 track and non-black software framebuffer pixels while the GPU
 still presents nothing; the separate checkpoint makes that distinguishable.
+
+### AAC completion failure diagnosis and recovery
+
+The hardware log proved all three signed HTTP 206 AAC ranges reached their
+exact declared sizes, but `MediaDownloadError::SinkFailure` stopped the
+transfer at `finish()`. Previously a single catch-all code hid
+`fflush`, `fsync`, `fclose`, `lstat`, backup and final rename errors.
+The cache sink now retains **typed failure-stage and errno numbers**,
+and promotes completed files using a temporary fixed-path backup instead
+of renaming over an existing SD file, which Horizon may not allow.
+If promotion fails, it restores the prior complete file and never opens
+a truncated one. A new download can recover a prior file after an
+interrupted promotion. It still requires successful `fflush` and
+`fsync`, and keeps the active libmpv lease protection.
