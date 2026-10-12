@@ -231,3 +231,39 @@ Before enabling M4 on a Switch, validate libmpv's playlist reload retry
 behavior on actual SD/FAT/exFAT under frequent refresh, pause/sleep and
 power interruption. Keep the hardware-proven complete-cache M3 fallback
 until that gate passes.
+
+## Opt-in M4 native worker lifecycle — threaded producer ownership
+
+The experimental `RollingHlsWorker` now owns one real `std::thread` for
+a `RollingMuxedHlsSession`, using the `RollingMuxedHlsWorkerJob` bridge.
+The producer keeps all approved HTTPS requests, codec inspection, segment
+fsync and playlist publication **off** the Borealis/render thread.
+The UI side receives only a locked, bounded state snapshot
+(Fetching/PrefixReady/Waiting/Complete/Failed/StopRequested/Joined/Cleared).
+There are no URLs, cookies, video bytes or HTTP client pointers in
+the published status.
+
+At backpressure the worker **waits on a condition_variable**, not a
+busy polling loop. Only a bounded one-slot decoder-confirmed retirement
+command can release previous segments. Requests to retire before decoder
+release, or duplicate pending commands, are rejected. The worker's
+stop request does not unlink anything; explicit `join_downloads()` must
+finish all in-flight network activity and `cleanup_after_decoder_closed()`
+refuses to delete files if the native libmpv lease remains active.
+
+The tests run successful prefix, backpressure stall, no repeated HTTP
+polling, rejected early retirement, successful release/resume, exception
+failure handling, stop and join ordering, player-lease-protected cleanup,
+and reuse for consecutive videos. Normal -Wall/-Wextra/-Werror and
+ASan/UBSan passed locally; a ten-run deterministic repetition also
+passed. These checks are registered as `rolling_hls_worker` in CTest,
+a separate sanitizer job and a native opt-in devkitA64 object check.
+
+**Explicit remaining limitation:** this is the worker/transport side of
+the native integration, not permission to enable M4 in the existing UI.
+No trustworthy libmpv per-segment file-descriptor release signal has yet
+been connected. Therefore native UI must not guess a release from video
+time alone, and joining a potentially timed-out HTTPS request must never
+happen inside the draw callback. If the player still owns media or
+downloaders have not joined, zero-cache cleanup must fail closed.
+The M3 accepted picture/audio path remains the default.

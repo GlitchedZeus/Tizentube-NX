@@ -277,6 +277,21 @@ if(TTNX_BUILD_TESTS)
         target_link_libraries(tizentube_nx_hls_sd_cache_tests PRIVATE tizentube_nx_core)
         add_test(NAME hls_sd_cache COMMAND tizentube_nx_hls_sd_cache_tests)
 
+        # Host-test native rolling producer thread: no UI-thread HTTP, no
+        # spin under backpressure, join before media deletion.
+        find_package(Threads REQUIRED)
+        add_executable(tizentube_nx_rolling_hls_worker_tests
+            tests/rolling_hls_worker_tests.cpp
+            switch/source/rolling_hls_worker.cpp)
+        target_include_directories(tizentube_nx_rolling_hls_worker_tests
+            PRIVATE switch/source)
+        target_compile_definitions(tizentube_nx_rolling_hls_worker_tests
+            PRIVATE TTNX_M4_ROLLING_HOST_TEST=1)
+        target_link_libraries(tizentube_nx_rolling_hls_worker_tests
+            PRIVATE Threads::Threads)
+        add_test(NAME rolling_hls_worker
+            COMMAND tizentube_nx_rolling_hls_worker_tests)
+
         # Opt-in file-backed HLS rolling cache. Accepted M3 path unchanged.
         add_executable(tizentube_nx_rolling_hls_sink_tests
             tests/rolling_hls_sink_tests.cpp switch/source/rolling_hls_sink.cpp)
@@ -291,13 +306,14 @@ if(TTNX_BUILD_TESTS)
         add_executable(tizentube_nx_rolling_muxed_hls_tests
             tests/rolling_muxed_hls_tests.cpp
             switch/source/rolling_hls_feed.cpp
-            switch/source/rolling_hls_sink.cpp)
+            switch/source/rolling_hls_sink.cpp
+            switch/source/rolling_hls_worker.cpp)
         target_include_directories(tizentube_nx_rolling_muxed_hls_tests
             PRIVATE switch/source)
         target_compile_definitions(tizentube_nx_rolling_muxed_hls_tests
             PRIVATE TTNX_M4_ROLLING_HOST_TEST=1)
         target_link_libraries(tizentube_nx_rolling_muxed_hls_tests
-            PRIVATE tizentube_nx_core)
+            PRIVATE tizentube_nx_core Threads::Threads)
         add_test(NAME rolling_muxed_hls COMMAND tizentube_nx_rolling_muxed_hls_tests)
 
         add_executable(tizentube_nx_storage_tests tests/storage_tests.cpp switch/source/app_storage.cpp)

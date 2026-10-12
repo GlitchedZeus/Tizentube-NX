@@ -1,4 +1,9 @@
 #include "rolling_hls_feed.hpp"
+#include "rolling_hls_native_job.hpp"
+#include "rolling_hls_worker.hpp"
+#include <atomic>
+#include <chrono>
+#include <thread>
 #include "tizentube_nx/playback/hls_playback_lease.hpp"
 #include <algorithm>
 #include <cstdlib>
@@ -105,6 +110,48 @@ void successful() {
     ck(work.close_after_player(true) && !fs::exists(Sink::kRoot),
        "repeated playback again ends with no downloaded media");
 }
+void threaded() {
+    reset();
+    LocalMedia http;
+    http.packets=6000; // actual verified 1.128 MiB TS per HTTPS response
+    playback::HlsSegmentReader reader(http);
+    Sink disk;
+    Feed feed(reader,disk);
+    ck(feed.begin(plan(16)),"native HLS job validates its VOD source");
+    switch_app::RollingMuxedHlsWorkerJob job(feed);
+    switch_app::RollingHlsWorker worker;
+    ck(worker.start(job),"real muxed HLS producer begins on background thread");
+    const auto await=[&](auto ready) {
+        for(unsigned i=0;i<5000;++i) {
+            if(ready())return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        return ready();
+    };
+    using State=switch_app::RollingHlsWorker::State;
+    ck(await([&]{return worker.snapshot().state==State::Waiting;}),
+       "reviewed native HTTP source reaches bounded backpressure");
+    const auto snap=worker.snapshot();
+    ck(snap.prefix_ready && snap.published_segments>=4,
+       "first A/V prefix is safely reported without blocking the UI");
+    ck(!worker.request_retirement(3,40000,false),
+       "unverified decoder release never schedules deletion");
+    ck(worker.request_retirement(3,40000,true),
+       "verified consumed segment window schedules worker-owned unlink");
+    ck(await([&]{return worker.snapshot().published_segments>
+                         snap.published_segments;}),
+       "real HTTPS fetch resumes after actual SD segment retirement");
+    worker.request_stop();
+    worker.join_downloads();
+    {
+        playback::HlsPlaybackLease lease;
+        ck(lease.acquire() && !worker.cleanup_after_decoder_closed(),
+           "even joined worker cannot delete media with active player lease");
+    }
+    ck(worker.cleanup_after_decoder_closed() && !fs::exists(Sink::kRoot) &&
+       worker.snapshot().state==State::Cleared,
+       "complete downloader join and decoder close leaves zero SD media");
+}
 void negative() {
     reset();
     {
@@ -179,7 +226,7 @@ void bounded() {
 }
 }
 int main() {
-    successful();negative();bounded();
+    successful();negative();bounded();threaded();
     reset();
     if(errors)std::cerr<<errors<<" rolling muxed transport failures\n";
     return errors?EXIT_FAILURE:EXIT_SUCCESS;
