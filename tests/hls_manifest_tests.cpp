@@ -169,6 +169,27 @@ void playlist_tests() {
        "https://r.googlevideo.com/api/manifest/hls_variant/%2e%2e/x"),
        "percent-encoded traversal blocked");
 }
+void expanded_master_formats() {
+    const std::string video_only=
+        "#EXTM3U\r\n#EXT-X-VERSION:7\r\n"
+        "#EXT-X-STREAM-INF:BANDWIDTH=750000,RESOLUTION=640x360,"
+        "FRAME-RATE=30.000,CODECS=\"avc1.4d401e\"\r\n"
+        +std::string(kVariant)+"\r\n";
+    check(!playback::parse_hls_master_playlist(video_only,kMaster),
+          "AVC-only HLS without independent audio still denied");
+    const auto approved=playback::parse_hls_master_playlist(video_only,kMaster,true);
+    check(approved && approved->compatible.size()==1 &&
+          approved->compatible.front().height==360,
+          "CRLF AVC-only master accepted with reviewed signed AAC");
+    auto hostile=video_only;
+    const auto at=hostile.find("avc1.4d401e");
+    hostile.replace(at,std::string("avc1.4d401e").size(),"av01.0.05");
+    check(!playback::parse_hls_master_playlist(hostile,kMaster,true),
+          "separate AAC never permits AV1-only media");
+    hostile=video_only;hostile.insert(7,"\r");
+    check(!playback::parse_hls_master_playlist(hostile,kMaster,true),
+          "embedded control CR refused");
+}
 void segment_tests() {
     const std::string valid=
         "#EXTM3U\n#EXT-X-VERSION:7\n"
@@ -232,7 +253,7 @@ void cache_aware_quality() {
 }
 } // namespace
 int main() {
-    player_request();playlist_tests();segment_tests();cache_aware_quality();
+    player_request();playlist_tests();expanded_master_formats();segment_tests();cache_aware_quality();
     if(failures)std::cerr<<failures<<" HLS regressions\n";
     return failures?EXIT_FAILURE:EXIT_SUCCESS;
 }

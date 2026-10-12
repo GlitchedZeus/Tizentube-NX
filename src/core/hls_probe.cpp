@@ -20,13 +20,23 @@ bool header_equal(std::string_view a,std::string_view b) {
     return true;
 }
 bool valid_mime(std::string_view mime) {
-    const auto end=mime.find(';');
-    mime=mime.substr(0,end);
-    while(!mime.empty() && mime.back()==' ')mime.remove_suffix(1);
-    return mime=="application/vnd.apple.mpegurl" ||
-           mime=="application/x-mpegurl" ||
-           mime=="audio/mpegurl" ||
-           mime=="application/octet-stream";
+    mime=mime.substr(0,mime.find(';'));
+    while(!mime.empty() && (mime.front()==' ' || mime.front()=='\t'))
+        mime.remove_prefix(1);
+    while(!mime.empty() && (mime.back()==' ' || mime.back()=='\t'))
+        mime.remove_suffix(1);
+    std::string normalized;
+    for(unsigned char ch:mime) {
+        if(ch<33 || ch>126)return false;
+        normalized.push_back(static_cast<char>(std::tolower(ch)));
+    }
+    // MIME tokens are case insensitive. text/plain HLS is only accepted
+    // when both #EXTM3U and the strict native HLS grammar validate.
+    return normalized=="application/vnd.apple.mpegurl" ||
+           normalized=="application/x-mpegurl" ||
+           normalized=="audio/mpegurl" ||
+           normalized=="application/octet-stream" ||
+           normalized=="text/plain";
 }
 bool within_sync_window(std::uint64_t a,std::uint64_t b) {
     if(!a || !b)return false;
@@ -83,7 +93,7 @@ std::optional<std::string> HlsSourceProbe::fetch_playlist(
         if(header_equal(h.name,"Content-Type")) {
             ++mime_count;
             if(!valid_mime(h.value)) {
-                last_error_=HlsProbeError::ManifestRejected;
+                last_error_=HlsProbeError::ManifestMimeRejected;
                 return std::nullopt;
             }
         } else if(header_equal(h.name,"Content-Encoding")) {
@@ -96,28 +106,28 @@ std::optional<std::string> HlsSourceProbe::fetch_playlist(
             ++length_count;
             std::uint64_t value=0;
             if(h.value.empty() || h.value.size()>7) {
-                last_error_=HlsProbeError::ManifestRejected;
+                last_error_=HlsProbeError::ManifestLengthRejected;
                 return std::nullopt;
             }
             for(unsigned char c:h.value) {
                 if(c<'0'||c>'9') {
-                    last_error_=HlsProbeError::ManifestRejected;
+                    last_error_=HlsProbeError::ManifestLengthRejected;
                     return std::nullopt;
                 }
                 value=value*10+static_cast<unsigned>(c-'0');
             }
             if(value!=response.response.body.size()) {
-                last_error_=HlsProbeError::ManifestRejected;
+                last_error_=HlsProbeError::ManifestLengthRejected;
                 return std::nullopt;
             }
         }
     }
     if(mime_count!=1 || length_count>1 || encoding_count>1) {
-        last_error_=HlsProbeError::ManifestRejected;
+        last_error_=HlsProbeError::ManifestMimeRejected;
         return std::nullopt;
     }
     if(!std::string_view(response.response.body).starts_with("#EXTM3U")) {
-        last_error_=HlsProbeError::ManifestRejected;
+        last_error_=HlsProbeError::ManifestBodyRejected;
         return std::nullopt;
     }
     return response.response.body;
@@ -156,9 +166,10 @@ std::optional<HlsProbePlan> HlsSourceProbe::inspect(
                               std::string_view::npos;
     if(contains_master && !contains_media) {
         const auto master=parse_hls_master_playlist(
-            manifest,source->master_playlist_url);
+            manifest,source->master_playlist_url,
+            !source->external_aac_url.empty());
         if(!master) {
-            last_error_=HlsProbeError::ManifestRejected;
+            last_error_=HlsProbeError::MasterRejected;
             return std::nullopt;
         }
         variant=choose_cache_bounded_hls_variant(
@@ -220,6 +231,10 @@ const char* describe_hls_probe_failure(HlsProbeError reason) noexcept {
         case HlsProbeError::ManifestTransport:return "Media host could not be reached.";
         case HlsProbeError::ManifestStatus:return "Signed video playlist expired or was refused.";
         case HlsProbeError::ManifestRejected:return "The video playlist is unsupported or unsafe.";
+        case HlsProbeError::ManifestMimeRejected:return "HLS response content type or encoding is not supported.";
+        case HlsProbeError::ManifestLengthRejected:return "HLS response body is incomplete or has invalid length.";
+        case HlsProbeError::ManifestBodyRejected:return "Media server returned data that is not an HLS playlist.";
+        case HlsProbeError::MasterRejected:return "HLS master has no usable compatible rendition or is unsafe.";
         case HlsProbeError::VariantUnavailable:return "No Switch-compatible H.264 video was provided.";
         case HlsProbeError::VideoSegmentsRejected:return "Video segments are unsupported or unsafe.";
         case HlsProbeError::AudioSegmentsRejected:return "AAC audio segments are unsupported or unsafe.";

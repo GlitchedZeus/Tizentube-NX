@@ -67,6 +67,8 @@ struct MediaHttp:net::HttpClient {
     int fail_on{0};
     int bad_mime_on{0};
     int bad_length_on{0};
+    int case_mime_on{0};
+    bool crlf_master{false},video_only_master{false},text_mime{false};
     int bad_status_on{0};
     int temporary_left{0},temporary_status{0};
     int permanent_status{302};
@@ -88,7 +90,23 @@ struct MediaHttp:net::HttpClient {
            r.headers[1].value!="identity")
             out.ok=false;
         if(hits==fail_on)out.ok=false;
-        if(r.url==kMaster)out.response.body=kMasterData;
+        if(r.url==kMaster) {
+            out.response.body=kMasterData;
+            if(video_only_master) {
+                const std::string format="avc1.64001f,mp4a.40.2";
+                const auto at=out.response.body.find(format);
+                if(at!=std::string::npos)
+                    out.response.body.replace(at,format.size(),"avc1.64001f");
+            }
+            if(crlf_master) {
+                std::string converted;
+                for(char ch:out.response.body) {
+                    if(ch=='\n')converted.push_back('\r');
+                    converted.push_back(ch);
+                }
+                out.response.body=std::move(converted);
+            }
+        }
         else if(r.url==kDirect)out.response.body=media("v");
         else if(r.url==kVideo) {
             out.response.body=media("v");
@@ -105,7 +123,10 @@ struct MediaHttp:net::HttpClient {
             }
         } else out.ok=false;
         out.response.headers={
-            {"Content-Type",hits==bad_mime_on?"text/html":"application/vnd.apple.mpegurl"},
+            {"Content-Type",hits==bad_mime_on?"text/html":
+                hits==case_mime_on?"Application/X-MpegURL; charset=UTF-8":
+                text_mime?"text/plain; charset=UTF-8":
+                "application/vnd.apple.mpegurl"},
             {"Content-Length",
              std::to_string(out.response.body.size()+(hits==bad_length_on?1:0))}
         };
@@ -157,6 +178,25 @@ void direct_media_vod() {
 
 void blocked() {
     auto session=guest();
+    {
+        GuestHttp yt;MediaHttp cdn;
+        cdn.crlf_master=true;cdn.case_mime_on=1;
+        playback::HlsSourceProbe probe(yt,cdn,session);
+        check(probe.inspect(kId).has_value() && cdn.hits==3,
+              "real CRLF master and case-insensitive x-mpegURL supported");
+    }
+    {
+        GuestHttp yt;MediaHttp cdn;cdn.text_mime=true;
+        playback::HlsSourceProbe probe(yt,cdn,session);
+        check(probe.inspect(kId).has_value(),
+              "text/plain safe playlist requires same strict manifest grammar");
+    }
+    {
+        GuestHttp yt;MediaHttp cdn;cdn.video_only_master=true;
+        playback::HlsSourceProbe probe(yt,cdn,session);
+        check(probe.inspect(kId).has_value(),
+              "AVC-only master paired with reviewed AUDIO group accepted");
+    }
     {
         GuestHttp yt;MediaHttp cdn;
         cdn.temporary_left=1;cdn.temporary_status=503;

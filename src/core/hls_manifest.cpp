@@ -55,7 +55,8 @@ std::optional<std::vector<std::string>> split_lines(std::string_view body) {
     std::vector<std::string> lines;
     while(!body.empty()) {
         const auto at=body.find('\n');
-        const auto line=body.substr(0,at);
+        auto line=body.substr(0,at);
+        if(!line.empty() && line.back()=='\r')line.remove_suffix(1);
         if(!ascii_line(line) || lines.size()>=kMaxSegments*4)return std::nullopt;
         lines.push_back(trim(line));
         if(at==std::string_view::npos)break;
@@ -173,10 +174,11 @@ bool resolution(std::string_view s,unsigned& w,unsigned& h) {
     w=static_cast<unsigned>(width);h=static_cast<unsigned>(height);
     return true;
 }
-bool codecs_supported(std::string_view codecs) {
+bool codecs_supported(std::string_view codecs,bool has_approved_audio) {
     return (codecs.find("avc1.")!=std::string_view::npos ||
             codecs.find("avc3.")!=std::string_view::npos) &&
-           codecs.find("mp4a.40.")!=std::string_view::npos &&
+           (codecs.find("mp4a.40.")!=std::string_view::npos ||
+            has_approved_audio) &&
            codecs.find("av01.")==std::string_view::npos &&
            codecs.find("hvc1.")==std::string_view::npos &&
            codecs.find("hev1.")==std::string_view::npos;
@@ -198,7 +200,8 @@ bool is_reviewable_hls_child_url(std::string_view url) {
 }
 
 std::optional<HlsMaster> parse_hls_master_playlist(
-    std::string_view body, std::string_view master_url) {
+    std::string_view body, std::string_view master_url,
+    bool approved_external_aac) {
     if(!safe_child(master_url))return std::nullopt;
     const auto lines=split_lines(body);
     if(!lines)return std::nullopt;
@@ -231,8 +234,12 @@ std::optional<HlsMaster> parse_hls_master_playlist(
         const auto uri=resolve_url(master_url,next);
         if(!uri)return std::nullopt;
         auto codec=attrs->find("CODECS"), resolution_attr=attrs->find("RESOLUTION");
+        bool has_reviewed_hls_audio=false;
+        if(const auto audio=attrs->find("AUDIO");audio!=attrs->end())
+            has_reviewed_hls_audio=audio_groups.find(audio->second)!=audio_groups.end();
         if(codec==attrs->end() || resolution_attr==attrs->end() ||
-           !codecs_supported(codec->second))continue;
+           !codecs_supported(codec->second,
+                has_reviewed_hls_audio||approved_external_aac))continue;
         HlsVariant candidate;
         candidate.playlist_url=*uri;
         if(!resolution(resolution_attr->second,candidate.width,candidate.height))continue;

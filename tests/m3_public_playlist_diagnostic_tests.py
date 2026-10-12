@@ -15,7 +15,7 @@ class PublicPlaylistClassification(unittest.TestCase):
             "HLS_MIME_MEDIA_CRLF")
     def test_safe_diagnostic_categories(self):
         self.assertEqual(
-            classify_manifest(b"<html>blocked</html>","text/html","20"),
+            classify_manifest(b"<html>blocked</html>","text/html","19"),
             "HTML_MIME_MISMATCH_LENGTH")
         self.assertEqual(
             classify_manifest(

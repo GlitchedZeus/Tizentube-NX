@@ -28,7 +28,8 @@ struct HlsMaster {
 // permission or allow libmpv's internal HTTP stack to make requests.
 [[nodiscard]] bool is_reviewable_hls_child_url(std::string_view url);
 [[nodiscard]] std::optional<HlsMaster> parse_hls_master_playlist(
-    std::string_view manifest, std::string_view master_url);
+    std::string_view manifest, std::string_view master_url,
+    bool approved_external_aac=false);
 [[nodiscard]] std::optional<HlsVariant> choose_hls_variant(
     const HlsMaster& playlist, unsigned max_height=720,
     unsigned max_fps=30);

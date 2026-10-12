@@ -532,3 +532,14 @@ master/media/CRLF/format class, or HTTP category). It does not print
 or retain signed URLs, visitor identifiers, response JSON, or media.
 This diagnostic is deliberately non-gating: CDN restrictions on a
 GitHub runner are not the same as the user's Switch network.
+
+### Ordinary-video HLS compatibility hardening
+
+The native HLS parser accepts standards-conforming CRLF, case-insensitive
+MIME types and plaintext only when a genuine #EXTM3U playlist passes all
+the existing strict HLS validation. AVC-only video masters are now permitted
+only with an independently approved signed AAC URL from the same guest
+player response or an approved HLS AUDIO group. Forbidden hosts, AES keys,
+ad-cue tags, AV1/HEVC and Shorts remain denied. The generic manifest
+failure is split into MIME, body, length and master-specific statuses
+to diagnose the precise stage on hardware.
