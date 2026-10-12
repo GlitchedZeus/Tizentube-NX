@@ -10,9 +10,11 @@ namespace ttnx::playback {
 class AacMp4Structure {
 public:
     void reset() noexcept { *this=AacMp4Structure{}; }
-    bool begin(std::uint64_t length) noexcept {
+    bool begin(std::uint64_t length,
+               std::uint64_t limit=128ULL*1024*1024) noexcept {
         reset();
-        if(length<1024 || length>128ULL*1024*1024)return false;
+        if(length<1024 || !limit || limit>512ULL*1024*1024 ||
+           length>limit)return false;
         total_=length;
         valid_=true;
         return true;

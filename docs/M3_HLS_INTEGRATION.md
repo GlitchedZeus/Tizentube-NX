@@ -579,3 +579,16 @@ It keeps the original guest visitor, video ID, no credentials,
 normal-only/Shorts exclusion, signed CDN allowlist and existing
 H.264/AAC filtering. The accepted M2 direct WEB extractor behavior
 remains unchanged for its own tests and consumers.
+
+### New adaptive H.264 video and AAC pair cache (development)
+
+The app's disposable native media cache now supports independently
+downloaded video-only MP4 and audio-only MP4 with a two-file transaction.
+Before declaring either file ready, both MP4 structures must have complete,
+bounded ftyp, moov, and mdat boxes. A fsynced marker records both exact
+lengths and is atomically renamed **only after both files finish**. New
+downloads invalidate the marker immediately; abort, torn files, missing audio,
+or an active libmpv lease must never present a playable pair. The previous
+muxed MP4 slot and HLS cache remain separate, with all paths fixed beneath
+the app-owned disposable media cache. Host regressions cover complete pairs,
+partial audio/video, corrupt structure, and active decoder lease.
