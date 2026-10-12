@@ -32,7 +32,17 @@ class CachedMpv {
 public:
     explicit CachedMpv(bool hls=false,bool adaptive=false):
         pixels_(kWidth*kHeight*4,0),use_hls_(hls),use_adaptive_(adaptive){}
-    ~CachedMpv() { close(); }
+    ~CachedMpv() {
+        // Closing libmpv releases every media FD and the exclusive lease.
+        // Only now may the app erase the playback session's disposable SD
+        // bytes, including video/audio that Replay kept while this view lived.
+        close();
+        const bool files=SwitchMediaCacheSink::discard_session_media();
+        const bool hls=SwitchHlsCacheSink::discard_session_media();
+        M3Diagnostics::record(M3Stage::Cache,
+            files && hls ? M3Event::Pass : M3Event::Fail,
+            6,files ? 1 : 0,hls ? 1 : 0);
+    }
     bool init() {
         M3Diagnostics::record(M3Stage::Player,M3Event::Start,use_hls_ ? 2 : (use_adaptive_ ? 3 : 1),0,0);
         if (handle_) return renderer_!=nullptr;

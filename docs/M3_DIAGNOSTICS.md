@@ -204,3 +204,25 @@ Host regression tests model the pinned fade behavior and require the
 specific pre-push visibility initialization and watchdog. A new physical
 run is still mandatory to accept uninterrupted picture, audio, replay,
 pause/resume, seeking and Back behavior.
+
+## Ephemeral playback cache policy (accepted M3 checkpoint preserved)
+
+TizenTube NX is **not a video downloader or persistent offline library**.
+Its SD media-cache holds only the current temporary playable file pair (or
+HLS segments) for rewind, pause and Replay while the player is open. After
+libmpv closes all file descriptors and releases its exclusive lease, the
+M3 player destructor removes completed audio, video, backup/partial paths,
+and HLS ready/pending/previous files. A failed/cancelled download is swept
+as soon as its worker joins, and a power-loss residue is swept on next app
+startup *before* another new media session begins. If cleanup fails, a new
+video request refuses to proceed rather than silently accumulating more
+cache. Never delete settings, search data or numeric SD diagnostics.
+
+The storage deletion API is a narrowly scoped whitelist, uses lstat() to
+reject symlinks or other unexpected types, and rejects cleanup when a
+playback lease is active. The HLS cleanup only enumerates its three known
+media directories and only deletes the known playlist/audio/segment names.
+Unknown files are preserved and cause a fail-closed result. This deletion
+is ordinary filesystem unlinking, not forensic secure-erasure of SD flash.
+A future streaming/ring-buffer player can remove the need for complete
+pre-downloads; that work must be hardware-tested independently.

@@ -1449,6 +1449,12 @@ private:
 
 
 #ifdef TTNX_M3_INTEGRATED
+    // Do not silently retain a completed or partial prior video. The
+    // on-disk media folder is always throwaway, never watch history.
+    static bool discard_m3_session_media() noexcept {
+        return ttnx::switch_app::SwitchMediaCacheSink::discard_session_media() &&
+               ttnx::switch_app::SwitchHlsCacheSink::discard_session_media();
+    }
     void publish_m3_feedback_on_ui(const std::string& video_id) {
         // Global status is above Search results and offscreen when Play is
         // focused. Put a diagnostic next to the actual selected video.
@@ -1474,6 +1480,12 @@ private:
             return;
         }
         if (media_worker_.joinable()) media_worker_.join();
+        if(!discard_m3_session_media()) {
+            media_feedback_="M3: cannot remove prior temporary media from SD. "
+                            "Free the app cache before playing.";
+            publish_m3_feedback_on_ui(normal_video_id);
+            return;
+        }
         active_m3_video_id_ = normal_video_id;
         const bool diagnostic_recording=ttnx::switch_app::M3Diagnostics::begin_session();
         (void)diagnostic_recording;
@@ -1766,6 +1778,12 @@ private:
         }
         media_busy_.store(false);
         media_done_.store(false);
+        if(!success) {
+            // Failed/cancelled transfers never leave downloaded AAC or an
+            // incomplete video lingering until a future launch.
+            if(!discard_m3_session_media())
+                media_feedback_+=" [SD temporary-media cleanup failed]";
+        }
         if(ttnx::switch_app::M3Diagnostics::available()) {
             media_feedback_+=" [SD log: m3-playback.log]";
         }
@@ -2246,6 +2264,15 @@ int main(int, char**) {
     ttnx::record_boot_event("boot-00-main");
     const bool storage_ready = ttnx::initialize_storage();
     ttnx::record_boot_event("boot-01-storage");
+#ifdef TTNX_M3_INTEGRATED
+    // An app crash or Switch power loss may bypass player destructors.
+    // Next successful launch removes *only* known media files, never user
+    // settings, numeric diagnostics, downloads from other applications.
+    if(storage_ready) {
+        (void)ttnx::switch_app::SwitchMediaCacheSink::discard_session_media();
+        (void)ttnx::switch_app::SwitchHlsCacheSink::discard_session_media();
+    }
+#endif
     const auto settings = ttnx::load_settings();
 
     brls::Logger::setLogLevel(brls::LogLevel::ERROR);

@@ -10,6 +10,14 @@ SOURCE=(Path(__file__).resolve().parents[1]/
         "switch/source/m3_player_activity.cpp").read_text()
 
 class M3NativeRendererContract(unittest.TestCase):
+    def test_downloads_erased_only_after_decoder_release(self):
+        self.assertIn("const bool files=SwitchMediaCacheSink::discard_session_media()",SOURCE)
+        self.assertIn("const bool hls=SwitchHlsCacheSink::discard_session_media()",SOURCE)
+        destructor=SOURCE.split("~CachedMpv() {",1)[1].split("    bool init()",1)[0]
+        self.assertLess(destructor.index("close();"),
+                        destructor.index("discard_session_media()"))
+        self.assertIn("ready_lease_.release();",SOURCE)
+
     def test_pinned_borealis_opaque_activity_fade_is_primed(self):
         # The pinned upstream View::show() returns early for !hidden,
         # leaving pushActivity()'s initial alpha=0 untouched. This is
