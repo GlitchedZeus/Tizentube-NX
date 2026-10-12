@@ -100,6 +100,10 @@ void successful() {
     }
     ck(work.close_after_player(true) && !fs::exists(Sink::kRoot),
        "worker complete+decoder closed leaves zero saved media");
+    ck(work.begin(plan()) && work.pump()==Feed::State::PrefixReady,
+       "second video reuses the same worker and sink after full cleanup");
+    ck(work.close_after_player(true) && !fs::exists(Sink::kRoot),
+       "repeated playback again ends with no downloaded media");
 }
 void negative() {
     reset();

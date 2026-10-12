@@ -100,6 +100,16 @@ bool RollingHlsSink::discard() noexcept {
     for(const auto& path:paths)if(!remove_file(path))return false;
     return rmdir(kRoot)==0 || errno==ENOENT;
 }
+bool RollingHlsSink::close_session() noexcept {
+    if(!discard())return false;
+    segments_.clear();
+    bytes_=0;
+    next_=0;
+    target_seconds_=0;
+    started_=false;
+    finished_=false;
+    return true;
+}
 bool RollingHlsSink::begin(std::uint64_t maximum_segment_ms) {
     if(!maximum_segment_ms || maximum_segment_ms>60000)return false;
     if(started_ || playback::HlsPlaybackLease::is_active() ||

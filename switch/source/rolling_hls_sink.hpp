@@ -26,6 +26,9 @@ public:
     [[nodiscard]] bool finish();
     // Caller must close libmpv and join workers before discarding media.
     [[nodiscard]] static bool discard() noexcept;
+    // Clear this instance only after every tracked media file is safely
+    // removed and the player has released the global HLS decoder lease.
+    [[nodiscard]] bool close_session() noexcept;
     [[nodiscard]] std::uint64_t bytes() const noexcept {return bytes_;}
     [[nodiscard]] std::size_t active_segments() const noexcept {return segments_.size();}
     [[nodiscard]] std::size_t next_index() const noexcept {return next_;}

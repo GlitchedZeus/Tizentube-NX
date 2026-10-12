@@ -161,7 +161,7 @@ bool RollingMuxedHlsSession::retire_before(
 
 bool RollingMuxedHlsSession::close_after_player(bool decoder_closed) noexcept {
     if(!decoder_closed)return false;
-    if(!RollingHlsSink::discard())return false;
+    if(!sink_.close_session())return false;
     coordinator_.cancel_pending();
     if(!coordinator_.cancel(true))return false;
     segments_.clear();

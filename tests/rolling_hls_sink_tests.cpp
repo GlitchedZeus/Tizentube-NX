@@ -69,7 +69,12 @@ int main(){
     ck(transactional.retire_before(1) &&
        read(root/"stream.m3u8").find("#EXT-X-ENDLIST")!=std::string::npos,
        "retiring a segment from a completed video preserves ENDLIST");
-    ck(RollingHlsSink::discard(),"transactional cache fully purged");
+    ck(transactional.close_session() && !fs::exists(root),
+       "instance teardown resets internal accounting and finished state");
+    ck(transactional.begin() && transactional.append(0,3000,packet),
+       "reused sink writes a new clip after cleanup");
+    ck(transactional.close_session() && !fs::exists(root),
+       "second session also leaves zero media bytes");
     fs::remove(foreign);
   }
   RollingHlsSink hour;
