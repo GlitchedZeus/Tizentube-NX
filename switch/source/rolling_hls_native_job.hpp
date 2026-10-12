@@ -9,6 +9,7 @@ namespace ttnx::switch_app {
 // begin(plan) must succeed on the owning thread BEFORE worker.start(job).
 class RollingMuxedHlsWorkerJob final : public RollingHlsWorker::Job {
 public:
+    using Step=RollingHlsWorker::Step;
     explicit RollingMuxedHlsWorkerJob(RollingMuxedHlsSession& session)
         : session_(session) {}
     Step fetch_one() override {
