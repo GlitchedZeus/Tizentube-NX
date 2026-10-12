@@ -365,6 +365,18 @@ int main() {
        !fs::exists(base/"ready"),
        "cleanup resumes after unknown entry removed");
     fs::create_directories(base);
+    // Simulate a playlist of watched videos: after each complete
+    // transaction and player exit, the HLS cache must return to zero.
+    for(int round=0;round<20;++round) {
+        switch_app::SwitchHlsCacheSink sink;
+        const bool published=fully_stage(sink,source);
+        const bool purged=switch_app::SwitchHlsCacheSink::discard_session_media();
+        ck(published && purged &&
+           !fs::exists(base/"ready") && !fs::exists(base/"pending") &&
+           !fs::exists(base/"previous"),
+           "twenty sequential videos never accumulate HLS media");
+    }
+    fs::create_directories(base);
     const auto elsewhere=base.parent_path()/"elsewhere";
     fs::create_directories(elsewhere);
     std::ofstream(elsewhere/"v_00000.ts")<<"do not erase";

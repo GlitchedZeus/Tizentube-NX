@@ -38,6 +38,14 @@ class EphemeralPlaybackContract(unittest.TestCase):
             self.assertNotIn(forbidden,media)
             self.assertNotIn(forbidden,hls)
 
+    def test_failed_adaptive_stream_cancels_sibling_before_publish(self):
+        block=MAIN.split('auto download=[&]',1)[1].split('} else feedback=hls_reason+',1)[0]
+        self.assertIn('std::atomic_bool sibling_failed{false}',block)
+        self.assertIn('if(!good && sibling_failed)sibling_failed->store(true)',block)
+        self.assertIn('sibling_failed && sibling_failed->load()',block)
+        self.assertIn('&sibling_failed',block)
+        self.assertLess(block.index('video_result.get()'),
+                        block.index('Cache::publish_adaptive_pair()'))
     def test_parallel_adaptive_reads_require_two_independent_clients_and_both_successes(self):
         block=MAIN.split('} else if(have_pair){',1)[1].split('} else feedback=hls_reason+',1)[0]
         for needle in ('LibnxMediaChunkTransport video_transport',

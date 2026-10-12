@@ -144,6 +144,20 @@ int main(){
           fs::exists(folder/"do-not-delete"),
           "restart sweep removes crash leftovers, preserves unrelated files");
     // No ancestor of the app-owned media folder may be a symlink.
+    // Repeated videos must not build an accumulating watch library.
+    // Keep this test intentionally small/fast while exercising fsync,
+    // marker validation and the real bounded unlink implementation.
+    for(int round=0;round<20;++round) {
+        const bool played=stage(Slot::AdaptiveAudio,body) &&
+                          stage(Slot::AdaptiveVideo,body) &&
+                          SwitchMediaCacheSink::publish_adaptive_pair();
+        const bool cleaned=SwitchMediaCacheSink::discard_session_media();
+        check(played && cleaned &&
+              !fs::exists(SwitchMediaCacheSink::kAdaptiveVideo) &&
+              !fs::exists(SwitchMediaCacheSink::kAdaptiveAudio) &&
+              !fs::exists(SwitchMediaCacheSink::kAdaptiveMarker),
+              "repeated watched videos leave zero persistent media files");
+    }
     fs::remove_all(folder/"do-not-delete");
     fs::remove(folder/"unrelated-settings.ini");
     fs::remove_all(folder);
