@@ -373,6 +373,8 @@ private:
     std::atomic<unsigned> media_segments_done_{0};
     std::atomic<unsigned> media_segments_total_{0};
     std::atomic_bool media_external_aac_phase_{false};
+    std::atomic_bool media_buffer_ready_{false};
+    std::atomic<std::uint64_t> media_buffer_ms_{0};
     std::chrono::steady_clock::time_point media_last_ui_update_ =
         std::chrono::steady_clock::now();
     brls::Label* m3_status_label_{nullptr};
@@ -1480,6 +1482,8 @@ private:
         media_segments_done_.store(0);
         media_segments_total_.store(0);
         media_external_aac_phase_.store(false);
+        media_buffer_ready_.store(false);
+        media_buffer_ms_.store(0);
         media_feedback_ = "M3: locating approved guest HLS video/audio streams...";
         publish_m3_feedback_on_ui(normal_video_id);
 
@@ -1534,6 +1538,10 @@ private:
                                         static_cast<unsigned>(job.segments_completed()));
                                     media_external_aac_phase_.store(
                                         job.downloading_external_aac());
+                                    media_buffer_ready_.store(
+                                        job.startup_event_staged());
+                                    media_buffer_ms_.store(
+                                        job.startup_buffer_ms());
                                 }
                                 if(media_cancel_requested_.load()) {
                                     job.cancel();
@@ -1580,6 +1588,11 @@ private:
                     ? "M3 caching verified external AAC"
                     : "M3 HLS media segments: " + std::to_string(done) +
                       "/" + std::to_string(count);
+                if(media_buffer_ready_.load()) {
+                    media_feedback_ += " | " +
+                        std::to_string(media_buffer_ms_.load()/1000) +
+                        "s video buffered (finishing cache)";
+                }
                 media_feedback_ += " | " + std::to_string(current / 1024) +
                                    " KiB downloaded";
                 if (total) media_feedback_ += " / " + std::to_string(total / 1024) + " KiB";

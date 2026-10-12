@@ -199,6 +199,7 @@ int main() {
            "missing video segment cannot overwrite good event snapshot");
         ck(sink.write_segment(false,false,1,"TS-SECOND") &&
            sink.stage_startup_event(paired,2) &&
+           read(base/"pending/video_event.m3u8").find("v_00001.ts")!=std::string::npos &&
            sink.publish(paired),
            "atomic event snapshot grows and final full-cache commit succeeds");
         ck(!fs::exists(base/"ready/video_event.m3u8") &&

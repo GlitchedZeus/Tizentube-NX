@@ -413,7 +413,9 @@ void failure_cases() {
             (void)job.pump();
         check(job.state()==playback::HlsCacheState::Ready &&
               sink.audio_appends==1 && sink.aac_bytes==2048 &&
-              sink.publishes==1 && audio.requests==1,
+              sink.publishes==1 && audio.requests==1 &&
+              job.startup_event_staged() &&
+              job.staged_event_segments()==2,
               "AAC fully fetched with 206 range before video/audio commit");
     }
     {

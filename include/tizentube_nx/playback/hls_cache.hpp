@@ -77,6 +77,9 @@ public:
     [[nodiscard]] bool startup_event_staged() const noexcept {
         return startup_event_staged_;
     }
+    [[nodiscard]] std::size_t staged_event_segments() const noexcept {
+        return startup_event_segments_;
+    }
     static constexpr std::uint64_t kMaxTotalBytes=512ULL*1024*1024;
 private:
     HlsSegmentReader& reader_;
@@ -97,7 +100,8 @@ private:
     std::uint64_t aac_offset_{0}, aac_total_{0};
     AacMp4Structure aac_structure_{};
     HlsStartupBuffer startup_buffer_{};
-    bool startup_event_attempted_{false},startup_event_staged_{false};
+    bool startup_event_staged_{false};
+    std::size_t startup_event_segments_{0};
     static constexpr std::uint64_t kMaxAacBytes=128ULL*1024*1024;
 };
 

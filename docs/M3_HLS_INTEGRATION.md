@@ -470,3 +470,15 @@ growth, missing segments, local-only URLs and final cleanup.
 Switch live streaming remains disabled until stable active
 directory lifetime and incremental libmpv refresh are validated
 on device.
+
+### Growing staged event timeline and hardware progress
+
+The HLS worker now refreshes its private, atomically renamed
+`pending/video_event.m3u8` after **every newly persisted video
+segment**, rather than creating only one startup snapshot. Missing
+segments never enter the playlist, a failed optional snapshot cannot
+replace a complete cache, and the final VOD publication still strips
+the pending event file. The Search page now reports the verified
+startup-buffer duration while it safely completes the full cache,
+instead of implying early streaming is already enabled. Tests assert
+the staged timeline reaches the final number of segments.
