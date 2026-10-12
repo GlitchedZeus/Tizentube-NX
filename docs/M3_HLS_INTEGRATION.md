@@ -543,3 +543,20 @@ player response or an approved HLS AUDIO group. Forbidden hosts, AES keys,
 ad-cue tags, AV1/HEVC and Shorts remain denied. The generic manifest
 failure is split into MIME, body, length and master-specific statuses
 to diagnose the precise stage on hardware.
+
+### Second native route after unsupported HLS
+
+The integrated M3 media worker now attempts a separately authorized
+**muxed H.264/AAC MP4** through the already reviewed
+`GuestDirectExtractor → ProgressivePrepareJob → MediaDownloadJob`
+path when (and only when) a normal video's HLS manifest/variant fails
+compatibility checks. It preserves independent HTTPS Googlevideo
+policy, requires the same video ID, normal non-Shorts and guest
+playability, refuses DRM/cipher-only formats, performs bounded ranged
+media transfer into a disposable SD cache, and opens the completed
+`active.mp4` through the existing native player. Guest restrictions,
+403s, unsafe identity and transport failures do not trigger a
+different playback profile as a bypass. Download progress clearly
+identifies direct MP4 rather than HLS. The feature does not guarantee
+that YouTube offers a safe muxed MP4 for every video; if it does not,
+the app reports that category honestly instead of claiming success.
