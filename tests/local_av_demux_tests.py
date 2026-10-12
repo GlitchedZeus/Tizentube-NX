@@ -102,7 +102,8 @@ class LocalAvDemuxTests(unittest.TestCase):
     def test_native_mpv_uses_real_list_option_not_cli_only_alias(self):
         source = (pathlib.Path(__file__).resolve().parents[1] /
                   "switch/source/m3_player_activity.cpp").read_text()
-        self.assertIn('required("audio-files-append",', source)
+        self.assertIn('mpv_set_option(handle_,"audio-files",MPV_FORMAT_NODE', source)
+        self.assertNotIn('required("audio-files-append",', source)
         self.assertNotIn('required("audio-file",', source)
 
     def test_host_libmpv_selects_external_aac_and_controls(self):
@@ -121,6 +122,9 @@ class LocalAvDemuxTests(unittest.TestCase):
         mpv.mpv_set_option_string.argtypes = [ctypes.c_void_p,
                                                 ctypes.c_char_p, ctypes.c_char_p]
         mpv.mpv_set_option_string.restype = ctypes.c_int
+        mpv.mpv_set_option.argtypes = [ctypes.c_void_p, ctypes.c_char_p,
+                                       ctypes.c_int, ctypes.c_void_p]
+        mpv.mpv_set_option.restype = ctypes.c_int
         mpv.mpv_initialize.argtypes = [ctypes.c_void_p]
         mpv.mpv_initialize.restype = ctypes.c_int
         mpv.mpv_command.argtypes = [ctypes.c_void_p,
@@ -135,6 +139,20 @@ class LocalAvDemuxTests(unittest.TestCase):
         mpv.mpv_get_property_string.restype = ctypes.c_void_p
         mpv.mpv_free.argtypes = [ctypes.c_void_p]
         mpv.mpv_terminate_destroy.argtypes = [ctypes.c_void_p]
+
+        class Node(ctypes.Structure):
+            pass
+        class NodeList(ctypes.Structure):
+            _fields_ = [("num", ctypes.c_int),
+                        ("values", ctypes.POINTER(Node)),
+                        ("keys", ctypes.POINTER(ctypes.c_char_p))]
+        class NodeValue(ctypes.Union):
+            _fields_ = [("string", ctypes.c_char_p),
+                        ("flag", ctypes.c_int),
+                        ("int64", ctypes.c_int64),
+                        ("double", ctypes.c_double),
+                        ("list", ctypes.POINTER(NodeList))]
+        Node._fields_ = [("u", NodeValue), ("format", ctypes.c_int)]
 
         handle = mpv.mpv_create()
         self.assertTrue(handle, "mpv_create must return a real handle")
@@ -159,11 +177,18 @@ class LocalAvDemuxTests(unittest.TestCase):
             for key, value in [
                 ("config", "no"), ("vo", "null"), ("ao", "null"),
                 ("hwdec", "no"), ("pause", "yes"),
-                ("demuxer-lavf-o", "protocol_whitelist=file"),
-                ("audio-files-append", str(self.ready / "external_audio.m4a"))
+                ("demuxer-lavf-o", "protocol_whitelist=file")
             ]:
                 self.assertGreaterEqual(opt(key, value), 0,
                     f"libmpv rejected required option {key}")
+            raw_path = str(self.ready / "external_audio.m4a").encode()
+            item = Node(NodeValue(string=raw_path), 1)
+            item_array = (Node * 1)(item)
+            node_list = NodeList(1, item_array, None)
+            node = Node(NodeValue(list=ctypes.pointer(node_list)), 7)
+            self.assertGreaterEqual(mpv.mpv_set_option(
+                handle, b"audio-files", 6, ctypes.byref(node)), 0,
+                "real libmpv must support typed audio-files NODE_ARRAY")
             self.assertGreaterEqual(mpv.mpv_initialize(handle), 0,
                                     "host libmpv initialization")
             self.assertGreaterEqual(cmd("loadfile",

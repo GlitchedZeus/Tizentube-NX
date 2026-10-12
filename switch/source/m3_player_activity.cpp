@@ -72,10 +72,7 @@ public:
                 if(size_file)std::fclose(size_file);
                 if(length<1024 || length>128L*1024*1024 ||
                    !exact || expected!=static_cast<unsigned long long>(length) ||
-                   !// The 0.36 mpv audio-file alias is CLI/config-only. Append
-                   // the single SD path as an unescaped list item so
-                   // "sdmc:" is never mistaken for a path-list separator.
-                   required("audio-files-append",SwitchHlsCacheSink::kReadyExternalAac)) {
+                   !attach_external_aac()) {
                     status_="Required external AAC missing or unsupported by mpv";
                     close();return false;
                 }
@@ -96,6 +93,25 @@ public:
             close();return false;
         }
         status_="Ready: local verified cache";
+        return true;
+    }
+    bool attach_external_aac() {
+        // No pseudo-option suffixes: use a typed array so sdmc:/ remains
+        // ONE literal local path, not a colon-delimited list.
+        mpv_node one{};
+        one.format=MPV_FORMAT_STRING;
+        one.u.string=const_cast<char*>(SwitchHlsCacheSink::kReadyExternalAac);
+        mpv_node_list elements{};
+        elements.num=1;
+        elements.values=&one;
+        mpv_node array{};
+        array.format=MPV_FORMAT_NODE_ARRAY;
+        array.u.list=&elements;
+        const int rc=mpv_set_option(handle_,"audio-files",MPV_FORMAT_NODE,&array);
+        if(rc<0) {
+            status_=std::string("External audio config: ")+mpv_error_string(rc);
+            return false;
+        }
         return true;
     }
     bool play() {

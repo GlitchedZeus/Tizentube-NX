@@ -187,3 +187,13 @@ duration drift. Video-only HLS is no longer permitted simply because the
 origin returned a master playlist: audio must be verified in MPEG-TS metadata,
 supplied through an HLS audio rendition, or fully fetched through a reviewed
 external AAC source. All checks are fail-closed with no ad-player fallback.
+
+### 2026-10-11 verified libmpv configuration correction
+
+A real libmpv host test exposed `MPV_ERROR_OPTION_NOT_FOUND (-5)` for the
+previous pseudo-option `audio-files-append`, despite native compilation
+succeeding. The API now sets the real `audio-files` option with
+`MPV_FORMAT_NODE` containing one `MPV_FORMAT_NODE_ARRAY` of local filename
+strings. This preserves the literal Switch `sdmc:` path and avoids colon
+path-list parsing. The CI test also insists that mpv actually discovers and
+selects an audio track; build-only success does not count.
