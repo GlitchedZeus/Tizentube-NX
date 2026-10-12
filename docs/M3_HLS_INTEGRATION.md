@@ -482,3 +482,16 @@ the pending event file. The Search page now reports the verified
 startup-buffer duration while it safely completes the full cache,
 instead of implying early streaming is already enabled. Tests assert
 the staged timeline reaches the final number of segments.
+
+### Exact HTTP body framing on Switch TLS sockets
+
+The Horizon SSL media transport now stops reading immediately when
+a complete, unambiguous bounded `Content-Length` response has
+arrived, rather than always waiting for the server to close its
+connection. This is especially important for repeated signed HLS
+segments and HTTP-206 AAC ranges. The shared framing parser rejects
+oversized headers, conflicting lengths and Transfer-Encoding plus
+Content-Length ambiguity. Chunked replies retain the existing
+validated EOF/parser fallback. The strict destination whitelist,
+TLS certificate checks, 16 MiB media cap and no-redirect policy
+remain unchanged.

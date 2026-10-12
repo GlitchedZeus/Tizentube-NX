@@ -1,4 +1,5 @@
 #include "tizentube_nx/net/http1.hpp"
+#include "tizentube_nx/net/http1_framing.hpp"
 
 #include <cstdlib>
 #include <iostream>
@@ -79,6 +80,41 @@ int main() {
     control_header.headers.push_back({"X-Test", control_value});
     expect(post_url && !build_http1_request(control_header, *post_url),
            "header control characters rejected");
+
+
+    // Native SSL should stop as soon as an unambiguous Content-Length
+    // body is complete, not wait for the remote CDN to close its socket.
+    {
+        using net::HttpFrameKind;
+        const std::string fixed="HTTP/1.1 206 Partial Content\r\n"
+                                "Content-Length: 4\r\n"
+                                "Connection: keep-alive\r\n\r\nDATA";
+        const auto ok=net::inspect_http1_frame(fixed,1024);
+        expect(ok.kind==HttpFrameKind::FixedLength &&
+               ok.total==fixed.size(),
+               "206 response completes without requiring remote TLS EOF");
+        expect(net::inspect_http1_frame(fixed.substr(0,20),1024).kind==
+                   HttpFrameKind::HeadersPending,
+               "partial network header waits for more bytes");
+        expect(net::inspect_http1_frame(
+                   "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n",
+                   1024).kind==HttpFrameKind::NeedEof,
+               "chunked response continues through existing validated parser");
+        expect(net::inspect_http1_frame(
+                   "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n"
+                   "Content-Length: 3\r\n\r\nxx",1024).kind==
+                   HttpFrameKind::Rejected,
+               "conflicting repeated Content-Length rejected");
+        expect(net::inspect_http1_frame(
+                   "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n"
+                   "Content-Length: 4\r\n\r\n0000",1024).kind==
+                   HttpFrameKind::Rejected,
+               "TE and Content-Length framing ambiguity rejected");
+        expect(net::inspect_http1_frame(
+                   "HTTP/1.1 200 OK\r\nContent-Length: 9999999999\r\n\r\n",
+                   1024).kind==HttpFrameKind::Rejected,
+               "unbounded content length fails before allocation");
+    }
 
     const std::string fixed_response =
         "HTTP/1.1 200 OK\r\n"

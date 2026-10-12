@@ -1,6 +1,7 @@
 #include "libnx_http_client.hpp"
 
 #include "tizentube_nx/net/http1.hpp"
+#include "tizentube_nx/net/http1_framing.hpp"
 #include "tizentube_nx/net/outbound_policy.hpp"
 #ifdef TTNX_M3_MEDIA_PLANE
 #include "tizentube_nx/playback/playback.hpp"
@@ -221,6 +222,18 @@ bool read_all(SslConnection& connection, std::string& raw, std::string& error,
             return false;
         }
         raw.append(buffer, received);
+        const auto frame=net::inspect_http1_frame(raw,cap);
+        if(frame.kind==net::HttpFrameKind::Rejected) {
+            error="HTTPS response framing was invalid or exceeded bounds.";
+            return false;
+        }
+        if(frame.kind==net::HttpFrameKind::FixedLength) {
+            if(raw.size()>frame.total) {
+                error="HTTPS response exceeded declared Content-Length.";
+                return false;
+            }
+            if(raw.size()==frame.total)return true;
+        }
     }
 }
 
