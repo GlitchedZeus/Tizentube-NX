@@ -596,3 +596,7 @@ partial audio/video, corrupt structure, and active decoder lease.
 ### Native adaptive MP4 and separate AAC playback
 
 After rejecting an unsupported HLS playlist, VisionOS returns approved normal-video H.264 and AAC formats. The media worker now downloads the video MP4 and AAC MP4 as separately bounded signed HTTPS range transfers, validates both local containers, atomically publishes a two-file ready marker and opens them with libmpv using its typed local audio-files option. Both HLS and adaptive sources require actual AAC track selection before reporting playback success. Signed URLs stay in the media worker; no web player, Shorts, ad traffic, or arbitrary destinations are allowed. Failures preserve the HLS and direct-source stage instead of masking all errors as missing muxed MP4.
+
+### Real decoder proof for adaptive media
+
+The host media suite remuxes an independently generated 45-second H.264 MPEG-TS source into a real video-only MP4, pairs it with a separate AAC MP4, and runs FFmpeg and libmpv API playback including track selection and deep seeking. No signed network URL or server media enters this test. This validates local adaptive playback topology, not availability of these formats for a particular YouTube video on Switch.

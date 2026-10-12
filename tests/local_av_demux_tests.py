@@ -62,6 +62,15 @@ class LocalAvDemuxTests(unittest.TestCase):
         (cls.ready / "master.m3u8").write_text(
             "#EXTM3U\n#EXT-X-VERSION:7\n"
             "#EXT-X-STREAM-INF:BANDWIDTH=1500000\nvideo.m3u8\n")
+        # Remux the same *real* 45s H.264 video stream into an MP4 file.
+        # This proves the new adaptive topology independently of HLS parsing.
+        run("ffmpeg","-hide_banner","-loglevel","error","-y",
+            "-protocol_whitelist","file",
+            "-i",str(cls.ready/"master.m3u8"),
+            "-map","0:v:0","-an","-c:v","copy",
+            "-movflags","+faststart",str(cls.ready/"adaptive_video.mp4"))
+        shutil.copyfile(cls.ready/"external_audio.m4a",
+                        cls.ready/"adaptive_audio.m4a")
         (cls.ready / "audio_mode.txt").write_text("external\n")
         cls.expected_aac_bytes = (cls.ready / "external_audio.m4a").stat().st_size
         (cls.ready / "external_audio.bytes").write_text(
@@ -283,6 +292,31 @@ class LocalAvDemuxTests(unittest.TestCase):
         self.assertEqual(completed.returncode,0,
             "host libmpv must pass the original 6s buffered timeline "
             "after atomic EVENT playlist extension")
+
+    def test_real_adaptive_mp4_and_separate_aac_decode(self):
+        video=probe(self.ready/"adaptive_video.mp4")
+        audio=probe(self.ready/"adaptive_audio.m4a")
+        self.assertEqual([(x["codec_name"],x["codec_type"])
+                          for x in video["streams"]],[("h264","video")])
+        self.assertIn(("aac","audio"),
+                      [(x["codec_name"],x["codec_type"])
+                       for x in audio["streams"]])
+        self.assertLess(abs(float(video["format"]["duration"])-
+                            float(audio["format"]["duration"])),1.0)
+        run("ffmpeg","-hide_banner","-loglevel","error","-xerror",
+            "-i",str(self.ready/"adaptive_video.mp4"),
+            "-i",str(self.ready/"adaptive_audio.m4a"),
+            "-map","0:v:0","-map","1:a:0","-f","null","-")
+
+    def test_host_libmpv_adaptive_pair_load_seek_and_audio_selection(self):
+        import sys
+        program=pathlib.Path(__file__).resolve().parents[1]/"tools/m3_adaptive_mpv_probe.py"
+        done=subprocess.run([sys.executable,str(program),
+                             str(self.ready/"adaptive_video.mp4"),
+                             str(self.ready/"adaptive_audio.m4a")],
+                            capture_output=True,text=True,timeout=30)
+        self.assertEqual(done.returncode,0,
+                         "libmpv must select separate AAC and seek H264 MP4")
 
     def test_audio_missing_and_torn_files_are_not_complete(self):
         path = self.ready / "external_audio.m4a"
