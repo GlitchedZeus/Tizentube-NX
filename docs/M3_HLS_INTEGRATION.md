@@ -223,3 +223,11 @@ external AAC download and displays completed/total segments plus downloaded
 KiB. This makes lengthy transfers visibly cancellable without claiming that
 the full media is already playable; full playback still starts only after
 atomic video+audio publication. No network or decoder permissions are widened.
+
+### Longer headless AV decoder gate
+
+The synthetic local clip has been extended to 45 seconds. Host libmpv now
+receives a filename with a literal colon via the typed audio-files array,
+seeks to 30 seconds, resumes and checks that H.264 and AAC decoders advance
+after the seek. Stop and replay must yield a new FILE_LOADED event.
+This is a host software-decoding gate, not Switch audio-output acceptance.

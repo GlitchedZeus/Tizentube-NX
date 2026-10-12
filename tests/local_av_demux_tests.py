@@ -38,7 +38,7 @@ class LocalAvDemuxTests(unittest.TestCase):
         cls.ready.mkdir()
         run("ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
             "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=24",
-            "-t", "9", "-an", "-c:v", "libx264", "-preset", "ultrafast",
+            "-t", "45", "-an", "-c:v", "libx264", "-preset", "ultrafast",
             "-pix_fmt", "yuv420p", "-g", "72", "-sc_threshold", "0",
             "-f", "hls", "-hls_segment_type", "mpegts", "-hls_time", "3",
             "-hls_list_size", "0", "-hls_playlist_type", "vod",
@@ -46,13 +46,13 @@ class LocalAvDemuxTests(unittest.TestCase):
             str(cls.root / "upstream.m3u8"))
         run("ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
             "-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000",
-            "-t", "9", "-c:a", "aac", "-b:a", "96k",
+            "-t", "45", "-c:a", "aac", "-b:a", "96k",
             "-movflags", "+faststart", str(cls.ready / "external_audio.m4a"))
         incoming = (cls.root / "upstream.m3u8").read_text()
         durations = [float(m.group(1)) for m in
                      re.finditer(r"^#EXTINF:([0-9.]+),", incoming, re.M)]
-        assert 2 <= len(durations) <= 8
-        assert abs(sum(durations) - 9) < .1
+        assert 2 <= len(durations) <= 24
+        assert abs(sum(durations) - 45) < .1
         segs = "".join("#EXTINF:{:.3f},\nv_{:05d}.ts\n".format(d, i)
                        for i, d in enumerate(durations))
         (cls.ready / "video.m3u8").write_text(
@@ -181,7 +181,10 @@ class LocalAvDemuxTests(unittest.TestCase):
             ]:
                 self.assertGreaterEqual(opt(key, value), 0,
                     f"libmpv rejected required option {key}")
-            raw_path = str(self.ready / "external_audio.m4a").encode()
+            # A literal colon catches filename splitting at sdmc:-like paths.
+            colon_path = self.ready / "mount:external_audio.m4a"
+            shutil.copyfile(self.ready / "external_audio.m4a", colon_path)
+            raw_path = str(colon_path).encode()
             item = Node(NodeValue(string=raw_path), 1)
             item_array = (Node * 1)(item)
             node_list = NodeList(1, item_array, None)
@@ -222,15 +225,41 @@ class LocalAvDemuxTests(unittest.TestCase):
             self.assertTrue(video_seen, "H.264 video track must exist")
             self.assertTrue(selected_audio,
                 "real libmpv must attach and select the external AAC")
-            self.assertGreaterEqual(cmd("seek", "4", "absolute"), 0,
-                                    "libmpv must support local HLS seeking")
+            self.assertGreaterEqual(cmd("seek", "30", "absolute"), 0,
+                                    "libmpv must seek deep into the HLS video")
             self.assertGreaterEqual(cmd("cycle", "pause"), 0,
-                                    "libmpv must support pause/resume")
+                                    "libmpv must resume after seeking")
+            decoded = False
+            deadline = time.monotonic() + 12
+            while time.monotonic() < deadline:
+                event = mpv.mpv_wait_event(handle, 0.25).contents
+                if event.event_id == 7:
+                    self.fail("libmpv ended before post-seek decoder verification")
+                v = (prop("video-codec") or "").lower()
+                a = (prop("audio-codec") or "").lower()
+                position = prop("time-pos")
+                if "h264" in v and "aac" in a and position:
+                    try:
+                        decoded = float(position) >= 29
+                    except ValueError:
+                        pass
+                if decoded:
+                    break
+            self.assertTrue(decoded,
+                "H.264/AAC must decode and advance after the 30s seek")
             self.assertGreaterEqual(cmd("stop"), 0,
                                     "libmpv must support stop")
             self.assertGreaterEqual(cmd("loadfile",
                                          str(self.ready / "master.m3u8"), "replace"), 0,
                                     "libmpv must allow replay after stop")
+            replayed = False
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                event = mpv.mpv_wait_event(handle, 0.25).contents
+                if event.event_id == 8:
+                    replayed = True
+                    break
+            self.assertTrue(replayed, "replay must actually load the media")
         finally:
             mpv.mpv_terminate_destroy(handle)
 
