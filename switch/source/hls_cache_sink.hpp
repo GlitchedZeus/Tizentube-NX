@@ -52,6 +52,20 @@ public:
 #endif
 private:
     std::FILE* external_aac_file_{nullptr};
+    // Total clip budgets, not just individual 16 MiB segments. A malicious or
+    // unexpectedly large manifest must not consume the entire SD card.
+    static constexpr std::uint64_t kMaxVideoBytes=512ULL*1024*1024;
+    static constexpr std::uint64_t kMaxAudioBytes=128ULL*1024*1024;
+#ifdef TTNX_M3_CACHE_HOST_TEST
+public:
+    static void test_set_byte_limits(std::uint64_t video,std::uint64_t audio) noexcept {
+        test_video_limit_=video;test_audio_limit_=audio;
+    }
+private:
+    static inline std::uint64_t test_video_limit_=kMaxVideoBytes;
+    static inline std::uint64_t test_audio_limit_=kMaxAudioBytes;
+#endif
+    std::uint64_t video_bytes_{0},audio_bytes_{0};
     bool staged_{false};
     bool wrote_video_{false};
     std::uint64_t external_audio_bytes_{0};

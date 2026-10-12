@@ -338,6 +338,35 @@ int main() {
            fs::exists(base/"ready/master.m3u8"),
            "abort closes buffered AAC and removes it without damaging ready");
     }
+    // A manifest with many small legitimate segments must never grow
+    // beyond the total cache budget, even if every segment passes its
+    // individual 16 MiB check.
+    {
+        using Sink=switch_app::SwitchHlsCacheSink;
+        Sink::test_set_byte_limits(19,12);
+        Sink sink;
+        ck(sink.begin(source) &&
+           sink.write_segment(false,true,0,"INIT") &&
+           sink.write_segment(false,false,0,"123456789012345") &&
+           !sink.write_segment(false,false,1,"OVER") &&
+           sink.write_segment(true,true,0,"INIT") &&
+           sink.write_segment(true,false,0,"12345678") &&
+           !sink.write_segment(true,false,1,"OVER"),
+           "HLS aggregate byte budgets reject oversized multi-segment clips");
+        sink.abort();
+        Sink::test_set_byte_limits(19,12);
+        auto external=plan();
+        external.audio_segments.reset();
+        external.source.external_aac_url=
+            "https://r1.googlevideo.com/videoplayback?itag=140";
+        Sink audio_sink;
+        ck(audio_sink.begin(external) &&
+           audio_sink.append_external_aac("12345678") &&
+           !audio_sink.append_external_aac("123456789"),
+           "external AAC counts against the same bounded temporary audio budget");
+        audio_sink.abort();
+        Sink::test_set_byte_limits(512ULL*1024*1024,128ULL*1024*1024);
+    }
     // Exiting a player must not leave the completed HLS media, or any
     // failed/incomplete candidate, on SD. Only app-owned known files go.
     ck(switch_app::SwitchHlsCacheSink::discard_session_media() &&
@@ -364,6 +393,20 @@ int main() {
     ck(switch_app::SwitchHlsCacheSink::discard_session_media() &&
        !fs::exists(base/"ready"),
        "cleanup resumes after unknown entry removed");
+    fs::create_directories(base/"ready");
+    fs::create_directories(base/"pending");
+    fs::create_directories(base/"previous");
+    std::ofstream(base/"ready/v_00000.ts")<<"valid ready";
+    std::ofstream(base/"pending/v_00001.ts")<<"valid partial";
+    std::ofstream(base/"previous/suspicious.txt")<<"unknown";
+    ck(!switch_app::SwitchHlsCacheSink::discard_session_media() &&
+       fs::exists(base/"ready/v_00000.ts") &&
+       fs::exists(base/"pending/v_00001.ts"),
+       "HLS global preflight preserves ALL stages when another stage is poisoned");
+    fs::remove(base/"previous/suspicious.txt");
+    ck(switch_app::SwitchHlsCacheSink::discard_session_media() &&
+       !fs::exists(base/"ready") && !fs::exists(base/"pending"),
+       "HLS purge resumes once unexpected prior-stage contents are cleared");
     fs::create_directories(base);
     // Simulate a playlist of watched videos: after each complete
     // transaction and player exit, the HLS cache must return to zero.

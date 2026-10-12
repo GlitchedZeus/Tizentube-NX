@@ -16,6 +16,28 @@
 
 namespace ttnx::switch_app {
 namespace {
+bool safe_media_ancestors() noexcept {
+#ifdef TTNX_M3_CACHE_HOST_TEST
+    static constexpr const char* ancestors[]={
+        "/tmp/ttnx-adaptive-cache-test",
+        "/tmp/ttnx-adaptive-cache-test/switch",
+        "/tmp/ttnx-adaptive-cache-test/switch/TizenTube-NX",
+        SwitchMediaCacheSink::kFolder
+    };
+#else
+    static constexpr const char* ancestors[]={
+        "sdmc:/switch","sdmc:/switch/TizenTube-NX",
+        SwitchMediaCacheSink::kFolder
+    };
+#endif
+    for(const char* path:ancestors) {
+        struct stat entry{};
+        if(lstat(path,&entry)==0) {
+            if(!S_ISDIR(entry.st_mode))return false;
+        } else if(errno!=ENOENT)return false;
+    }
+    return true;
+}
 bool ensure_folder(const char* path) {
     if (mkdir(path, 0700) == 0) return true;
     if (errno != EEXIST) return false;
@@ -99,7 +121,7 @@ const char* SwitchMediaCacheSink::backup() const noexcept {
     return kComplete;
 }
 bool SwitchMediaCacheSink::discard_session_media() noexcept {
-    if(playback::HlsPlaybackLease::is_active())return false;
+    if(playback::HlsPlaybackLease::is_active() || !safe_media_ancestors())return false;
     // A symlinked cache folder must never redirect our known-name unlinks
     // into unrelated SD locations. lstat every traversed app-owned root.
     struct stat parent{},root{};
@@ -133,6 +155,14 @@ bool SwitchMediaCacheSink::discard_session_media() noexcept {
         "sdmc:/switch/TizenTube-NX/media-cache/adaptive_verified.txt.part"
 #endif
     };
+    // Inventory every fixed path first. Do not partially erase the other
+    // playable tracks if one known slot has become a symlink/directory.
+    for(const char* path:names) {
+        struct stat entry{};
+        if(lstat(path,&entry)!=0) {
+            if(errno!=ENOENT)return false;
+        } else if(!S_ISREG(entry.st_mode))return false;
+    }
     bool okay=true;
     for(const char* path:names) {
         struct stat entry{};
@@ -147,7 +177,7 @@ bool SwitchMediaCacheSink::discard_session_media() noexcept {
 void SwitchMediaCacheSink::invalidate_adaptive_pair() noexcept {
     // Refuse to invalidate a published marker while libmpv might still
     // use either file. This also protects Replay from a second Search.
-    if(playback::HlsPlaybackLease::is_active())return;
+    if(playback::HlsPlaybackLease::is_active() || !safe_media_ancestors())return;
     (void)std::remove(kAdaptiveMarker);
 }
 bool SwitchMediaCacheSink::adaptive_pair_valid() noexcept {
@@ -165,7 +195,7 @@ bool SwitchMediaCacheSink::adaptive_pair_valid() noexcept {
     return exact && marked_v==v && marked_a==a;
 }
 bool SwitchMediaCacheSink::publish_adaptive_pair() noexcept {
-    if(playback::HlsPlaybackLease::is_active())return false;
+    if(playback::HlsPlaybackLease::is_active() || !safe_media_ancestors())return false;
     // Preserve fail-closed partial state if any file was replaced/torn.
     invalidate_adaptive_pair();
     std::uint64_t v=0,a=0;
@@ -190,7 +220,7 @@ bool SwitchMediaCacheSink::begin() {
     last_error_errno_=0;
     // The native player also acquires this lease for completed MP4.
     // Never overwrite a file while libmpv could have its descriptors open.
-    if(playback::HlsPlaybackLease::is_active())return false;
+    if(playback::HlsPlaybackLease::is_active() || !safe_media_ancestors())return false;
     abort();
     // No user-input path manipulation. The only SD writes stay under this
     // app-owned disposable cache folder, never a save/emulator directory.
@@ -241,7 +271,8 @@ bool SwitchMediaCacheSink::append(std::string_view bytes) {
 }
 
 bool SwitchMediaCacheSink::finish() {
-    if (!file_ || size_ == 0 || playback::HlsPlaybackLease::is_active()) {
+    if (!file_ || size_ == 0 || playback::HlsPlaybackLease::is_active() ||
+        !safe_media_ancestors()) {
         record_failure(StorageStep::Flush,EBUSY);
         return false;
     }
@@ -325,7 +356,7 @@ void SwitchMediaCacheSink::abort() noexcept {
         std::fclose(file_);
         file_ = nullptr;
     }
-    (void)std::remove(partial());
+    if(safe_media_ancestors())(void)std::remove(partial());
     size_ = 0;
 }
 

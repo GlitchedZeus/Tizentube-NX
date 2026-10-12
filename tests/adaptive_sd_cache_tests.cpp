@@ -158,6 +158,24 @@ int main(){
               !fs::exists(SwitchMediaCacheSink::kAdaptiveMarker),
               "repeated watched videos leave zero persistent media files");
     }
+    {
+        const auto outside=fs::path("/tmp/ttnx-adaptive-cache-test/safe-target");
+        std::ofstream(outside)<<"do not change";
+        std::ofstream(folder/"active.mp4")<<"existing video";
+        std::ofstream(folder/"adaptive_audio.m4a.part")<<"partial audio";
+        fs::create_symlink(outside,folder/"active.mp4.part");
+        check(!SwitchMediaCacheSink::discard_session_media() &&
+              fs::exists(folder/"active.mp4") &&
+              fs::exists(folder/"adaptive_audio.m4a.part") &&
+              fs::exists(outside),
+              "MP4 purge preflights all fixed paths before deleting any track");
+        fs::remove(folder/"active.mp4.part");
+        check(SwitchMediaCacheSink::discard_session_media() &&
+              !fs::exists(folder/"active.mp4") &&
+              !fs::exists(folder/"adaptive_audio.m4a.part") &&
+              fs::exists(outside),
+              "MP4 purge resumes after symlink interference is removed");
+    }
     fs::remove_all(folder/"do-not-delete");
     fs::remove(folder/"unrelated-settings.ini");
     fs::remove_all(folder);

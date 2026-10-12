@@ -33,6 +33,28 @@ constexpr const char* kReady="sdmc:/switch/TizenTube-NX/media-cache/hls/ready";
 constexpr const char* kPrevious="sdmc:/switch/TizenTube-NX/media-cache/hls/previous";
 #endif
 
+// All components above our disposable cache must be real directories.
+ // lstat() prevents an altered SD folder from redirecting deletion or writes.
+bool safe_hls_ancestors() noexcept {
+#ifdef TTNX_M3_CACHE_HOST_TEST
+    static constexpr const char* ancestors[]={
+        "/tmp/tizentube-m3-hls-test",
+        "/tmp/tizentube-m3-hls-test/switch",
+        kParent,kMediaDir,kRoot
+    };
+#else
+    static constexpr const char* ancestors[]={
+        "sdmc:/switch",kParent,kMediaDir,kRoot
+    };
+#endif
+    for(const char* path:ancestors) {
+        struct stat entry{};
+        if(lstat(path,&entry)==0) {
+            if(!S_ISDIR(entry.st_mode))return false;
+        } else if(errno!=ENOENT)return false;
+    }
+    return true;
+}
 bool directory(const char* path) {
     if(mkdir(path,0700)==0)return true;
     if(errno!=EEXIST)return false;
@@ -55,7 +77,7 @@ bool known_filename(std::string_view file) {
         if(file[i]<'0'||file[i]>'9')return false;
     return true;
 }
-bool discard_known_directory(const char* path) {
+bool discard_known_directory(const char* path,bool inspect_only=false) {
     // opendir() follows symlinks by default. Verify the target is an actual
     // directory before touching any path found below it.
     struct stat root{};
@@ -84,6 +106,7 @@ bool discard_known_directory(const char* path) {
     }
     if(closedir(directory_stream)!=0)okay=false;
     if(!okay)return false;
+    if(inspect_only)return true;
     for(const auto& filename:known) {
         struct stat entry{};
         if(lstat(filename.c_str(),&entry)!=0 ||
@@ -184,7 +207,7 @@ std::string master_text(const playback::HlsProbePlan& plan) {
 } // namespace
 
 bool SwitchHlsCacheSink::discard_session_media() noexcept {
-    if(playback::HlsPlaybackLease::is_active())return false;
+    if(playback::HlsPlaybackLease::is_active() || !safe_hls_ancestors())return false;
     struct stat parent{},media{},root{};
     if(lstat(kParent,&parent)!=0)return errno==ENOENT;
     if(!S_ISDIR(parent.st_mode))return false;
@@ -192,8 +215,12 @@ bool SwitchHlsCacheSink::discard_session_media() noexcept {
     if(!S_ISDIR(media.st_mode))return false;
     if(lstat(kRoot,&root)!=0)return errno==ENOENT;
     if(!S_ISDIR(root.st_mode))return false;
+    // Check ALL three directories before removing anything: a poisoned
+    // previous/ or ready/ must never leave pending/ half erased.
+    if(!discard_known_directory(kPending,true) ||
+       !discard_known_directory(kPrevious,true) ||
+       !discard_known_directory(kReady,true))return false;
     // This whitelist is deliberately narrower than the overall app folder.
-    // Do not remove a file/dir with an unexpected name or type.
     const bool pending=discard_known_directory(kPending);
     const bool previous=discard_known_directory(kPrevious);
     const bool ready=discard_known_directory(kReady);
@@ -206,7 +233,7 @@ bool SwitchHlsCacheSink::discard_session_media() noexcept {
     return pending && previous && ready;
 }
 bool SwitchHlsCacheSink::begin(const playback::HlsProbePlan& plan) {
-    if(playback::HlsPlaybackLease::is_active())return false;
+    if(playback::HlsPlaybackLease::is_active() || !safe_hls_ancestors())return false;
     abort();
     if(!directory(kParent) || !directory(kMediaDir) ||
        !directory(kRoot))return false;
@@ -239,6 +266,7 @@ bool SwitchHlsCacheSink::begin(const playback::HlsProbePlan& plan) {
     staged_=true;
     wrote_video_=false;
     external_audio_bytes_=0;
+    video_bytes_=audio_bytes_=0;
     return true;
 }
 bool SwitchHlsCacheSink::write_segment(
@@ -251,15 +279,29 @@ bool SwitchHlsCacheSink::write_segment(
     if(init) {
         if(!needs_init || init_written || index!=0)return false;
     } else if(index>=written.size() || written[index])return false;
+    if(!safe_hls_ancestors())return false;
+    auto& used=audio?audio_bytes_:video_bytes_;
+    std::uint64_t limit=audio?kMaxAudioBytes:kMaxVideoBytes;
+#ifdef TTNX_M3_CACHE_HOST_TEST
+    limit=audio?test_audio_limit_:test_video_limit_;
+#endif
+    if(bytes.size()>limit || used>limit-bytes.size())return false;
     const bool ts=audio?audio_ext_=="ts":video_ext_=="ts";
     const auto file=std::string(kPending)+"/"+piece_name(audio,init,index,ts);
     if(!persist(file,bytes))return false;
+    used+=bytes.size();
     if(init)init_written=true;
     else written[index]=true;
     if(!audio)wrote_video_=true;
     return true;
 }
 bool SwitchHlsCacheSink::append_external_aac(std::string_view bytes) {
+    if(!safe_hls_ancestors())return false;
+    std::uint64_t limit=kMaxAudioBytes;
+#ifdef TTNX_M3_CACHE_HOST_TEST
+    limit=test_audio_limit_;
+#endif
+    if(bytes.size()>limit || audio_bytes_>limit-bytes.size())return false;
     if(!staged_ || bytes.empty() ||
        bytes.size()>playback::MediaChunkReader::kMaxChunkBytes ||
        external_audio_bytes_>128ULL*1024*1024 ||
@@ -275,12 +317,13 @@ bool SwitchHlsCacheSink::append_external_aac(std::string_view bytes) {
     if(std::fwrite(bytes.data(),1,bytes.size(),external_aac_file_)
        !=bytes.size())return false;
     external_audio_bytes_+=bytes.size();
+    audio_bytes_+=bytes.size();
     return true;
 }
 
 bool SwitchHlsCacheSink::stage_startup_event(
     const playback::HlsProbePlan& plan,std::size_t prefix_count) {
-    if(!staged_ || prefix_count==0 ||
+    if(!safe_hls_ancestors() || !staged_ || prefix_count==0 ||
        prefix_count>video_written_.size() ||
        video_written_.size()!=plan.video_segments.segments.size() ||
        (video_init_needed_ && !video_init_written_) ||
@@ -306,7 +349,7 @@ bool SwitchHlsCacheSink::stage_startup_event(
 }
 
 bool SwitchHlsCacheSink::publish(const playback::HlsProbePlan& plan) {
-    if(playback::HlsPlaybackLease::is_active())return false;
+    if(playback::HlsPlaybackLease::is_active() || !safe_hls_ancestors())return false;
     if(!staged_ || !wrote_video_ ||
        video_written_.size()!=plan.video_segments.segments.size() ||
        video_written_.empty() ||
@@ -384,6 +427,7 @@ void SwitchHlsCacheSink::abort() noexcept {
     staged_=false;
     wrote_video_=false;
     external_audio_bytes_=0;
+    video_bytes_=audio_bytes_=0;
     video_written_.clear();audio_written_.clear();
     video_init_needed_=audio_init_needed_=false;
     video_init_written_=audio_init_written_=false;
