@@ -169,3 +169,38 @@ prioritizes image correctness over peak hardware decode efficiency until
 a proper pinned Switch GPU-backed renderer has been validated.
 The already accepted M2 browsing build and earlier offline checkpoint
 are unchanged.
+
+## October 12 first real Switch decoded-picture milestone and hidden-player fix
+
+The physical run of the CDN redirect repair verified *actual native playback
+progress*, not just a host media fixture. Two complete separate A/V cache
+transactions published video + audio. The player reported a selected H.264
+video track and a selected AAC audio track, decoded geometry 854x480, more
+than 350 successful software frames in its first session, and non-black RGB
+pixel samples in its frame diagnostics. Audio was audible. However, no
+`UI DRAW` occurred during those frames. Immediately after Stop/Back, the
+log recorded its first `UI READY`, `UI DRAW`, and `UI PRESENTED`, while a
+screenshot captured the briefly uncovered video image and RGB test bars.
+
+The cause was traced against the *pinned* Borealis submodule at commit
+`20e2d33b6c4ffce139ce304c503c04f5b94da920`: `Application::pushActivity`
+zeros incoming opaque activity opacity while fading out the previous
+activity; `View::show()` then returns early without restoring opacity if
+its root was never marked hidden. The M3 activity previously returned a
+newly constructed, unhidden Box. Its decoder continued running behind a
+fully transparent activity. On B/Stop the hide animation resets opacity to
+1 before fading out, temporarily exposing the decoded picture.
+
+The activity now explicitly calls `root->hide([]{},false,0.0f)` *before*
+returning the content to `pushActivity`, so Borealis performs the real
+fade-in at the correct point in its lifecycle. This is a targeted M3
+fix, not a modification to the accepted M2 flow or Borealis submodule.
+
+A non-destructive watchdog logs `UI FAIL 2 <frame-count> <root-alpha*1000>`
+if 90 rendered frames occur with zero video-widget draws; numeric-only,
+no signed URLs or frame contents. The video texture is now released when
+the player view is destroyed, avoiding repeated video-session GPU leaks.
+Host regression tests model the pinned fade behavior and require the
+specific pre-push visibility initialization and watchdog. A new physical
+run is still mandatory to accept uninterrupted picture, audio, replay,
+pause/resume, seeking and Back behavior.

@@ -10,6 +10,30 @@ SOURCE=(Path(__file__).resolve().parents[1]/
         "switch/source/m3_player_activity.cpp").read_text()
 
 class M3NativeRendererContract(unittest.TestCase):
+    def test_pinned_borealis_opaque_activity_fade_is_primed(self):
+        # The pinned upstream View::show() returns early for !hidden,
+        # leaving pushActivity()'s initial alpha=0 untouched. This is
+        # exactly what the Oct 12 physical Switch log/screenshot proved.
+        activity=SOURCE.split("class M3Activity final",1)[1]
+        create=activity.split("brls::View* createContentView()",1)[1].split("    void tick()",1)[0]
+        self.assertIn("root->hide([]{},false,0.0f);",create)
+        self.assertLess(create.index("root->hide([]{},false,0.0f);"),
+                        create.index("return root;"))
+        # Minimal state-model regression for pinned Borealis semantics.
+        def simulate(hidden_before_push):
+            hidden, alpha=hidden_before_push, 0.0  # new activity alpha reset by push
+            if hidden:  # View::show's animated branch
+                hidden, alpha=False, 1.0
+            return alpha
+        self.assertEqual(simulate(False),0.0)  # reproduced invisible activity
+        self.assertEqual(simulate(True),1.0)   # repaired visible activity
+
+    def test_video_has_independent_presentation_watchdog(self):
+        self.assertIn("player_.frames_rendered()>=90",SOURCE)
+        self.assertIn("video_->draw_count()==0",SOURCE)
+        self.assertIn("M3Diagnostics::record(M3Stage::Ui,M3Event::Fail,2,",SOURCE)
+        self.assertIn("nvgDeleteImage(brls::Application::getNVGContext(),image_)",SOURCE)
+
     def test_mpv_callback_is_registered_and_unregistered(self):
         self.assertIn("mpv_render_context_set_update_callback(",SOURCE)
         self.assertIn("renderer_,&CachedMpv::notify_render_update,this",SOURCE)

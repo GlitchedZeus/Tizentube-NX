@@ -395,6 +395,7 @@ public:
         return pixels_;
     }
     bool have_frame()const{return have_frame_;}
+    std::uint64_t frames_rendered()const noexcept{return frames_;}
     bool new_frame()const{return new_frame_;}
     const std::vector<unsigned char>& pixels()const{return pixels_;}
     void acknowledge_frame_upload() noexcept {new_frame_=false;}
@@ -449,6 +450,13 @@ private:
 class VideoFrame final:public brls::View {
 public:
     explicit VideoFrame(CachedMpv& player):player_(player){setHeight(294);}
+    ~VideoFrame() override {
+        // NanoVG image handles are owned by the active UI video context.
+        // Free them while Borealis still has an active video backend, not
+        // when the next video opens (which would leak GPU memory on replay).
+        if(image_>0)nvgDeleteImage(brls::Application::getNVGContext(),image_);
+    }
+    [[nodiscard]] std::uint64_t draw_count()const noexcept{return draw_calls_;}
     void draw(NVGcontext* vg,float x,float y,float w,float h,
               brls::Style,brls::FrameContext*) override {
         ++draw_calls_;
@@ -528,7 +536,10 @@ public:
         label(root,M3Diagnostics::available()
             ?"Diagnostics: sdmc:/switch/TizenTube-NX/m3-playback.log"
             :"Diagnostics: SD logging unavailable",12);
-        root->addView(new VideoFrame(player_));
+        // Keep a borrowed pointer for an independent UI-presentation watchdog.
+        // Ownership stays with Borealis inside the activity content tree.
+        video_=new VideoFrame(player_);
+        root->addView(video_);
         status_=label(root,player_.status(),17);
         info_=label(root,player_.stats(),15);
         auto* one=new brls::Box(brls::Axis::ROW);one->setHeight(56);root->addView(one);
@@ -553,6 +564,15 @@ public:
         root->registerAction("Seek +10s",brls::BUTTON_RB,[this](brls::View*) {
             player_.seek(10);update();return true;
         });
+        // CRITICAL pinned Borealis (20e2d33b) lifecycle contract:
+        // pushActivity() sets the incoming opaque root alpha to 0 during the
+        // old activity's fade-out, then calls show(). View::show() immediately
+        // returns WITHOUT restoring alpha when !hidden. A newly constructed
+        // Box is initially !hidden, so video/audio run behind an invisible
+        // activity until B triggers hide(), resets alpha to 1 and briefly
+        // reveals the decoded image. Explicitly prime hidden before push.
+        // The framework's show() now performs the real 0 -> 1 fade-in.
+        root->hide([]{},false,0.0f);
         player_.init();
         player_.play();
         update();
@@ -563,6 +583,19 @@ public:
         // Software frame dequeue must not depend on widget draw invalidation:
         // audio can advance even when Borealis does not redraw this View.
         (void)player_.render();
+        // An audio-only-looking black screen is now distinguishable from
+        // actual decode failure. Pinned Borealis draws active views on each
+        // frame; 90 decoded non-black frames without a SINGLE widget draw
+        // means presentation/activity lifecycle is broken, not media data.
+        if(!presentation_warning_latched_ && player_.frames_rendered()>=90 &&
+           video_ && video_->draw_count()==0) {
+            presentation_warning_latched_=true;
+            const auto* root=getContentView();
+            const auto alpha=root?static_cast<std::int64_t>(
+                root->getAlpha()*1000):-1;
+            M3Diagnostics::record(M3Stage::Ui,M3Event::Fail,2,
+                static_cast<std::int64_t>(player_.frames_rendered()),alpha);
+        }
         if((++ticks_%45)==0)update();
     }
     static void tick_current(){if(active_)active_->tick();}
@@ -574,6 +607,8 @@ private:
     static M3Activity* active_;
     CachedMpv player_;
     bool hls_{false},adaptive_{false};
+    bool presentation_warning_latched_{false};
+    VideoFrame* video_{nullptr}; // borrowed, destroyed by the activity tree
     brls::Label* status_{nullptr};
     brls::Label* info_{nullptr};
     unsigned ticks_{0};
