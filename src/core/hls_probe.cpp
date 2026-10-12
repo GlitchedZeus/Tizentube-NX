@@ -161,7 +161,9 @@ std::optional<HlsProbePlan> HlsSourceProbe::inspect(
             last_error_=HlsProbeError::ManifestRejected;
             return std::nullopt;
         }
-        variant=choose_hls_variant(*master,max_height,max_fps);
+        variant=choose_cache_bounded_hls_variant(
+            *master,source->duration_ms,512ULL*1024*1024,
+            max_height,max_fps);
         if(!variant) {
             last_error_=HlsProbeError::VariantUnavailable;
             return std::nullopt;

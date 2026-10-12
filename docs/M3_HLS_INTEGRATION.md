@@ -392,3 +392,15 @@ segment. Silent/unrecognized streams abort immediately without
 downloading the remaining movie; valid muxed audio and real YouTube
 video with a separately verified AAC file remain supported. The
 previously accepted complete cache remains preserved.
+
+### Storage-aware complete-cache rendition selection
+
+For HLS master playlists with multiple compatible variants, the
+resolver now estimates complete-video bytes using advertised peak
+`BANDWIDTH` and duration. It reserves 20% of the 512 MiB cap for
+audio and variability and chooses the best variant likely to fit,
+rather than always selecting 720p even for hour-long videos.
+Unverifiable high-duration bitrates fail early, rather than wasting
+the entire download. The existing hard byte limits remain mandatory;
+the estimate is not a proof that a stream will fit. Direct-media
+playlists without a master are not artificially assigned a bitrate.

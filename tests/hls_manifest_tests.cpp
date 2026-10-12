@@ -202,9 +202,37 @@ void segment_tests() {
     check(!playback::parse_hls_media_playlist(bad,kVariant),
           "rogue segment destination refused");
 }
+void cache_aware_quality() {
+    playback::HlsMaster variants;
+    playback::HlsVariant high;
+    high.playlist_url=kVariant;
+    high.width=1280;high.height=720;high.fps=30;
+    high.bandwidth=2500000;
+    playback::HlsVariant low=high;
+    low.width=640;low.height=360;low.bandwidth=500000;
+    variants.compatible={high,low};
+    const auto short_clip=playback::choose_cache_bounded_hls_variant(
+        variants,120000,512ULL*1024*1024);
+    check(short_clip && short_clip->height==720,
+          "short video retains 720p within cache");
+    const auto hour=playback::choose_cache_bounded_hls_variant(
+        variants,3600000,512ULL*1024*1024);
+    check(hour && hour->height==360,
+          "one-hour HLS preflight chooses viable lower quality");
+    check(!playback::choose_cache_bounded_hls_variant(
+              variants,7200000,512ULL*1024*1024),
+          "no fitting two-hour HLS source is rejected early");
+    high.bandwidth=0;variants.compatible={high};
+    check(!playback::choose_cache_bounded_hls_variant(
+              variants,3600000,512ULL*1024*1024),
+          "unknown bitrate for long VOD is not an implicit budget pass");
+    check(playback::choose_cache_bounded_hls_variant(
+              variants,45000,512ULL*1024*1024).has_value(),
+          "short source retains downstream runtime cap");
+}
 } // namespace
 int main() {
-    player_request();playlist_tests();segment_tests();
+    player_request();playlist_tests();segment_tests();cache_aware_quality();
     if(failures)std::cerr<<failures<<" HLS regressions\n";
     return failures?EXIT_FAILURE:EXIT_SUCCESS;
 }

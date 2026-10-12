@@ -33,6 +33,13 @@ struct HlsMaster {
     const HlsMaster& playlist, unsigned max_height=720,
     unsigned max_fps=30);
 
+// Conservative complete-SD-cache quality preflight. Actual bytes must still
+// pass HlsCacheJob's independently enforced runtime upper bound.
+[[nodiscard]] std::optional<HlsVariant> choose_cache_bounded_hls_variant(
+    const HlsMaster& playlist, std::uint64_t duration_ms,
+    std::uint64_t max_cache_bytes, unsigned max_height=720,
+    unsigned max_fps=30);
+
 struct HlsSegment {
     std::string url;
     std::uint64_t duration_ms{0};

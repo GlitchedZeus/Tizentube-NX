@@ -274,6 +274,34 @@ std::optional<HlsVariant> choose_hls_variant(
     return best;
 }
 
+std::optional<HlsVariant> choose_cache_bounded_hls_variant(
+    const HlsMaster& playlist, std::uint64_t duration_ms,
+    std::uint64_t max_cache_bytes, unsigned max_height,
+    unsigned max_fps) {
+    if(!duration_ms || duration_ms>7ULL*24*3600*1000 ||
+       !max_cache_bytes)return std::nullopt;
+    const auto safe_budget=max_cache_bytes-max_cache_bytes/5;
+    std::optional<HlsVariant> best;
+    for(const auto& item:playlist.compatible) {
+        if(!item.height || item.height>max_height || !item.fps ||
+           item.fps>max_fps || !safe_child(item.playlist_url) ||
+           (!item.audio_playlist_url.empty() &&
+            !safe_child(item.audio_playlist_url)))continue;
+        if(item.bandwidth==0 && duration_ms>120000)continue;
+        if(item.bandwidth) {
+            // Reviewed manifest caps bitrate at 100Mbit/s; duration is
+            // bounded above. Their product fits a uint64_t.
+            if(item.bandwidth>100000000)continue;
+            const auto projected=(item.bandwidth*duration_ms+7999)/8000;
+            if(projected>safe_budget)continue;
+        }
+        if(!best || std::pair(item.height,item.bandwidth)>
+                     std::pair(best->height,best->bandwidth))
+            best=item;
+    }
+    return best;
+}
+
 std::optional<HlsMediaPlaylist> parse_hls_media_playlist(
     std::string_view body, std::string_view source_url) {
     if(!safe_child(source_url))return std::nullopt;
