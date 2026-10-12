@@ -234,6 +234,11 @@ if(TTNX_BUILD_TESTS)
     target_link_libraries(tizentube_nx_request_privacy_tests PRIVATE tizentube_nx_core)
     add_test(NAME request_privacy COMMAND tizentube_nx_request_privacy_tests)
 
+    # Header-only bounded streaming scheduler: deterministic host coverage.
+    add_executable(tizentube_nx_rolling_media_budget_tests
+        tests/rolling_media_budget_tests.cpp)
+    add_test(NAME rolling_media_budget COMMAND tizentube_nx_rolling_media_budget_tests)
+
     add_executable(tizentube_nx_playback_foundation_tests tests/playback_foundation_tests.cpp)
     target_link_libraries(tizentube_nx_playback_foundation_tests PRIVATE tizentube_nx_core)
     add_test(NAME playback_foundation COMMAND tizentube_nx_playback_foundation_tests)

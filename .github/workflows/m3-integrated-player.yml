@@ -63,6 +63,14 @@ jobs:
           test -s tizentube_nx_m3_integrated.nro
           test -s tizentube_nx_m3_integrated.elf
           test ! -e tizentube_nx.nro
+          # Hard fail if the packaged executable leaves no room for the
+          # intended 24 MiB ring buffer + 8 MiB app state inside 100 MB.
+          # This is a packaging gate; runtime rolling-media enforcement is
+          # staged separately and is NOT claimed as completed here.
+          NRO_BYTES="$(stat -c %s tizentube_nx_m3_integrated.nro)"
+          MAX_NRO_BYTES=66445568
+          echo "NRO bytes: $NRO_BYTES (budget: $MAX_NRO_BYTES)"
+          test "$NRO_BYTES" -le "$MAX_NRO_BYTES"
           file tizentube_nx_m3_integrated.nro
           sha256sum tizentube_nx_m3_integrated.nro
       # One exact-head NRO artifact, not a public release or an automatic
