@@ -7,6 +7,7 @@
 #if defined(TTNX_M4_RING_STREAM_CB_PROBE)
 #include "tizentube_nx/playback/rolling_stream_epoch.hpp"
 #include "tizentube_nx/playback/rolling_reprime_gate.hpp"
+#include "tizentube_nx/playback/rolling_epoch_clock.hpp"
 #endif
 #include "media_file_sink.hpp"
 #include "hls_cache_sink.hpp"
@@ -245,6 +246,11 @@ public:
             ring_loaded_=true;
             ring_verified_av_=false;
             epoch_frame_base_=frames_;
+            if(!ring_clock_.reset(ring_epoch_->epoch_start_ms(),
+                                  ring_epoch_->total_duration_ms())) {
+                status_="M4 source playlist lacks a validated playback clock";
+                return false;
+            }
             status_="Opening verified *local* H264/AAC ring stream...";
             return true;
         }
@@ -384,6 +390,10 @@ public:
         return result>=0;
     }
     [[nodiscard]] std::uint32_t duration_seconds()const noexcept {
+#if defined(TTNX_M4_RING_STREAM_CB_PROBE)
+        if(ring_epoch_)return static_cast<std::uint32_t>(
+            ring_epoch_->total_duration_ms()/1000);
+#endif
         if(!handle_)return 0;
         double duration=0;
         if(mpv_get_property(handle_,"duration",MPV_FORMAT_DOUBLE,&duration)<0 ||
@@ -597,10 +607,11 @@ public:
            !selected_video_track() || !selected_audio_track())return;
         // Only a decoded frame from THIS decoder and selected AAC can
         // advance its producer. Earlier epochs never certify a new epoch.
+        double raw=0;
+        if(mpv_get_property(handle_,"time-pos",MPV_FORMAT_DOUBLE,&raw)<0 ||
+           !ring_clock_.observe(raw))return;
         ring_verified_av_=true;
-        const auto elapsed=playback_seconds();
-        ring_epoch_->advance_playback_ms(
-            static_cast<std::uint64_t>(elapsed)*1000);
+        ring_epoch_->advance_playback_ms(ring_clock_.relative_ms());
     }
     // M4 experimental callback only: drive teardown and fresh prefix on a
     // UI tick, never inside a libmpv callback or the network worker thread.
@@ -663,6 +674,10 @@ public:
     }
 #endif
     [[nodiscard]] std::uint32_t playback_seconds()const noexcept {
+#if defined(TTNX_M4_RING_STREAM_CB_PROBE)
+        if(ring_epoch_)return ring_clock_.anchored()
+            ?static_cast<std::uint32_t>(ring_clock_.absolute_ms()/1000):0;
+#endif
         if(!handle_)return 0;
         double time=0;
         if(mpv_get_property(handle_,"time-pos",MPV_FORMAT_DOUBLE,&time)<0 ||
@@ -745,6 +760,7 @@ private:
 #if defined(TTNX_M4_RING_STREAM_CB_PROBE)
     std::shared_ptr<playback::RollingStreamEpoch> ring_epoch_{};
     playback::RollingReprimeGate ring_reprime_{};
+    playback::RollingEpochClock ring_clock_{};
     bool ring_loaded_{false},ring_verified_av_{false};
     bool ring_terminal_retired_{false};
     std::uint64_t epoch_frame_base_{0};

@@ -59,6 +59,10 @@ class M4RingReprimeContract(unittest.TestCase):
         self.assertIn("selected_video_track()",update)
         self.assertIn("selected_audio_track()",update)
         self.assertIn("advance_playback_ms",update)
+        self.assertIn("ring_clock_.observe(raw)",update)
+        self.assertIn("ring_clock_.relative_ms()",update)
+        self.assertIn("ring_clock_.absolute_ms()",PLAYER)
+        self.assertIn("ring_epoch_->epoch_start_ms()",PLAYER)
         self.assertIn("last_started_",GATE)
         self.assertIn("Stage::Cancelled",GATE)
 

@@ -37,6 +37,10 @@ public:
         // Avoid overflow with subtractive bounds, not playhead+kMaxAheadMs.
         return relative<=playback_ms || relative-playback_ms<=kMaxAheadMs;
     }
+    // Original HLS manifest positions never rely on guessed decoder offsets.
+    [[nodiscard]] std::uint64_t start_time_ms(std::size_t index)const noexcept {
+        return index<starts_.size()?starts_[index]:0;
+    }
     [[nodiscard]] std::size_t count()const noexcept{return starts_.size();}
     [[nodiscard]] std::uint64_t total_duration_ms()const noexcept{return duration_ms_;}
     [[nodiscard]] bool configured()const noexcept{return !starts_.empty();}

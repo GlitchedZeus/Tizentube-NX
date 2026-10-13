@@ -178,6 +178,13 @@ if(TTNX_BUILD_TESTS)
     add_test(NAME rolling_reprime_gate
         COMMAND tizentube_nx_rolling_reprime_gate_tests)
 
+    # HLS absolute timeline vs per-decoder time-pos: no phantom prefetch.
+    add_executable(tizentube_nx_rolling_epoch_clock_tests
+        tests/rolling_epoch_clock_tests.cpp)
+    target_include_directories(tizentube_nx_rolling_epoch_clock_tests PRIVATE include)
+    add_test(NAME rolling_epoch_clock
+        COMMAND tizentube_nx_rolling_epoch_clock_tests)
+
     # Fixed app-owned crash-orphan sweep; symlinks/user files must survive.
     add_executable(tizentube_nx_ring_orphan_cleanup_tests
         tests/ring_orphan_cleanup_tests.cpp)

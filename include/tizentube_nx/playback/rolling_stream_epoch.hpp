@@ -111,6 +111,14 @@ public:
                 phase_!=Phase::Failed && !ring_->stats().failed)
             ?ring_:nullptr;
     }
+    [[nodiscard]] std::uint64_t epoch_start_ms()const noexcept {
+        std::lock_guard<std::mutex> lock(mu_);
+        return window_.start_time_ms(epoch_origin_);
+    }
+    [[nodiscard]] std::uint64_t total_duration_ms()const noexcept {
+        std::lock_guard<std::mutex> lock(mu_);
+        return window_.total_duration_ms();
+    }
     // Feed only verified decoder time-pos, never speculative UI seeks.
     // An epoch-relative timeline resets on decoder-close/reprime.
     void advance_playback_ms(std::uint64_t ms) noexcept {
