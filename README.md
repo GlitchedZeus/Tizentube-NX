@@ -196,7 +196,9 @@ See [`docs/THIRD_PARTY.md`](docs/THIRD_PARTY.md) for dependency attribution.
 
 ## Useful project docs
 
-The newest development documentation currently lives on `feature/m2-guest-browsing`:
+- [YouTube Switch NSP forensic/layout reference](docs/SWITCH_YOUTUBE_NSP_UI_REFERENCE.md) — private archived NSP inspection, evidence limits, official TV-style UX screenshots, and original implementation plan; no proprietary assets copied.
+
+Other historical development documentation originally lives on `feature/m2-guest-browsing`:
 
 - [`PRODUCT_PHILOSOPHY.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/PRODUCT_PHILOSOPHY.md) — product/reference hierarchy and ad-free playback contract
 - [`PROJECT_STATUS.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/PROJECT_STATUS.md) — current implementation status and active gate
