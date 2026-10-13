@@ -14,6 +14,7 @@ The target is simple: make it feel like **TizenTube/YouTube was intentionally br
 
 A few rules define the project more strongly than individual features:
 
+- **RAM-only playback streaming.** Video/audio must flow through bounded volatile memory into the decoder; never download or cache media files on SD. Final app installation (NRO, resources and all app-owned persistent files) must stay at or below **100,000,000 bytes**, with no 24 MiB video-storage carve-out. See [M4 RAM streaming requirements](docs/M4_RAM_STREAMING_REQUIREMENTS.md).
 - **Playback and ad-free viewing are equally important.** A player that deliberately shows YouTube-served pre-roll, mid-roll or post-roll ads is not finished playback.
 - **SponsorBlock is part of the core player experience.** It will have Switch-native settings for per-category behavior such as auto-skip, ask/show a Skip button, or do not skip.
 - **No Shorts.** Shorts/reels are filtered at the data boundary and are not a user-facing feature.

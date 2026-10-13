@@ -1,4 +1,6 @@
-# M4 storage and latency target: ≤100,000,000 bytes total
+# M4 historical SD-backed storage experiments — superseded
+
+> **Product requirement update (2026-10-12):** The planned M4 SD-backed rolling HLS media cache is **not the final architecture**. TizenTube NX must stream verified media through bounded **RAM only**, with **zero media files on SD**. The **100,000,000-byte limit applies to the full installed app and persistent app-owned files**, not to video buffers or a video-download cache. Read [the definitive RAM streaming contract](M4_RAM_STREAMING_REQUIREMENTS.md) before extending M4. The rest of this document describes obsolete or isolated historical experiments, not release acceptance criteria.
 
 Product target: the TizenTube NX NRO (including embedded assets), all app-owned
 settings/diagnostics, and the **maximum simultaneous disposable video/audio
