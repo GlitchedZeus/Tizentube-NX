@@ -15,6 +15,8 @@ struct OwnedNativeHlsReader {
     explicit OwnedNativeHlsReader(
         std::shared_ptr<LibnxHlsSegmentTransport> owned)
         :transport(std::move(owned)),reader(*transport,transport.get()) {}
+    void cancel() noexcept {transport->request_cancel();}
+    void reset_cancel() noexcept {transport->reset_cancel();}
     playback::HlsStreamResult stream(
         std::string_view url,const playback::HlsMediaAdmission& admit,
         const playback::HlsMediaChunk& emit) {

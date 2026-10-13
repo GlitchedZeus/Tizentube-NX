@@ -196,6 +196,17 @@ if(TTNX_BUILD_TESTS)
     add_test(NAME rolling_epoch_clock
         COMMAND tizentube_nx_rolling_epoch_clock_tests)
 
+    # Stop interrupts the active HTTPS chunk producer, but a safely closed
+    # decoder/SD epoch must explicitly reset the native cancellation flag.
+    add_executable(tizentube_nx_rolling_stream_cancel_propagation_tests
+        tests/rolling_stream_cancel_propagation_tests.cpp)
+    target_include_directories(tizentube_nx_rolling_stream_cancel_propagation_tests
+        PRIVATE include tests/stubs)
+    target_link_libraries(tizentube_nx_rolling_stream_cancel_propagation_tests
+        PRIVATE tizentube_nx_core Threads::Threads)
+    add_test(NAME rolling_stream_cancel_propagation
+        COMMAND tizentube_nx_rolling_stream_cancel_propagation_tests)
+
     # Fixed app-owned crash-orphan sweep; symlinks/user files must survive.
     add_executable(tizentube_nx_ring_orphan_cleanup_tests
         tests/ring_orphan_cleanup_tests.cpp)

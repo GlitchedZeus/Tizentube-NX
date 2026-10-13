@@ -23,6 +23,8 @@ namespace ttnx::playback {
 class RollingStreamEpoch final {
 public:
     using AllowUrl=std::function<bool(std::string_view)>;
+    using CancelFetch=std::function<void()>;
+    using ResetFetch=std::function<void()>;
     using Fetch=std::function<VerifiedRingHlsIngest::Result(
         std::shared_ptr<RollingFileStream>,std::string_view)>;
     enum class Phase : std::uint8_t {
@@ -46,7 +48,8 @@ public:
         std::string app_owned_path,std::vector<std::string> approved_segment_urls,
         Fetch fetch,AllowUrl allow,
         std::uint64_t capacity=RollingFileStream::kMaximumMedia,
-        std::vector<std::uint64_t> segment_durations_ms={}) {
+        std::vector<std::uint64_t> segment_durations_ms={},
+        CancelFetch cancel_fetch={},ResetFetch reset_fetch={}) {
         if(app_owned_path.empty() || !fetch || !allow || approved_segment_urls.empty() ||
            approved_segment_urls.size()>4096)return {};
         std::size_t plan_bytes=0;
@@ -63,7 +66,8 @@ public:
         if(!ring)return {};
         return std::unique_ptr<RollingStreamEpoch>(new RollingStreamEpoch(
             std::move(app_owned_path),std::move(approved_segment_urls),
-            std::move(fetch),std::move(ring),capacity,std::move(window)));
+            std::move(fetch),std::move(ring),capacity,std::move(window),
+            std::move(cancel_fetch),std::move(reset_fetch)));
     }
     template<class Reader>
     static std::unique_ptr<RollingStreamEpoch> with_reader(
@@ -72,6 +76,14 @@ public:
         std::uint64_t capacity=RollingFileStream::kMaximumMedia,
         std::vector<std::uint64_t> segment_durations_ms={}) {
         if(!reader)return {};
+        CancelFetch cancel_fetch;
+        ResetFetch reset_fetch;
+        // Native SSL reader supports cooperative cancellation. Host fakes
+        // without the optional methods retain the original behavior.
+        if constexpr(requires(Reader& r) {r.cancel();r.reset_cancel();}) {
+            cancel_fetch=[reader]{reader->cancel();};
+            reset_fetch=[reader]{reader->reset_cancel();};
+        }
         Fetch callback=[reader=std::move(reader)](
             std::shared_ptr<RollingFileStream> ring,std::string_view url) {
             VerifiedRingHlsIngest staging(std::move(ring));
@@ -79,7 +91,8 @@ public:
         };
         return create(std::move(app_owned_path),std::move(urls),
                       std::move(callback),std::move(allow),capacity,
-                      std::move(segment_durations_ms));
+                      std::move(segment_durations_ms),
+                      std::move(cancel_fetch),std::move(reset_fetch));
     }
     RollingStreamEpoch(const RollingStreamEpoch&)=delete;
     RollingStreamEpoch& operator=(const RollingStreamEpoch&)=delete;
@@ -94,8 +107,16 @@ public:
         std::lock_guard<std::mutex> lock(mu_);
         if(phase_!=Phase::Prepared || !ring_ || worker_.joinable())return false;
         stop_=false;playback_ms_=0;phase_=Phase::Fetching;
-        try {worker_=std::thread([this]{run();});}
-        catch(...) {phase_=Phase::Failed;return false;}
+        try {
+            // The previous epoch's Stop cancelled its native HTTPS reader.
+            // Only a fresh, unlinked ring can reset that cancellation bit.
+            if(reset_fetch_)reset_fetch_();
+            worker_=std::thread([this]{run();});
+        } catch(...) {
+            phase_=Phase::Failed;
+            ring_->finish(false);
+            return false;
+        }
         return true;
     }
     [[nodiscard]] Snapshot snapshot()const {
@@ -142,8 +163,10 @@ public:
     }
     void request_stop() {
         std::shared_ptr<RollingFileStream> active;
+        bool first_stop=false;
         {
             std::lock_guard<std::mutex> lock(mu_);
+            first_stop=!stop_;
             stop_=true;
             if(phase_!=Phase::Cleaned && phase_!=Phase::DecoderClosed)
                 phase_=Phase::StopRequested;
@@ -151,6 +174,11 @@ public:
         }
         wake_.notify_all(); // unblock prefetch wait immediately
         if(active)active->cancel(); // unblock decoder read and staging
+        if(first_stop && cancel_fetch_) {
+            try {cancel_fetch_();}catch(...){}
+        }
+        // Blocking Horizon SSL reads still obey native I/O timeouts. The
+        // cancellation bit prevents further chunks/segments after wake.
     }
     void stop_and_join() {
         request_stop();
@@ -203,9 +231,10 @@ public:
 private:
     RollingStreamEpoch(std::string path,std::vector<std::string> urls,
         Fetch fetch,std::shared_ptr<RollingFileStream> ring,std::uint64_t capacity,
-        RollingPrefetchWindow window)
+        RollingPrefetchWindow window,CancelFetch cancel,ResetFetch reset)
         : path_(std::move(path)),urls_(std::move(urls)),fetch_(std::move(fetch)),
-          ring_(std::move(ring)),capacity_(capacity),window_(std::move(window)){}
+          ring_(std::move(ring)),capacity_(capacity),window_(std::move(window)),
+          cancel_fetch_(std::move(cancel)),reset_fetch_(std::move(reset)){}
     void run() noexcept {
         for(;;) {
             std::size_t current=0;
@@ -266,6 +295,8 @@ private:
     std::size_t next_{0},committed_{0},epoch_origin_{0};
     std::uint64_t playback_ms_{0};
     RollingPrefetchWindow window_{};
+    CancelFetch cancel_fetch_{};
+    ResetFetch reset_fetch_{};
     Phase phase_{Phase::Prepared};
     bool stop_{false},joined_{false},decoder_attached_{false};
 };

@@ -940,6 +940,7 @@ playback::HlsStreamResult LibnxHlsSegmentTransport::stream_segment(
     // Run only from the M4 worker thread; never the Borealis render tick.
     // Strict signed-CDN allowlist at call site AND pre-DNS in the helper.
     if(!services_.ready() || !admit || !emit ||
+       cancelled_.load(std::memory_order_acquire) ||
        !playback::is_reviewable_hls_child_url(url))return {};
     const auto parsed=net::parse_https_url(url);
     if(!parsed || parsed->port!=443 ||
@@ -954,12 +955,17 @@ playback::HlsStreamResult LibnxHlsSegmentTransport::stream_segment(
     std::size_t byte_count=0;
     const auto result=perform_single_streamed_media_request(
         request,*parsed,normalized_timeout(request.timeout_ms),
-        admit,[&](std::string_view bytes) {
-            if(bytes.size()>32*1024 || !emit(bytes))return false;
+        [&](std::size_t length) {
+            return !cancelled_.load(std::memory_order_acquire) &&
+                   admit(length);
+        },[&](std::string_view bytes) {
+            if(cancelled_.load(std::memory_order_acquire) ||
+               bytes.size()>32*1024 || !emit(bytes))return false;
             byte_count+=bytes.size();
             return true;
         });
-    if(!result.ok || result.response.status_code!=200 ||
+    if(cancelled_.load(std::memory_order_acquire) ||
+       !result.ok || result.response.status_code!=200 ||
        byte_count<376 || byte_count>16*1024*1024)return {};
     return {true,byte_count};
 }

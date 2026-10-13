@@ -12,6 +12,7 @@
 
 #endif
 
+#include <atomic>
 #include <string>
 
 namespace ttnx::switch_app {
@@ -108,9 +109,14 @@ public:
     [[nodiscard]] playback::HlsStreamResult stream_segment(
         std::string_view url,const playback::HlsMediaAdmission& admit,
         const playback::HlsMediaChunk& emit) override;
+    void request_cancel() noexcept {cancelled_.store(true,std::memory_order_release);}
+    void reset_cancel() noexcept {cancelled_.store(false,std::memory_order_release);}
 #endif
     [[nodiscard]] bool ready() const noexcept { return services_.ready(); }
 private:
+#ifdef TTNX_M4_ROLLING_STREAM
+    std::atomic<bool> cancelled_{false};
+#endif
     LibnxHttpClient services_;
 };
 #endif
