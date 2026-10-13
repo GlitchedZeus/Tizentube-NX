@@ -8,6 +8,9 @@
 #include "hls_cache_sink.hpp"
 #include "tizentube_nx/playback/audio_gate.hpp"
 #include "tizentube_nx/playback/hls_playback_lease.hpp"
+#ifdef TTNX_M4_TV_PLAYER_UI
+#include "tizentube_nx/ui/tv_player_controls.hpp"
+#endif
 #if defined(TTNX_M4_ROLLING_STREAM) && defined(TTNX_M4_PLAYER_PROBE)
 #include "rolling_hls_sink.hpp"
 #include "tizentube_nx/playback/local_live_hls_gate.hpp"
@@ -487,6 +490,12 @@ public:
            time>static_cast<double>(UINT32_MAX))return 0;
         return static_cast<std::uint32_t>(time);
     }
+    [[nodiscard]] bool is_paused()const noexcept {
+        if(!handle_)return false;
+        int paused=0;
+        return mpv_get_property(handle_,"pause",MPV_FORMAT_FLAG,&paused)>=0
+            && paused!=0;
+    }
     bool have_frame()const{return have_frame_;}
     std::uint64_t frames_rendered()const noexcept{return frames_;}
     bool new_frame()const{return new_frame_;}
@@ -543,7 +552,21 @@ private:
 };
 class VideoFrame final:public brls::View {
 public:
-    explicit VideoFrame(CachedMpv& player):player_(player){setHeight(294);}
+    explicit VideoFrame(CachedMpv& player
+#ifdef TTNX_M4_TV_PLAYER_UI
+                        ,ttnx::ui::TvPlayerControls* controls=nullptr
+#endif
+                        ):player_(player)
+#ifdef TTNX_M4_TV_PLAYER_UI
+                        ,controls_(controls)
+#endif
+    {
+#ifdef TTNX_M4_TV_PLAYER_UI
+        setHeight(602);
+#else
+        setHeight(294);
+#endif
+    }
     ~VideoFrame() override {
         // NanoVG image handles are owned by the active UI video context.
         // Free them while Borealis still has an active video backend, not
@@ -579,6 +602,51 @@ public:
             nvgFillPaint(vg,nvgImagePattern(vg,vx,vy,vw,vh,0,image_,1));
             nvgFill(vg);
         }
+#ifdef TTNX_M4_TV_PLAYER_UI
+        if(controls_ && controls_->transport_visible() && player_.have_frame()) {
+            // Original, low-overhead NanoVG TV transport. This overlays
+            // the same accepted video texture; no second decoder, frame
+            // allocation, thumbnail download or SD artifact is created.
+            const float inset=std::max(24.0f,0.045f*w);
+            const float rail_x=x+inset;
+            const float rail_w=std::max(0.0f,w-2.0f*inset);
+            const float rail_y=y+h-95.0f;
+            nvgBeginPath(vg);
+            nvgRoundedRect(vg,x,y+h-143.0f,w,143.0f,0.0f);
+            nvgFillColor(vg,nvgRGBA(0,0,0,156));
+            nvgFill(vg);
+            nvgBeginPath(vg);
+            nvgRoundedRect(vg,rail_x,rail_y,rail_w,5.0f,2.5f);
+            nvgFillColor(vg,nvgRGBA(255,255,255,105));
+            nvgFill(vg);
+            const float progress=ttnx::ui::TvPlayerControls::progress(
+                static_cast<double>(player_.playback_seconds()),
+                static_cast<double>(player_.duration_seconds()));
+            if(progress>0.0f) {
+                nvgBeginPath(vg);
+                nvgRoundedRect(vg,rail_x,rail_y,rail_w*progress,5.0f,2.5f);
+                nvgFillColor(vg,nvgRGBA(255,255,255,245));
+                nvgFill(vg);
+            }
+            const float mid_x=x+w*0.5f,mid_y=y+h-47.0f;
+            nvgBeginPath(vg);
+            nvgCircle(vg,mid_x,mid_y,27.0f);
+            nvgFillColor(vg,nvgRGBA(255,255,255,224));
+            nvgFill(vg);
+            nvgBeginPath(vg);
+            if(player_.is_paused()) {
+                nvgMoveTo(vg,mid_x-6,mid_y-10);
+                nvgLineTo(vg,mid_x+11,mid_y);
+                nvgLineTo(vg,mid_x-6,mid_y+10);
+                nvgClosePath(vg);
+            } else {
+                nvgRect(vg,mid_x-8,mid_y-10,6,20);
+                nvgRect(vg,mid_x+3,mid_y-10,6,20);
+            }
+            nvgFillColor(vg,nvgRGB(23,23,23));
+            nvgFill(vg);
+        }
+#endif
         // The user accepted real visible video on Switch. Leave the
         // production picture unobstructed; retain numeric frame/texture
         // diagnostics for future faults instead of RGB calibration bars.
@@ -589,6 +657,9 @@ public:
     }
 private:
     CachedMpv& player_;int image_{-1};
+#ifdef TTNX_M4_TV_PLAYER_UI
+    ttnx::ui::TvPlayerControls* controls_{nullptr}; // borrowed UI state
+#endif
     std::uint64_t draw_calls_{0},texture_updates_{0};
 };
 brls::Label* label(brls::Box* box,const std::string& s,int size) {
@@ -619,6 +690,36 @@ public:
     }
     brls::View* createContentView() override {
         auto* root=new brls::Box(brls::Axis::COLUMN);
+#ifdef TTNX_M4_TV_PLAYER_UI
+        root->setPadding(4,8,4,8);
+        video_=new VideoFrame(player_,&tv_controls_);
+        root->addView(video_);
+        auto* actions=new brls::Box(brls::Axis::ROW);
+        actions->setHeight(54);
+        root->addView(actions);
+        add_button(actions,"Replay",[this]{
+            player_.play();tv_controls_.activate(playback_clock_ms());update();
+        });
+        add_button(actions,"Pause / Resume",[this]{
+            player_.pause();tv_controls_.activate(playback_clock_ms());update();
+        });
+        add_button(actions,"-10s",[this]{
+            player_.seek(-10);tv_controls_.activate(playback_clock_ms());update();
+        });
+        add_button(actions,"+10s",[this]{
+            player_.seek(10);tv_controls_.activate(playback_clock_ms());update();
+        });
+        add_button(actions,"Details",[this]{
+            tv_controls_.diagnostics(playback_clock_ms());update();
+        });
+        add_button(actions,"Exit",[this]{
+            persist_history();player_.stop();brls::Application::popActivity();
+        });
+        status_=label(root,player_.status(),14);
+        info_=label(root,player_.stats(),14);
+        status_->setVisibility(brls::Visibility::GONE);
+        info_->setVisibility(brls::Visibility::GONE);
+#else
         root->setPadding(12,20,12,20);
         label(root,live_?"TizenTube NX | M4 Local Live HLS Probe":
             hls_?"TizenTube NX | M3 HLS Playback":
@@ -646,20 +747,44 @@ public:
         auto* two=new brls::Box(brls::Axis::ROW);two->setHeight(56);root->addView(two);
         add_button(two,"Seek -10s (L)",[this]{player_.seek(-10);update();});
         add_button(two,"Seek +10s (R)",[this]{player_.seek(10);update();});
+#endif
         root->registerAction("Back",brls::BUTTON_B,[this](brls::View*) {
+#ifdef TTNX_M4_TV_PLAYER_UI
+            if(tv_controls_.close_one(playback_clock_ms())) {
+                update();return true;
+            }
+#endif
             persist_history();player_.stop();brls::Application::popActivity();return true;
         });
         root->registerAction("Pause",brls::BUTTON_Y,[this](brls::View*) {
-            player_.pause();update();return true;
+            player_.pause();
+#ifdef TTNX_M4_TV_PLAYER_UI
+            tv_controls_.activate(playback_clock_ms());
+#endif
+            update();return true;
         });
+#ifdef TTNX_M4_TV_PLAYER_UI
+        root->registerAction("Controls",brls::BUTTON_X,[this](brls::View*) {
+            tv_controls_.toggle(playback_clock_ms());update();return true;
+        });
+#else
         root->registerAction("Stop",brls::BUTTON_X,[this](brls::View*) {
             persist_history();player_.stop();update();return true;
         });
+#endif
         root->registerAction("Seek -10s",brls::BUTTON_LB,[this](brls::View*) {
-            player_.seek(-10);update();return true;
+            player_.seek(-10);
+#ifdef TTNX_M4_TV_PLAYER_UI
+            tv_controls_.activate(playback_clock_ms());
+#endif
+            update();return true;
         });
         root->registerAction("Seek +10s",brls::BUTTON_RB,[this](brls::View*) {
-            player_.seek(10);update();return true;
+            player_.seek(10);
+#ifdef TTNX_M4_TV_PLAYER_UI
+            tv_controls_.activate(playback_clock_ms());
+#endif
+            update();return true;
         });
         // CRITICAL pinned Borealis (20e2d33b) lifecycle contract:
         // pushActivity() sets the incoming opaque root alpha to 0 during the
@@ -680,6 +805,9 @@ public:
         // Software frame dequeue must not depend on widget draw invalidation:
         // audio can advance even when Borealis does not redraw this View.
         (void)player_.render();
+#ifdef TTNX_M4_TV_PLAYER_UI
+        tv_controls_.tick(playback_clock_ms(),player_.is_paused());
+#endif
         // Record only *actually rendered* normal videos with selected audio,
         // not failed downloads, loadfile errors, or Shorts. No signed URLs
         // or thumbnails are ever persisted. Writes are spaced to 30s or exit.
@@ -745,6 +873,14 @@ private:
     void update(){
         if(status_)status_->setText(player_.status());
         if(info_)info_->setText(player_.stats());
+#ifdef TTNX_M4_TV_PLAYER_UI
+        const bool detail=tv_controls_.panel()==
+            ttnx::ui::TvPlayerControls::Panel::Diagnostics;
+        if(status_)status_->setVisibility(detail?
+            brls::Visibility::VISIBLE:brls::Visibility::GONE);
+        if(info_)info_->setVisibility(detail?
+            brls::Visibility::VISIBLE:brls::Visibility::GONE);
+#endif
     }
     static M3Activity* active_;
     CachedMpv player_;
@@ -755,6 +891,9 @@ private:
     std::uint32_t last_persisted_resume_{0};
     std::uint64_t last_history_write_ms_{0};
     bool presentation_warning_latched_{false};
+#ifdef TTNX_M4_TV_PLAYER_UI
+    ttnx::ui::TvPlayerControls tv_controls_{};
+#endif
     VideoFrame* video_{nullptr}; // borrowed, destroyed by the activity tree
     brls::Label* status_{nullptr};
     brls::Label* info_{nullptr};

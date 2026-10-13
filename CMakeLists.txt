@@ -69,6 +69,14 @@ if(TTNX_BUILD_TESTS)
     target_include_directories(tizentube_nx_playback_resume_gate_tests PRIVATE include)
     add_test(NAME playback_resume_gate COMMAND tizentube_nx_playback_resume_gate_tests)
 
+    # Native player overlay state: auto-hide, diagnostics, safe back,
+    # seek progress clamping, pause visibility and bounded state.
+    add_executable(tizentube_nx_tv_player_controls_tests
+        tests/tv_player_controls_tests.cpp)
+    target_include_directories(tizentube_nx_tv_player_controls_tests PRIVATE include)
+    add_test(NAME tv_player_controls
+        COMMAND tizentube_nx_tv_player_controls_tests)
+
     # Pure host-only layout geometry tests based on the user's 1280x720
     # reference captures; do not alter the hardware-accepted M3 UI.
     add_executable(tizentube_nx_tv_layout_tests tests/tv_layout_tests.cpp)

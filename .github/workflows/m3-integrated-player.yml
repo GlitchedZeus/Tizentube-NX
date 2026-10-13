@@ -64,6 +64,12 @@ jobs:
                 TTNX_M4_ROLLING_STREAM=1 TTNX_M4_PLAYER_PROBE=1 \
                 TARGET=tizentube_nx_m4_local_probe \
                 BUILD=build-m4-player -j2
+              # Independent UI integration candidate. It never replaces the
+              # last hardware-accepted visible-video NRO or uploaded artifact.
+              make -f Makefile.switch TTNX_M3_INTEGRATED=1 \
+                TTNX_M4_TV_PLAYER_UI=1 \
+                TARGET=tizentube_nx_m4_tv_preview \
+                BUILD=build-m4-tv -j2
             '
       - name: Verify separate NRO and no default-output overwrite
         run: |
@@ -90,6 +96,15 @@ jobs:
           test -s build-m4-player/rolling_playback_owner.o
           sha256sum tizentube_nx_m4_local_probe.nro
           echo "Local HLS probe compiled; NOT hardware-accepted or released."
+      - name: Check unshipped TV-player candidate and keep installed size bounded
+        run: |
+          test -s tizentube_nx_m4_tv_preview.nro
+          test -s build-m4-tv/m3_player_activity.o
+          test ! -e tizentube_nx.nro
+          test "$(stat -c %s tizentube_nx_m4_tv_preview.nro)" -le 66445568
+          sha256sum tizentube_nx_m4_tv_preview.nro
+          echo "TV UI candidate compiled; NOT hardware-accepted or uploaded."
+
       # One exact-head NRO artifact, not a public release or an automatic
       # merge. The user requested a candidate following each MAJOR session.
       # Automatic push builds use this branch's exact HEAD (not PR merge refs).
