@@ -107,3 +107,13 @@ any new NRO can be called build-verified.
 
 No Nintendo/YouTube proprietary binary, Google account credentials,
 video file, signed URL or decrypted official NSP resource was committed.
+
+## Accepted-M3 binary isolation hardening
+
+A follow-up commit places the new SSL-to-SD native method, interface
+inheritance and stream parser include behind **TTNX_M4_ROLLING_STREAM**,
+in addition to the existing media-plane guard. As a result, an M3
+integrated build without the M4 flag **does not compile or link** the
+new SSL reader or its stream-vtable entry; its accepted HTTP behavior
+remains on the original code path. This is a source-level isolation
+control, pending native CI confirmation.

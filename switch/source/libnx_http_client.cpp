@@ -7,7 +7,9 @@
 #include "tizentube_nx/playback/playback.hpp"
 #include "tizentube_nx/playback/hls_manifest.hpp"
 #include "tizentube_nx/playback/source_routes.hpp"
+#ifdef TTNX_M4_ROLLING_STREAM
 #include "tizentube_nx/net/http1_media_stream.hpp"
+#endif
 #endif
 
 #include <switch.h>
@@ -383,7 +385,7 @@ net::HttpResult perform_single_request(
 }
 
 
-#ifdef TTNX_M3_MEDIA_PLANE
+#if defined(TTNX_M3_MEDIA_PLANE) && defined(TTNX_M4_ROLLING_STREAM)
 // Media-only opt-in direct Horizon SSL read to app-owned SD chunks.
 // Keep the accepted perform_single_request() byte-for-byte unchanged.
 net::HttpResult perform_single_streamed_media_request(
@@ -925,6 +927,7 @@ net::HttpResult LibnxHlsSegmentTransport::perform(const net::HttpRequest& reques
     return result;
 }
 
+#ifdef TTNX_M4_ROLLING_STREAM
 playback::HlsStreamResult LibnxHlsSegmentTransport::stream_segment(
     std::string_view url,const playback::HlsMediaChunk& emit) {
     // Run only from the M4 worker thread; never the Borealis render tick.
@@ -953,6 +956,7 @@ playback::HlsStreamResult LibnxHlsSegmentTransport::stream_segment(
        byte_count<376 || byte_count>16*1024*1024)return {};
     return {true,byte_count};
 }
+#endif // M4 streaming adapter
 
 #endif
 
