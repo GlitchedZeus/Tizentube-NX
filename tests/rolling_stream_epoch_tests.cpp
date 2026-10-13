@@ -57,6 +57,24 @@ int main(){
     auto snap=epoch->snapshot();
     assert(snap.phase==RollingStreamEpoch::Phase::Backpressure);
     assert(snap.segments_committed==2 && snap.published_bytes==112800);
+    assert(snap.next_segment_index==2 && snap.epoch_origin_segment==0);
+    // A quota-bound prefix must be a clean EOF, not a stuck reader.
+    assert(epoch->ring_for_decoder()->stats().complete);
+    auto terminal_reader=epoch->ring_for_decoder()->open_reader(snap.published_bytes);
+    assert(terminal_reader);
+    std::atomic<bool> eof_done{false};
+    std::atomic<std::int64_t> eof_result{-99};
+    std::thread eof_thread([&] {
+        char byte{};
+        eof_result.store(terminal_reader->read(&byte,1));
+        eof_done.store(true);
+    });
+    for(int i=0;i<500 && !eof_done.load();++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    if(!eof_done.load())epoch->request_stop(); // avoid hanging on regression
+    eof_thread.join();
+    assert(eof_result.load()==0);
+    terminal_reader.reset();
     mpv_handle handle{};
     assert(epoch->register_decoder(&handle));
     mpv_stream_cb_info callback{};
@@ -71,6 +89,8 @@ int main(){
     assert(epoch->cleanup());
     assert(!fs::exists(path));
     assert(epoch->restart_at(2));
+    assert(epoch->snapshot().next_segment_index==2);
+    assert(epoch->snapshot().epoch_origin_segment==2);
     assert(epoch->start());
     for(int i=0;i<5000 && epoch->snapshot().phase!=RollingStreamEpoch::Phase::Backpressure;++i)
         std::this_thread::sleep_for(std::chrono::microseconds(200));

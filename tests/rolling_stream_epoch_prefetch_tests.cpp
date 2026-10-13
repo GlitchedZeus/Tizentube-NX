@@ -36,6 +36,19 @@ static std::string media() {
     fill(188+5+17,{0x0f,0xe1,2,0xf0,0});
     return s;
 }
+struct PausedFetch {
+    std::string ts;
+    std::atomic<bool> entered{false},release{false};
+    struct Reply {bool ok{false};std::size_t bytes{0};};
+    template<class Admit,class Emit>
+    Reply stream(std::string_view,Admit admit,Emit emit) {
+        if(!admit(ts.size()))return {};
+        entered.store(true);
+        while(!release.load())std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        if(!emit(ts))return {};
+        return {true,ts.size()};
+    }
+};
 static bool wait_for(const std::function<bool()>& done) {
     for(int i=0;i<2000;++i) {
         if(done())return true;
@@ -93,5 +106,41 @@ int main(){
     assert(std::chrono::steady_clock::now()-start<std::chrono::seconds(1));
     assert(source->fetched.load()==initial);
     assert(epoch->cleanup()&&!fs::exists(dir/"media.part"));
+    // Decoder waiting for a future segment must unblock immediately on Stop.
+    assert(epoch->restart_at(0)&&epoch->start());
+    assert(wait_for([&] {return epoch->snapshot().phase==Phase::WaitingForPlayback;}));
+    const auto end=epoch->snapshot().published_bytes;
+    auto waiting_reader=epoch->ring_for_decoder()->open_reader(end);
+    assert(waiting_reader);
+    std::atomic<bool> read_entered{false};
+    std::atomic<std::int64_t> cancelled_read{-99};
+    std::thread pending_read([&] {
+        read_entered.store(true);
+        char one{};
+        cancelled_read.store(waiting_reader->read(&one,1));
+    });
+    assert(wait_for([&] {return read_entered.load();}));
+    epoch->request_stop();
+    pending_read.join();
+    assert(cancelled_read.load()==-1);
+    waiting_reader.reset();
+    epoch->stop_and_join();
+    assert(epoch->cleanup()&&!fs::exists(dir/"media.part"));
+
+    // A delayed network chunk must not commit after user Stop.
+    auto slow=std::make_shared<PausedFetch>();
+    slow->ts=media();
+    auto interrupted=RollingStreamEpoch::with_reader(
+        (dir/"late.part").string(),{"segment_0"},slow,
+        [](std::string_view v){return v.substr(0,8)=="segment_";},
+        2*slow->ts.size(),{3000});
+    assert(interrupted && interrupted->start());
+    assert(wait_for([&]{return slow->entered.load();}));
+    interrupted->request_stop();
+    slow->release.store(true);
+    interrupted->stop_and_join();
+    assert(interrupted->snapshot().segments_committed==0);
+    assert(interrupted->snapshot().producer_joined);
+    assert(interrupted->cleanup()&&!fs::exists(dir/"late.part"));
     fs::remove_all(dir);
 }

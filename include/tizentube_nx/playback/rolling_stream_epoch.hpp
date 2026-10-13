@@ -33,6 +33,9 @@ public:
         Phase phase{Phase::Prepared};
         std::size_t segments_committed{0};
         std::size_t total_segments{0};
+        // Absolute segment boundaries for a verified decoder-close re-prime.
+        std::size_t next_segment_index{0};
+        std::size_t epoch_origin_segment{0};
         std::uint64_t published_bytes{0};
         std::uint64_t peak_file_bytes{0};
         bool decoder_attached{false};
@@ -98,8 +101,8 @@ public:
     [[nodiscard]] Snapshot snapshot()const {
         std::lock_guard<std::mutex> lock(mu_);
         const auto stats=ring_?ring_->stats():RollingFileStream::Stats{};
-        return {phase_,committed_,urls_.size(),stats.written_end,
-                stats.physical_size,decoder_attached_,joined_,
+        return {phase_,committed_,urls_.size(),next_,epoch_origin_,
+                stats.written_end,stats.physical_size,decoder_attached_,joined_,
                 phase_==Phase::WaitingForPlayback};
     }
     [[nodiscard]] std::shared_ptr<RollingFileStream> ring_for_decoder()const {
@@ -225,7 +228,14 @@ private:
             std::lock_guard<std::mutex> lock(mu_);
             if(stop_)return;
             if(result==VerifiedRingHlsIngest::Result::Backpressure) {
-                phase_=Phase::Backpressure;return;
+                // A full, independently verified next TS segment will not
+                // fit while mpv holds the previous prefix. Seal that prefix
+                // with clean EOF; otherwise mpv can block at written_end
+                // forever and never release its reader for safe re-prime.
+                // No live decoder bytes are overwritten or evicted.
+                ring_->finish(true);
+                phase_=Phase::Backpressure;
+                return;
             }
             if(result!=VerifiedRingHlsIngest::Result::Committed) {
                 phase_=Phase::Failed;
