@@ -1,4 +1,7 @@
 #include "tizentube_nx/library/local_library.hpp"
+#ifdef NDEBUG
+#undef NDEBUG // execute assertions even in Release CTest builds
+#endif
 #include <cassert>
 #include <filesystem>
 #include <fstream>

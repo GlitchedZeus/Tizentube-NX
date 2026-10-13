@@ -1,4 +1,7 @@
 #include "tizentube_nx/library/playback_resume_gate.hpp"
+#ifdef NDEBUG
+#undef NDEBUG // execute assertions even in Release CTest builds
+#endif
 #include <cassert>
 using ttnx::library::PlaybackResumeGate;
 int main() {
