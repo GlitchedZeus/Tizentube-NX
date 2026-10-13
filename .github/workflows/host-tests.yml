@@ -132,6 +132,13 @@ jobs:
               -R '^rolling_stream_cancel_propagation$' --output-on-failure
       - name: Validate M4 test-only Search/worker/decoder handoff isolation
         run: python3 -m unittest discover -s tests -p m4_native_search_route_contract_tests.py -v
+      - name: M4 source-linked native stream plan under ASan/UBSan
+        run: |
+          set -euo pipefail
+          cmake --build build-sanitized --parallel 2 \
+            --target tizentube_nx_native_ring_plan_tests
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            ctest --test-dir build-sanitized -R '^native_ring_plan$' --output-on-failure
       - name: Decode real growing H264/AAC HLS and verify zero-video-cache shutdown
         run: python3 -m unittest discover -s tests -p rolling_hls_live_decode_tests.py -v
       - name: Sanitized real growing HLS A/V decode and cancel regressions

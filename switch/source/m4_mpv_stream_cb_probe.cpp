@@ -1,6 +1,7 @@
 #if defined(TTNX_M4_RING_STREAM_CB_PROBE) && defined(TTNX_M3_INTEGRATED)
 #include "m4_mpv_stream_cb_probe.hpp"
 #include "tizentube_nx/playback/hls_manifest.hpp"
+#include "tizentube_nx/playback/native_ring_plan.hpp"
 #include "tizentube_nx/core/url.hpp"
 #include "tizentube_nx/core/content_filter.hpp"
 #include "app_storage.hpp"
@@ -39,51 +40,20 @@ register_native_ring_callback(
 [[nodiscard]] std::shared_ptr<playback::RollingStreamEpoch>
 create_native_ring_epoch(const playback::HlsProbePlan& plan,
                          const core::ContentItem& normal_browse_result) {
-    // A valid 11-character video ID is NOT proof of non-Shorts origin.
-    // The caller must preserve the already-filtered normal-video identity
-    // from Search/Browse and match it to the HLS probe before any SD/HTTPS.
-    if(normal_browse_result.kind!=core::ContentKind::Video ||
-       normal_browse_result.id!=plan.source.video_id ||
-       core::should_hide(normal_browse_result))return {};
-    // All other inputs originate from the reviewed M4 source/manifest probe.
-    // Reject separate AAC, fMP4 init fragments, Shorts and over-720p
-    // before opening SD files or doing another CDN request.
-    if(!core::is_valid_video_id(plan.source.video_id) ||
-       plan.selected.height==0 || plan.selected.height>720 ||
-       plan.selected.fps==0 || plan.selected.fps>60 ||
-       plan.audio_segments || !plan.selected.audio_playlist_url.empty() ||
-       !plan.source.external_aac_url.empty() ||
-       plan.video_segments.init_segment_url ||
-       plan.video_segments.segments.empty() ||
-       plan.video_segments.segments.size()>4096 ||
-       plan.source.duration_ms==0) return {};
-    std::vector<std::string> urls;
-    std::vector<std::uint64_t> segment_durations;
-    urls.reserve(plan.video_segments.segments.size());
-    segment_durations.reserve(plan.video_segments.segments.size());
-    std::uint64_t duration=0;
-    for(const auto& segment:plan.video_segments.segments) {
-        if(!segment.duration_ms || segment.duration_ms>60000 ||
-           !playback::is_reviewable_hls_child_url(segment.url) ||
-           duration>UINT64_MAX-segment.duration_ms)return {};
-        duration+=segment.duration_ms;
-        urls.push_back(segment.url);
-        segment_durations.push_back(segment.duration_ms);
-    }
-    const auto mismatch=duration>plan.source.duration_ms
-        ?duration-plan.source.duration_ms
-        :plan.source.duration_ms-duration;
-    if(mismatch>3000)return {};
+    // Host-testable, fail-closed admission BEFORE SD and HTTPS services.
+    // This also enforces full playlist duration and a <=512KiB URL plan.
+    auto accepted=playback::admit_native_ring_plan(plan,normal_browse_result);
+    if(!accepted)return {};
     auto transport=std::make_shared<LibnxHlsSegmentTransport>();
     if(!transport->ready())return {};
     auto reader=std::make_shared<OwnedNativeHlsReader>(std::move(transport));
     const std::string path=std::string(ttnx::kAppDirectory)+"/m4_stream_ring.part";
     auto owned=playback::RollingStreamEpoch::with_reader(
-        path,std::move(urls),std::move(reader),
+        path,std::move(accepted->urls),std::move(reader),
         [](std::string_view url) {
             return playback::is_reviewable_hls_child_url(url);
         },playback::RollingFileStream::kMaximumMedia,
-        std::move(segment_durations));
+        std::move(accepted->durations_ms));
     return owned
         ? std::shared_ptr<playback::RollingStreamEpoch>(std::move(owned))
         : nullptr;

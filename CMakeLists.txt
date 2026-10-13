@@ -207,6 +207,14 @@ if(TTNX_BUILD_TESTS)
     add_test(NAME rolling_stream_cancel_propagation
         COMMAND tizentube_nx_rolling_stream_cancel_propagation_tests)
 
+    # Source-linked normal-video identity, muxed H264/AAC-only native TS
+    # admission, signed URLs, duration arithmetic and playlist size caps.
+    add_executable(tizentube_nx_native_ring_plan_tests
+        tests/native_ring_plan_tests.cpp)
+    target_include_directories(tizentube_nx_native_ring_plan_tests PRIVATE include)
+    target_link_libraries(tizentube_nx_native_ring_plan_tests PRIVATE tizentube_nx_core)
+    add_test(NAME native_ring_plan COMMAND tizentube_nx_native_ring_plan_tests)
+
     # Fixed app-owned crash-orphan sweep; symlinks/user files must survive.
     add_executable(tizentube_nx_ring_orphan_cleanup_tests
         tests/ring_orphan_cleanup_tests.cpp)
