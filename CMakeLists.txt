@@ -171,6 +171,13 @@ if(TTNX_BUILD_TESTS)
     add_test(NAME rolling_stream_epoch_long_vod
         COMMAND tizentube_nx_rolling_stream_epoch_long_vod_tests)
 
+    # Deterministic verified-EOF, no-replay and 10m+ controlled re-prime tests.
+    add_executable(tizentube_nx_rolling_reprime_gate_tests
+        tests/rolling_reprime_gate_tests.cpp)
+    target_include_directories(tizentube_nx_rolling_reprime_gate_tests PRIVATE include)
+    add_test(NAME rolling_reprime_gate
+        COMMAND tizentube_nx_rolling_reprime_gate_tests)
+
     # Fixed app-owned crash-orphan sweep; symlinks/user files must survive.
     add_executable(tizentube_nx_ring_orphan_cleanup_tests
         tests/ring_orphan_cleanup_tests.cpp)
