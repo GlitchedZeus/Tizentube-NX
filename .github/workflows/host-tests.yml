@@ -60,7 +60,7 @@ jobs:
             -fsanitize=address,undefined -fno-omit-frame-pointer \
             -DTTNX_M4_ROLLING_HOST_TEST=1 \
             -Iinclude -Iswitch/source tests/rolling_hls_sink_tests.cpp \
-            switch/source/rolling_hls_sink.cpp \
+            switch/source/rolling_hls_sink.cpp src/core/ts_streams.cpp \
             -o /tmp/ttnx-rolling-hls-san
           /tmp/ttnx-rolling-hls-san
       - name: Sanitized reviewed-HTTPS to rolling-HLS integration tests
