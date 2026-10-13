@@ -150,3 +150,12 @@ jobs:
             -o /tmp/ttnx-tv-player-controls-san
           ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
             /tmp/ttnx-tv-player-controls-san
+      - name: Local History/Watch Later/Following 20-row pager sanitizer gate
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror -O1 -g \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iinclude tests/library_pager_tests.cpp \
+            -o /tmp/ttnx-library-pager-san
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/ttnx-library-pager-san

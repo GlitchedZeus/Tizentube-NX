@@ -9,6 +9,7 @@
 #include <functional>
 #include <future>
 #include <mutex>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -36,6 +37,7 @@
 #include "tizentube_nx/core/search_model.hpp"
 #include "tizentube_nx/core/search_presentation.hpp"
 #include "tizentube_nx/ui/navigation.hpp"
+#include "tizentube_nx/ui/library_pager.hpp"
 #include "tizentube_nx/library/local_library.hpp"
 #include "tizentube_nx/youtube/guest_api.hpp"
 #include "tizentube_nx/youtube/guest_home.hpp"
@@ -2216,6 +2218,127 @@ private:
         }
     }
 
+    enum class LocalListKind { WatchLater, Favorite, History, Following };
+    struct LocalPageEntry { std::string id; std::uint32_t resume{0}; };
+
+    // Native Borealis page recycling: at most 20 row buttons per section,
+    // independently of a thousand-entry on-disk Library. No Google API,
+    // thumbnail cache, video file or second renderer is involved.
+    void add_local_list(brls::Box* parent,LocalListKind kind,
+                        const std::string& heading,brls::Label* feedback) {
+        label(parent,heading,24);
+        auto entries=std::make_shared<std::vector<LocalPageEntry>>();
+        switch(kind) {
+        case LocalListKind::WatchLater:
+            for(const auto& id:library_.watch_later())
+                entries->push_back({id,0});
+            break;
+        case LocalListKind::Favorite:
+            for(const auto& id:library_.favorites())
+                entries->push_back({id,0});
+            break;
+        case LocalListKind::History:
+            for(const auto& e:library_.history())
+                entries->push_back({e.video_id,e.resume_seconds});
+            break;
+        case LocalListKind::Following:
+            for(const auto& id:library_.followed_channels())
+                entries->push_back({id,0});
+            break;
+        }
+        if(entries->empty()) {
+            label(parent,kind==LocalListKind::Following
+                ?"Follow a channel from Search to see it here."
+                :"Nothing saved yet. Select an eligible video in Search.",17);
+            return;
+        }
+        auto pager=std::make_shared<ttnx::ui::LibraryPager>(entries->size());
+        auto* rows=new brls::Box(brls::Axis::COLUMN);
+        parent->addView(rows);
+        auto* pager_actions=new brls::Box(brls::Axis::ROW);
+        pager_actions->setHeight(56);
+        parent->addView(pager_actions);
+        auto* previous=button(pager_actions,"First page");
+        auto* next=button(pager_actions,"Next 20");
+        previous->setGrow(1.0f);
+        next->setGrow(1.0f);
+        auto* paging_status=label(parent,"",17);
+        auto render=[this,entries,pager,kind,feedback,rows,
+                     previous,next,paging_status]() {
+            while(!rows->getChildren().empty())
+                rows->removeView(rows->getChildren().back());
+            const auto [first,last]=pager->range();
+            for(std::size_t index=first;index<last;++index) {
+                const auto item=(*entries)[index];
+                const auto text=kind==LocalListKind::Following
+                    ?"Channel: "+item.id
+                    :kind==LocalListKind::History
+                    ?item.id+" | "+std::to_string(item.resume)+"s"
+                    :"Video: "+item.id;
+                auto* row=button(rows,text);
+                auto removed=std::make_shared<bool>(false);
+                row->registerClickAction(
+                    [this,item,kind,feedback,removed](brls::View*) {
+                    if(*removed) return true;
+                    if(kind==LocalListKind::Following) {
+                        open_channel_page(item.id,"Followed channel");
+                        return true;
+                    }
+#ifdef TTNX_M3_INTEGRATED
+                    if(!guest_session_ || !guest_session_->usable())
+                        feedback->setText("Connect to guest YouTube first.");
+                    else start_m3_video(item.id,
+                        kind==LocalListKind::History?item.resume:0);
+#else
+                    feedback->setText("Playback requires integrated player.");
+#endif
+                    return true;
+                });
+                row->registerAction("Remove locally",brls::BUTTON_Y,
+                    [this,item,kind,feedback,row,removed](brls::View*) {
+                    if(*removed)return true;
+                    refresh_library_metadata();
+                    auto original=library_;
+                    bool changed=false;
+                    switch(kind) {
+                    case LocalListKind::WatchLater:
+                        changed=library_.remove_watch_later(item.id);break;
+                    case LocalListKind::Favorite:
+                        changed=library_.remove_favorite(item.id);break;
+                    case LocalListKind::History:
+                        changed=library_.erase_history(item.id);break;
+                    case LocalListKind::Following:
+                        changed=library_.unfollow_channel(item.id);break;
+                    }
+                    if(changed && persist_library_metadata()) {
+                        *removed=true;
+                        row->setText("Removed locally: "+item.id);
+                        feedback->setText("Removed from the Switch Library.");
+                    } else {
+                        library_=std::move(original);
+                        feedback->setText("Local removal was not saved.");
+                    }
+                    return true;
+                });
+            }
+            previous->setText(pager->has_previous()
+                ?"Previous 20":"First page");
+            next->setText(pager->has_next()?"Next 20":"Last page");
+            paging_status->setText("Page "+std::to_string(pager->page()+1)+
+                " / "+std::to_string(pager->pages())+
+                "  |  Y Remove locally");
+        };
+        previous->registerClickAction([pager,render](brls::View*) {
+            if(pager->previous())render();
+            return true;
+        });
+        next->registerClickAction([pager,render](brls::View*) {
+            if(pager->next())render();
+            return true;
+        });
+        render();
+    }
+
     brls::View* create_page(ttnx::ui::RootSection section) {
         using ttnx::ui::RootSection;
         // Startup recovery build: use the same plain ScrollingFrame ownership
@@ -2342,87 +2465,25 @@ private:
         }
         case RootSection::Subscriptions: {
             refresh_library_metadata();
-            label(content, "Following", 34);
-            label(content, "Locally followed channels. No Google sign-in.", 22);
-            if(library_.followed_channels().empty())
-                label(content, "Open a channel result in Search and select Follow on this Switch.", 17);
-            unsigned shown=0;
-            for(const auto& id:library_.followed_channels()) {
-                if(++shown>20)break;
-                auto* row=button(content,"Open channel: "+id);
-                row->registerClickAction([this,id](brls::View*) {
-                    open_channel_page(id,"Followed channel");
-                    return true;
-                });
-            }
+            label(content,"Following",34);
+            label(content,"Locally followed channels; no Google login.",20);
+            auto* status=label(content,storage_ready_
+                ?"A Open channel   Y Unfollow"
+                :"SD unavailable: followed channels read-only",17);
+            add_local_list(content,LocalListKind::Following,
+                           "Followed channels",status);
             break;
         }
         case RootSection::Library: {
             refresh_library_metadata();
-            label(content, "Library", 34);
-            label(content, "Local History / Watch Later", 25);
-            label(content,
-                "Only video IDs and playback positions are stored. No videos, thumbnails or Google account.",
-                17);
-            auto* library_feedback=label(content,
-                storage_ready_ ? "Private, on-device metadata" : "SD unavailable: Library is read-only",
-                17);
-            label(content, "Watch Later", 25);
-            if(library_.watch_later().empty())
-                label(content, "Choose Add to Watch Later on a Search video.", 17);
-            unsigned later_count=0;
-            for(const auto& id:library_.watch_later()) {
-                if(++later_count>20)break; // bounded Borealis view count
-                auto* row=button(content, "Play saved video: "+id);
-                row->registerClickAction([this,id,library_feedback](brls::View*) {
-#ifdef TTNX_M3_INTEGRATED
-                    if(!guest_session_ || !guest_session_->usable()) {
-                        library_feedback->setText("Connect to guest YouTube first.");
-                    } else start_m3_video(id);
-#else
-                    library_feedback->setText("Playback requires integrated player.");
-#endif
-                    return true;
-                });
-            }
-            label(content, "Favorites", 25);
-            if(library_.favorites().empty())
-                label(content, "Use Add to Favorites on any Search video.", 17);
-            unsigned favorites_count=0;
-            for(const auto& id:library_.favorites()) {
-                if(++favorites_count>20)break;
-                auto* row=button(content,"Play favorite: "+id);
-                row->registerClickAction([this,id,library_feedback](brls::View*) {
-#ifdef TTNX_M3_INTEGRATED
-                    if(!guest_session_ || !guest_session_->usable())
-                        library_feedback->setText("Connect to guest YouTube first.");
-                    else start_m3_video(id);
-#else
-                    library_feedback->setText("Playback requires integrated player.");
-#endif
-                    return true;
-                });
-            }
-            label(content, "Recent playback", 25);
-            if(library_.history().empty())
-                label(content, "Videos appear here only after their picture and audio start.", 17);
-            unsigned recent_count=0;
-            for(const auto& video:library_.history()) {
-                if(++recent_count>20)break;
-                const std::string id=video.video_id;
-                const auto resume_seconds=video.resume_seconds;
-                auto* row=button(content,id+" | "+std::to_string(resume_seconds)+"s");
-                row->registerClickAction([this,id,resume_seconds,library_feedback](brls::View*) {
-#ifdef TTNX_M3_INTEGRATED
-                    if(!guest_session_ || !guest_session_->usable())
-                        library_feedback->setText("Connect to guest YouTube first.");
-                    else start_m3_video(id,resume_seconds);
-#else
-                    library_feedback->setText("Playback requires integrated player.");
-#endif
-                    return true;
-                });
-            }
+            label(content,"Library",34);
+            label(content,"History, Watch Later and Favorites stay on this Switch.",20);
+            auto* status=label(content,storage_ready_
+                ?"A Play   Y Remove locally"
+                :"SD unavailable: Library is read-only",17);
+            add_local_list(content,LocalListKind::History,"Recent playback",status);
+            add_local_list(content,LocalListKind::WatchLater,"Watch Later",status);
+            add_local_list(content,LocalListKind::Favorite,"Favorites",status);
             break;
         }
         case RootSection::Settings: {

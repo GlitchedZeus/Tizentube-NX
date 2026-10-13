@@ -77,6 +77,12 @@ if(TTNX_BUILD_TESTS)
     add_test(NAME tv_player_controls
         COMMAND tizentube_nx_tv_player_controls_tests)
 
+    # Local 20-row recycler; no unbounded Borealis view accumulation.
+    add_executable(tizentube_nx_library_pager_tests
+        tests/library_pager_tests.cpp)
+    target_include_directories(tizentube_nx_library_pager_tests PRIVATE include)
+    add_test(NAME library_pager COMMAND tizentube_nx_library_pager_tests)
+
     # Pure host-only layout geometry tests based on the user's 1280x720
     # reference captures; do not alter the hardware-accepted M3 UI.
     add_executable(tizentube_nx_tv_layout_tests tests/tv_layout_tests.cpp)

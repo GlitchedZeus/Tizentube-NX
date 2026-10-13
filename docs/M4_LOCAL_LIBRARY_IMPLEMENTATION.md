@@ -103,3 +103,38 @@ until those CI/hardware gates pass.
    **100,000,000 decimal byte** total SD ceiling and RAM with sysmodules.
 7. Only after normal/sanitizer CI, native devkitA64 compile, and physical
    picture/audio/seek/sleep tests should an integrated NRO be accepted.
+
+## M4 Library UI — bounded native paging and local item removal
+
+The initial M4 Library stored up to 1,000 history IDs but only rendered
+the first 20 items in each section. This tranche replaces that cutoff
+with actual **previous/next-page native browsing**.
+
+- `include/tizentube_nx/ui/library_pager.hpp` exposes a constant
+  20-item page window with arithmetic bounds and no allocation.
+- The app snapshots just bounded Library metadata when opening a tab,
+  then replaces the **20 Borealis buttons in one section** as the user
+  switches pages. Memory and view count remain independent of whether
+  the user has 20 or 1,000 history records.
+- History, Watch Later and Favorites each page independently; locally
+  followed channels use the same recycler.
+- **A** opens a saved video or channel; **Y** removes the focused entry
+  from its **local** collection. Failed SD writes restore the Library's
+  previous state. The focused row is not destroyed under the user's
+  cursor, so later focus navigation remains stable.
+- Removing from History does not delete a Watch Later or Favorite
+  bookmark for the same video; unfollow does not make a YouTube API
+  subscription change.
+- Normal and ASan/UBSan host tests cover empty and short lists,
+  20/21 boundary, 1,000 records across 50 pages, previous/next
+  bounds and the strict 20-visible-rows invariant. Tests are
+  registered in CMake and GitHub's standalone sanitizer job.
+
+This is *native UI code*, pending full devkitA64 compilation and real
+hardware touch/D-pad/left-stick focus validation. The accepted M3
+render path still remains the hardware-good baseline.
+
+Next: integrate the original screenshot-derived thumbnail-card rails,
+make channel Following accessible from channel details, and continue
+low-RAM incremental network-to-SD streaming under the approx. 25 MB
+disposable cache and 100 MB total installation constraints.
