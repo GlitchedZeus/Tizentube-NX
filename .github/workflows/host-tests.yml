@@ -119,6 +119,8 @@ jobs:
         env:
           TTNX_M4_LIVE_SANITIZE: "1"
         run: python3 -m unittest discover -s tests -p rolling_hls_live_decode_tests.py -v
+      - name: M4 native signed-CDN SSL compile and policy guard
+        run: python3 -m unittest discover -s tests -p m4_native_ssl_stream_contract_tests.py -v
       - name: M4 native libmpv local-only probe isolation contract
         run: python3 -m unittest discover -s tests -p m4_local_player_contract_tests.py -v
       - name: Sanitized rolling local-playlist admission and hostile URI gate

@@ -406,7 +406,12 @@ net::HttpResult perform_single_streamed_media_request(
     }
 
     TlsConnection tls;
-    tls.raw_fd = tcp_connect_allowed_host(parsed_url.host, timeout_ms, media_plane);
+    // This is exclusively the approved signed-media stream. The legacy
+    // perform_single_request() path has its own media_plane selector; no
+    // such parameter exists in this helper. A false/default gate would
+    // reject the CDN, and an undeclared name breaks native devkitA64 builds.
+    // Always recheck the explicit media-host allowlist before DNS.
+    tls.raw_fd = tcp_connect_allowed_host(parsed_url.host, timeout_ms, true);
     if (tls.raw_fd < 0) {
         result.failure_stage = net::HttpFailureStage::Tcp;
         result.error = "TCP connection to the approved YouTube host failed.";
