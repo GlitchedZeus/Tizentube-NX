@@ -125,3 +125,16 @@ All third-party architectural attribution remains in
 `docs/UPSTREAM_NATIVE_STREAM_BRIDGE.md` and
 `docs/THIRD_PARTY_MEDIA.md`. No original YouTube NSP proprietary
 binary, images, or Google credentials were imported.
+
+## Post-review Shorts/provenance boundary
+
+The native epoch factory now requires **both** an HLS probe plan AND
+the corresponding already-filtered `core::ContentItem` from Browse.
+It rejects any kind other than `ContentKind::Video`, a mismatched
+normal-video ID, and anything rejected by the existing
+`core::should_hide()` policy (including Shorts and promoted/shopping
+items). This is an explicit data-provenance input, not an assumption
+that a syntactically valid YouTube ID cannot belong to a Short.
+
+The real video renderer and M3 launcher remain untouched; no
+unauthorized menu entry into the experimental player was added.

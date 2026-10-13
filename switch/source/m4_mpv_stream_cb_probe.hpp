@@ -5,6 +5,7 @@
 #include "tizentube_nx/playback/verified_ring_hls_ingest.hpp"
 #include "tizentube_nx/playback/rolling_stream_epoch.hpp"
 #include "tizentube_nx/playback/hls_probe.hpp"
+#include "tizentube_nx/core/content_filter.hpp"
 #include "libnx_http_client.hpp"
 #include <memory>
 
@@ -21,7 +22,8 @@ register_native_ring_callback(
 // Caller supplies one app-owned validated ring root and retains the bridge.
 // Own the native SSL adapter, HLS reader, worker and bounded ring together.
 [[nodiscard]] std::shared_ptr<playback::RollingStreamEpoch>
-create_native_ring_epoch(const playback::HlsProbePlan& plan);
+create_native_ring_epoch(const playback::HlsProbePlan& plan,
+                         const core::ContentItem& normal_browse_result);
 
 [[nodiscard]] playback::VerifiedRingHlsIngest::Result
 ingest_native_ring_segment(
