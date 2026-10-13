@@ -46,11 +46,13 @@ class M4RingReprimeContract(unittest.TestCase):
             "    [[nodiscard]] bool seek_absolute",1)[0]
         self.assertIn("ring_reprime_.cancel();",stop)
         self.assertIn("close();",stop)
-        self.assertIn("ring_terminal_retired_=true;",stop)
+        self.assertIn("ring_terminal_retired_=deleted;",stop)
+        self.assertIn("media deletion pending safe reader release",stop)
         service=PLAYER.split("void service_ring_reprime() {",1)[1].split(
             "    [[nodiscard]] std::uint32_t playback_seconds()",1)[0]
         self.assertIn("Gate::Stage::Finished",service)
-        self.assertIn("ring_terminal_retired_=true;",service)
+        self.assertIn("ring_terminal_retired_=deleted;",service)
+        self.assertIn("media cleanup pending safe reader release",service)
 
     def test_verified_current_decoder_frames_only(self):
         update=PLAYER.split("void update_ring_buffer_window() noexcept {",1)[1].split(

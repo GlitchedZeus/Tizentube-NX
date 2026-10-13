@@ -363,8 +363,12 @@ public:
             audio_gate_.reset();
             audio_failure_latched_=false;
             have_frame_=false;
-            ring_terminal_retired_=true;
-            status_="Stopped; disposable M4 media retired after decoder close";
+            const bool deleted=ring_epoch_->snapshot().phase==
+                playback::RollingStreamEpoch::Phase::Cleaned;
+            ring_terminal_retired_=deleted;
+            status_=deleted
+                ?"Stopped; disposable M4 media deleted after decoder close"
+                :"Stopped; media deletion pending safe reader release";
             return;
         }
 #endif
@@ -623,11 +627,15 @@ public:
             // No watched video survives EOF or a decoder error. This is
             // separate from user Stop, which retires media immediately.
             if(!ring_terminal_retired_) {
-                ring_terminal_retired_=true;
                 close();
-                status_=stage==Gate::Stage::Finished
-                    ?"M4 playback complete; temporary video deleted"
-                    :"M4 playback failed; temporary media retired";
+                const bool deleted=ring_epoch_->snapshot().phase==
+                    playback::RollingStreamEpoch::Phase::Cleaned;
+                ring_terminal_retired_=deleted;
+                status_=!deleted
+                    ?"M4 media cleanup pending safe reader release"
+                    :stage==Gate::Stage::Finished
+                        ?"M4 playback complete; temporary video deleted"
+                        :"M4 playback failed; temporary media deleted";
             }
             return;
         }
