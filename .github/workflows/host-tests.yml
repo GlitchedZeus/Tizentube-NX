@@ -91,7 +91,7 @@ jobs:
             if [ "$mode" = sanitized ]; then
               flags="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer"
             fi
-            g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror \$flags \
+            g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror $flags \
               -Iinclude tests/rolling_reprime_gate_tests.cpp \
               -o "/tmp/ttnx-ring-reprime-$mode"
             ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \

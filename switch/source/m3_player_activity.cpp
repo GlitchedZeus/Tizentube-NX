@@ -6,6 +6,7 @@
 #include "tizentube_nx/library/playback_resume_gate.hpp"
 #if defined(TTNX_M4_RING_STREAM_CB_PROBE)
 #include "tizentube_nx/playback/rolling_stream_epoch.hpp"
+#include "tizentube_nx/playback/rolling_reprime_gate.hpp"
 #endif
 #include "media_file_sink.hpp"
 #include "hls_cache_sink.hpp"
@@ -242,6 +243,8 @@ public:
             M3Diagnostics::record(M3Stage::Player,M3Event::Begin,result,0,0);
             if(result<0){status_="Local ring protocol was rejected";return false;}
             ring_loaded_=true;
+            ring_verified_av_=false;
+            epoch_frame_base_=frames_;
             status_="Opening verified *local* H264/AAC ring stream...";
             return true;
         }
@@ -340,10 +343,14 @@ public:
         M3Diagnostics::record(M3Stage::Player,M3Event::Seek,sec,result,0);
     }
     void stop() {
-        if(!handle_)return;
 #if defined(TTNX_M4_RING_STREAM_CB_PROBE)
-        if(ring_epoch_)ring_epoch_->request_stop();
+        // Stop wins even if EOF and a new prefix race this UI tick.
+        if(ring_epoch_) {
+            ring_reprime_.cancel();
+            ring_epoch_->request_stop();
+        }
 #endif
+        if(!handle_)return;
         const char* cmd[]={"stop",nullptr};
         const int result=mpv_command(handle_,cmd);
         M3Diagnostics::record(M3Stage::Player,M3Event::Stop,result,0,0);
@@ -462,6 +469,29 @@ public:
                 audio_gate_.reset();
                 const auto* end=static_cast<const mpv_event_end_file*>(e->data);
                 M3Diagnostics::record(M3Stage::Decode,M3Event::End,end ? end->reason : -1,end ? end->error : 0,0);
+#if defined(TTNX_M4_RING_STREAM_CB_PROBE)
+                if(ring_epoch_ && ring_loaded_ &&
+                   ring_reprime_.stage()==playback::RollingReprimeGate::Stage::Watching) {
+                    using Gate=playback::RollingReprimeGate;
+                    const auto snap=ring_epoch_->snapshot();
+                    const auto active=ring_epoch_->ring_for_decoder();
+                    const auto stats=active?active->stats():
+                        playback::RollingFileStream::Stats{};
+                    const Gate::Boundary boundary{snap.next_segment_index,
+                        snap.epoch_origin_segment,snap.total_segments,
+                        snap.phase==playback::RollingStreamEpoch::Phase::Backpressure,
+                        snap.decoder_attached,active && stats.complete &&
+                        !stats.failed && !stats.cancelled};
+                    const auto why=end && end->reason==MPV_END_FILE_REASON_EOF
+                        ?Gate::End::Eof:
+                        end && end->reason==MPV_END_FILE_REASON_ERROR
+                            ?Gate::End::Error:Gate::End::Stop;
+                    if(ring_reprime_.observe(why,boundary,
+                            ring_verified_av_ && !audio_failure_latched_)) {
+                        status_="Verified ring quota reached; closing decoder for continuation";
+                    }
+                }
+#endif
                 if(!audio_failure_latched_)
                     status_=(end && end->reason==MPV_END_FILE_REASON_ERROR)
                         ?"Decoder error opening local media":
@@ -550,11 +580,61 @@ public:
     }
 #if defined(TTNX_M4_RING_STREAM_CB_PROBE)
     void update_ring_buffer_window() noexcept {
-        if(!ring_epoch_ || !ring_loaded_ || !frames_ ||
-           !selected_audio_track())return;
+        if(!ring_epoch_ || !ring_loaded_ ||
+           frames_<=epoch_frame_base_ || !have_frame_ ||
+           !selected_video_track() || !selected_audio_track())return;
+        // Only a decoded frame from THIS decoder and selected AAC can
+        // advance its producer. Earlier epochs never certify a new epoch.
+        ring_verified_av_=true;
         const auto elapsed=playback_seconds();
         ring_epoch_->advance_playback_ms(
             static_cast<std::uint64_t>(elapsed)*1000);
+    }
+    // M4 experimental callback only: drive teardown and fresh prefix on a
+    // UI tick, never inside a libmpv callback or the network worker thread.
+    void service_ring_reprime() {
+        if(!ring_epoch_)return;
+        using Gate=playback::RollingReprimeGate;
+        if(ring_reprime_.stage()==Gate::Stage::Requested) {
+            const auto next=ring_reprime_.next_segment();
+            // close destroys the render context and mpv, joins the worker,
+            // verifies zero outstanding decoder readers and unlinks old SD.
+            close();
+            if(ring_epoch_->snapshot().phase!=
+                   playback::RollingStreamEpoch::Phase::Cleaned ||
+               !ring_epoch_->restart_at(next) || !ring_epoch_->start() ||
+               !ring_reprime_.started(next)) {
+                ring_reprime_.fail();
+                ring_epoch_->request_stop();
+                status_="M4 continuation blocked: decoder/cache not safely retired";
+                return;
+            }
+            ring_loaded_=false;
+            ring_verified_av_=false;
+            epoch_frame_base_=frames_;
+            status_="M4 continuation: preparing next verified SD prefix...";
+        }
+        if(ring_reprime_.stage()!=Gate::Stage::WaitingForPrefix)return;
+        const auto s=ring_epoch_->snapshot();
+        if(s.phase==playback::RollingStreamEpoch::Phase::Failed ||
+           s.phase==playback::RollingStreamEpoch::Phase::StopRequested ||
+           s.phase==playback::RollingStreamEpoch::Phase::Joined ||
+           s.phase==playback::RollingStreamEpoch::Phase::Cleaned ||
+           (s.phase==playback::RollingStreamEpoch::Phase::Backpressure &&
+            !s.segments_committed)) {
+            ring_reprime_.fail();
+            ring_epoch_->request_stop();
+            status_="M4 continuation failed before verified media was available";
+            return;
+        }
+        if(!ring_epoch_->ring_for_decoder())return; // no UI polling/blocking
+        if(!init() || !play() || !ring_reprime_.prefix_ready()) {
+            ring_reprime_.fail();
+            close();
+            status_="M4 continuation: decoder restart failed";
+            return;
+        }
+        status_="M4 continuation opened; verifying current video and AAC...";
     }
 #endif
     [[nodiscard]] std::uint32_t playback_seconds()const noexcept {
@@ -639,7 +719,9 @@ private:
     bool live_loaded_{false};
 #if defined(TTNX_M4_RING_STREAM_CB_PROBE)
     std::shared_ptr<playback::RollingStreamEpoch> ring_epoch_{};
-    bool ring_loaded_{false};
+    playback::RollingReprimeGate ring_reprime_{};
+    bool ring_loaded_{false},ring_verified_av_{false};
+    std::uint64_t epoch_frame_base_{0};
 #endif
     std::string status_{"Starting libmpv..."};
     bool have_frame_{false},new_frame_{false};
@@ -918,6 +1000,8 @@ public:
         // After actual picture and selected audio, wake the producer to
         // fetch at most 15s ahead of the real decoder clock.
         player_.update_ring_buffer_window();
+        // Experimental M4 only; normal accepted M3 never owns a ring epoch.
+        player_.service_ring_reprime();
 #endif
 #ifdef TTNX_M4_TV_PLAYER_UI
         tv_controls_.tick(playback_clock_ms(),player_.is_paused());
