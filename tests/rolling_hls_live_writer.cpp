@@ -34,8 +34,22 @@ int main(int argc, char** argv) {
         std::snprintf(name,sizeof(name),"media_%05d.ts",i);
         std::ifstream file(samples / name,std::ios::binary);
         if (!file) return 4;
-        const std::string bytes{std::istreambuf_iterator<char>(file), {}};
-        if (!sink.append(static_cast<std::size_t>(i),2000,bytes)) return 5;
+        // Actual file-backed, chunked H.264/AAC producer. The test no
+        // longer materializes an entire TS segment (or uses append(bytes)).
+        // 32 KiB of input plus the validator's 64 KiB PAT/PMT sample are
+        // the only app-controlled media buffers in this harness.
+        if (!sink.append_streamed(static_cast<std::size_t>(i),2000,
+            [&](const RollingHlsSink::ChunkEmitter& emit) {
+                char bytes[32*1024];
+                while(file.good()) {
+                    if(fs::exists(control / "cancel"))return false;
+                    file.read(bytes,sizeof(bytes));
+                    const auto n=file.gcount();
+                    if(n>0 && !emit(std::string_view(bytes,
+                               static_cast<std::size_t>(n))))return false;
+                }
+                return file.eof();
+            })) return 5;
         std::cout << "segment=" << i << std::endl;
         for(int j=0;j<9;++j) {
             if(!maybe_retire())return 8;

@@ -97,3 +97,21 @@ CI setup updates link the actual TS parser into sink tests and the
 FFmpeg growing-playlist writer, and register standalone validator
 normal/sanitizer tests. Do not mark full end-to-end streaming accepted
 until the exact native and physical Switch gates pass.
+
+## Independent real A/V sample check
+
+In addition to synthetic PAT/PMT fixtures, FFmpeg was used locally to
+generate a genuine two-second 320×180 H.264 + AAC MPEG-TS stream. The
+exact incremental validator and original MPEG-TS PSI parser accepted it
+using 32-KiB `std::ifstream` reads, with no whole-segment in-memory copy.
+Executed normal C++20 and ASan/UBSan builds both passed. The source
+sample was 224,472 bytes; the validator's retained media sample stayed
+at or below 65,536 bytes.
+
+The offline integration writer `tests/rolling_hls_live_writer.cpp` now
+also uses `RollingHlsSink::append_streamed()` with 32-KiB blocks and
+cancellation checks instead of constructing a whole-file std::string.
+Consequently the existing 12-second real H.264/AAC growing-playlist,
+retirement and zero-cache CI tests will exercise the new sink operation.
+**This exact upgraded FFmpeg integration has not yet executed on the
+GitHub runner**, which remains queued, so no full pipeline pass is claimed.
