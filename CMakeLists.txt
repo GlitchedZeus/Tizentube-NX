@@ -160,6 +160,17 @@ if(TTNX_BUILD_TESTS)
     add_test(NAME rolling_stream_epoch_prefetch
         COMMAND tizentube_nx_rolling_stream_epoch_prefetch_tests)
 
+    # 10m30s mock H264/AAC VOD through >100 finite, quota-bound epochs;
+    # explicitly open/drain/close the mpv read cookie before removing SD.
+    add_executable(tizentube_nx_rolling_stream_epoch_long_vod_tests
+        tests/rolling_stream_epoch_long_vod_tests.cpp)
+    target_include_directories(tizentube_nx_rolling_stream_epoch_long_vod_tests
+        PRIVATE include tests/stubs)
+    target_link_libraries(tizentube_nx_rolling_stream_epoch_long_vod_tests
+        PRIVATE tizentube_nx_core Threads::Threads)
+    add_test(NAME rolling_stream_epoch_long_vod
+        COMMAND tizentube_nx_rolling_stream_epoch_long_vod_tests)
+
     # Fixed app-owned crash-orphan sweep; symlinks/user files must survive.
     add_executable(tizentube_nx_ring_orphan_cleanup_tests
         tests/ring_orphan_cleanup_tests.cpp)

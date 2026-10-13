@@ -77,10 +77,11 @@ jobs:
           set -euo pipefail
           cmake --build build-sanitized --parallel 2 \
             --target tizentube_nx_rolling_stream_epoch_tests \
-                     tizentube_nx_rolling_stream_epoch_prefetch_tests
+                     tizentube_nx_rolling_stream_epoch_prefetch_tests \
+                     tizentube_nx_rolling_stream_epoch_long_vod_tests
           ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
             ctest --test-dir build-sanitized \
-              -R '^(rolling_stream_epoch|rolling_stream_epoch_prefetch)$' \
+              -R '^(rolling_stream_epoch|rolling_stream_epoch_prefetch|rolling_stream_epoch_long_vod)$' \
               --output-on-failure
       - name: Decode real growing H264/AAC HLS and verify zero-video-cache shutdown
         run: python3 -m unittest discover -s tests -p rolling_hls_live_decode_tests.py -v
