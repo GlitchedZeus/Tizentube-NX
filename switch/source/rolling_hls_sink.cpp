@@ -1,6 +1,7 @@
 #if defined(TTNX_M4_ROLLING_HOST_TEST) || defined(TTNX_M4_ROLLING_STREAM)
 #include "rolling_hls_sink.hpp"
 #include "tizentube_nx/playback/hls_playback_lease.hpp"
+#include "tizentube_nx/playback/streaming_ts_validator.hpp"
 #include <algorithm>
 #include <cerrno>
 #include <cstdio>
@@ -150,6 +151,70 @@ bool RollingHlsSink::append(std::size_t index,std::uint64_t duration_ms,
     --next_;
     return false;
 }
+bool RollingHlsSink::append_streamed(
+    std::size_t index,std::uint64_t duration_ms,
+    const ChunkProducer& producer) {
+    // Unlike append(string_view), this staging API validates every packet
+    // as a bounded producer emits it and stores <=64 KiB of TS metadata.
+    // The producer MUST already be an approved CDN HTTPS transport; this
+    // sink cannot authorize DNS or signed URLs.
+    if(!started_ || finished_ || !ancestors(false) ||
+       index!=next_ || index>=kMaxSegments || !duration_ms ||
+       duration_ms>target_seconds_*1000 || !producer ||
+       bytes_>kMaxMediaBytes)return false;
+    const auto tmp=segment_path(index,true), ready=segment_path(index);
+    if(!regular_or_absent(tmp) || !regular_or_absent(ready))return false;
+    const int fd=open(tmp.c_str(),O_WRONLY|O_CREAT|O_EXCL,0600);
+    if(fd<0)return false;
+    playback::StreamingTsValidator verifier(
+        std::min<std::size_t>(playback::StreamingTsValidator::kSegmentCapBytes,
+                              static_cast<std::size_t>(kMaxMediaBytes-bytes_)));
+    bool good=true;
+    // Single producer owns this fd synchronously. Network cancellation,
+    // partial writes, overlarge chunks or corrupt TS are never published.
+    const ChunkEmitter emit=[&](std::string_view chunk)->bool {
+        if(!good || chunk.empty() || chunk.size()>32*1024 ||
+           !verifier.push(chunk)) {
+            good=false;return false;
+        }
+        std::size_t written=0;
+        while(written<chunk.size()) {
+            const auto n=write(fd,chunk.data()+written,chunk.size()-written);
+            if(n<=0){good=false;return false;}
+            written+=static_cast<std::size_t>(n);
+        }
+        return true;
+    };
+    bool producer_ok=false;
+    try {producer_ok=producer(emit);} catch(...) {producer_ok=false;}
+    if(!producer_ok || !good || !verifier.finish())good=false;
+    if(good && fsync(fd)!=0)good=false;
+    if(close(fd)!=0)good=false;
+    if(!good) {
+        if(!remove_file(tmp))started_=false; // untracked bytes: fail closed
+        return false;
+    }
+    if(rename(tmp.c_str(),ready.c_str())!=0) {
+        if(!remove_file(tmp))started_=false;
+        return false;
+    }
+    const auto amount=verifier.bytes();
+    segments_.push_back(Segment{index,duration_ms,amount});
+    bytes_+=amount;
+    ++next_;
+    if(publish(false))return true;
+    // No media is visible unless its manifest publishes. Avoid reusing
+    // a poisoned quota after an unlink or SD promotion failure.
+    if(!remove_file(ready)) {
+        started_=false;
+        return false;
+    }
+    segments_.pop_back();
+    bytes_-=amount;
+    --next_;
+    return false;
+}
+
 bool RollingHlsSink::publish(bool end_list) {
     if(segments_.empty())return false;
     std::string text="#EXTM3U\n#EXT-X-VERSION:3\n"

@@ -1,6 +1,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string_view>
 #include <vector>
 
@@ -33,6 +34,14 @@ public:
     [[nodiscard]] bool begin(std::uint64_t maximum_segment_ms=6000);
     [[nodiscard]] bool append(std::size_t index,std::uint64_t duration_ms,
                               std::string_view verified_muxed_ts);
+    // M4 low-RAM producer API. Invoke emit() repeatedly with <=32 KiB of
+    // approved HTTPS media; no contiguous whole-segment buffer is needed.
+    // All chunks remain in a private .part until PAT/PMT, transport sync,
+    // quota, fsync and playlist publication succeed. Never pass signed URLs.
+    using ChunkEmitter=std::function<bool(std::string_view)>;
+    using ChunkProducer=std::function<bool(const ChunkEmitter&)>;
+    [[nodiscard]] bool append_streamed(std::size_t index,std::uint64_t duration_ms,
+                                       const ChunkProducer& producer);
     // Publish a moving, local-only live playlist. The caller must have
     // released the decoder's use of all segments below first_index.
     [[nodiscard]] bool retire_before(std::size_t first_index);

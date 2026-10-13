@@ -352,7 +352,16 @@ if(TTNX_BUILD_TESTS)
             PRIVATE switch/source)
         target_compile_definitions(tizentube_nx_rolling_hls_sink_tests
             PRIVATE TTNX_M4_ROLLING_HOST_TEST=1)
+        target_link_libraries(tizentube_nx_rolling_hls_sink_tests
+            PRIVATE tizentube_nx_core)
         add_test(NAME rolling_hls_sink COMMAND tizentube_nx_rolling_hls_sink_tests)
+
+        # Constant-memory streaming TS validation with malicious-chunk tests.
+        add_executable(tizentube_nx_streaming_ts_validator_tests
+            tests/streaming_ts_validator_tests.cpp)
+        target_link_libraries(tizentube_nx_streaming_ts_validator_tests
+            PRIVATE tizentube_nx_core)
+        add_test(NAME streaming_ts_validator COMMAND tizentube_nx_streaming_ts_validator_tests)
 
         # Opt-in transport-to-durable-HLS bridge. Real HlsSegmentReader
         # still enforces the approved HTTPS/CDN and response contracts.

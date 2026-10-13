@@ -48,7 +48,8 @@ class RollingHlsLiveDecodeTests(unittest.TestCase):
             "g++", "-std=c++20", *flags, "-Wall", "-Wextra", "-Werror",
             "-DTTNX_M4_ROLLING_HOST_TEST=1", "-Iinclude", "-Iswitch/source",
             "tests/rolling_hls_live_writer.cpp",
-            "switch/source/rolling_hls_sink.cpp", "-o", str(cls.binary)
+            "switch/source/rolling_hls_sink.cpp",
+            "src/core/ts_streams.cpp", "-o", str(cls.binary)
         ])
         if build.returncode:
             raise AssertionError("native host writer compilation failed: " + build.stderr)

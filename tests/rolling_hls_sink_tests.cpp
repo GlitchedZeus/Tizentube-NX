@@ -108,6 +108,52 @@ int main(){
     ck(rollback.close_session() && !fs::exists(root),
        "FAT rollback video teardown returns media usage to zero");
   }
+  // Genuine MPEG-TS, split at arbitrary HTTPS/TLS boundaries, must be
+  // validated and durably committed without retaining a whole segment.
+  {
+    std::string valid(188*600,static_cast<char>(0xff));
+    for(std::size_t i=0;i<600;++i)valid[i*188]=0x47;
+    const auto put=[&](std::size_t at,std::initializer_list<unsigned char> b){
+        for(const auto x:b)valid[at++]=static_cast<char>(x);
+    };
+    put(0,{0x47,0x40,0x00,0x10,0,0x00,0xb0,0x0d,0,1,0xc1,
+           0,0,0,1,0xe1,0,0,0,0,0});
+    put(188,{0x47,0x41,0x00,0x10,0,0x02,0xb0,23,
+             0,1,0xc1,0,0,0xe1,1,0xf0,0,0x1b,0xe1,1,0xf0,0});
+    put(188+5+17,{0x0f,0xe1,2,0xf0,0});
+    RollingHlsSink chunks;
+    ck(chunks.begin(),"streamed staging begins in a clean private directory");
+    ck(chunks.append_streamed(0,3000,[&](const RollingHlsSink::ChunkEmitter& emit){
+         for(std::size_t i=0;i<valid.size();i+=7)
+             if(!emit(std::string_view(valid).substr(i,std::min<std::size_t>(7,valid.size()-i))))
+                 return false;
+         return true;
+       }) && chunks.bytes()==valid.size() &&
+       read(root/"v_00000.ts")==valid &&
+       !fs::exists(root/"v_00000.ts.part"),
+       "arbitrary 7-byte producer chunks commit only verified muxed H264/AAC");
+    auto broken=valid;broken[2*188]=0;
+    ck(!chunks.append_streamed(1,3000,[&](const RollingHlsSink::ChunkEmitter& emit){
+         for(std::size_t i=0;i<broken.size();i+=32768)
+             if(!emit(std::string_view(broken).substr(i,std::min<std::size_t>(32768,broken.size()-i))))
+                 return false;
+         return true;
+       }) && !fs::exists(root/"v_00001.ts.part") &&
+       !fs::exists(root/"v_00001.ts") && chunks.next_index()==1 &&
+       chunks.bytes()==valid.size(),
+       "bad TS sync across chunk boundary discards private partial without quota loss");
+    ck(!chunks.append_streamed(1,3000,[&](const RollingHlsSink::ChunkEmitter& emit){
+         (void)emit(valid.substr(0,188));return false;
+       }) && !fs::exists(root/"v_00001.ts.part") &&
+       chunks.bytes()==valid.size(),
+       "cancelled HTTPS producer never publishes truncated segment");
+    ck(!chunks.append_streamed(1,3000,[&](const RollingHlsSink::ChunkEmitter& emit){
+         return emit(valid.substr(0,32769));
+       }) && !fs::exists(root/"v_00001.ts.part"),
+       "producer cannot feed a 32-KiB-plus-one network chunk");
+    ck(chunks.close_session() && !fs::exists(root),
+       "streamed-video shutdown removes all SD media");
+  }
   RollingHlsSink hour;
   ck(hour.begin(),"long-form session starts");
   const std::string chunk(48*1024,'Z');

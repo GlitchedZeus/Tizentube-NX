@@ -115,7 +115,21 @@ RollingMuxedHlsSession::State RollingMuxedHlsSession::pump() {
         coordinator_.cancel_pending();
         return failure(Error::Codec);
     }
-    if(!sink_.append(next_,segments_[next_].duration_ms,response.bytes)) {
+    // Use the same bounded, validated streaming SD writer that a future
+    // chunk-by-chunk libnx HTTPS response will drive. Today HlsSegmentReader
+    // still materializes its HTTP response: THIS DOES NOT YET prove
+    // low-RAM transport, but it does exercise the real write/verify path.
+    const bool stored=sink_.append_streamed(
+        next_,segments_[next_].duration_ms,
+        [&](const RollingHlsSink::ChunkEmitter& emit) {
+            const std::string_view all(response.bytes);
+            for(std::size_t off=0;off<all.size();off+=32*1024) {
+                if(!emit(all.substr(off,std::min<std::size_t>(32*1024,all.size()-off))))
+                    return false;
+            }
+            return true;
+        });
+    if(!stored) {
         coordinator_.cancel_pending();
         return failure(Error::MediaWrite);
     }

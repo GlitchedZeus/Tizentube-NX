@@ -159,3 +159,17 @@ jobs:
             -o /tmp/ttnx-library-pager-san
           ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
             /tmp/ttnx-library-pager-san
+      - name: M4 streaming TS validator normal and ASan/UBSan
+        run: |
+          set -euo pipefail
+          for mode in normal sanitized; do
+            flags="-O2"
+            if [ "$mode" = sanitized ]; then
+              flags="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer"
+            fi
+            g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror $flags \
+              -Iinclude tests/streaming_ts_validator_tests.cpp \
+              src/core/ts_streams.cpp -o "/tmp/ttnx-streaming-ts-${mode}"
+            ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+              "/tmp/ttnx-streaming-ts-${mode}"
+          done
