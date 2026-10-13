@@ -366,6 +366,8 @@ public:
             const bool deleted=ring_epoch_->snapshot().phase==
                 playback::RollingStreamEpoch::Phase::Cleaned;
             ring_terminal_retired_=deleted;
+            M3Diagnostics::record(M3Stage::Cache,M3Event::Status,
+                                  33,deleted?1:0,0);
             status_=deleted
                 ?"Stopped; disposable M4 media deleted after decoder close"
                 :"Stopped; media deletion pending safe reader release";
@@ -514,6 +516,11 @@ public:
                             ?Gate::End::Error:Gate::End::Stop;
                     if(ring_reprime_.observe(why,boundary,
                             ring_verified_av_ && !audio_failure_latched_)) {
+                        // Numeric-only telemetry: no signed CDN URL, headers
+                        // or private watch data can enter this log.
+                        M3Diagnostics::record(M3Stage::Cache,M3Event::Status,
+                            30,static_cast<std::int64_t>(snap.next_segment_index),
+                            static_cast<std::int64_t>(snap.peak_file_bytes));
                         status_="Verified ring quota reached; closing decoder for continuation";
                     }
                 }
@@ -656,6 +663,8 @@ public:
             ring_loaded_=false;
             ring_verified_av_=false;
             epoch_frame_base_=frames_;
+            M3Diagnostics::record(M3Stage::Cache,M3Event::Status,
+                                  31,static_cast<std::int64_t>(next),0);
             status_="M4 continuation: preparing next verified SD prefix...";
         }
         if(ring_reprime_.stage()!=Gate::Stage::WaitingForPrefix)return;
@@ -678,6 +687,9 @@ public:
             status_="M4 continuation: decoder restart failed";
             return;
         }
+        M3Diagnostics::record(M3Stage::Decode,M3Event::Status,
+                              32,static_cast<std::int64_t>(s.segments_committed),
+                              static_cast<std::int64_t>(s.peak_file_bytes));
         status_="M4 continuation opened; verifying current video and AAC...";
     }
 #endif

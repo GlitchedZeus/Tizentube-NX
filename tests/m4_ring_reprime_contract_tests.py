@@ -40,6 +40,8 @@ class M4RingReprimeContract(unittest.TestCase):
         self.assertIn("if(!ring_epoch_->ring_for_decoder())return;",service)
         self.assertNotIn("stream_segment(", service)
         self.assertNotIn("https://",service)
+        self.assertIn("M3Diagnostics::record(M3Stage::Cache,M3Event::Status,",service)
+        self.assertIn("M3Diagnostics::record(M3Stage::Decode,M3Event::Status,",service)
 
     def test_stop_and_eof_delete_temporary_media(self):
         stop=PLAYER.split("void stop() {",1)[1].split(
