@@ -34,5 +34,18 @@ int main() {
     // Invalid configure attempts cannot corrupt an accepted plan.
     assert(!g.configure({3000,0}));
     assert(g.count()==32 && g.can_fetch(9,0,12000));
+    // Twelve-minute VOD: walk the entire producer window in one-second
+    // increments, including late re-prime epochs. No future segment may be
+    // admitted before the decoder is within fifteen seconds of its start.
+    assert(g.configure(std::vector<std::uint64_t>(720,1000)));
+    assert(g.total_duration_ms()==720000 && g.count()==720);
+    for(const std::size_t origin : {std::size_t(0),std::size_t(120),std::size_t(600)}) {
+        for(std::uint64_t ms=0;ms<=(720-origin)*1000ULL;ms+=1000) {
+            const auto cutoff=origin+(ms+RollingPrefetchWindow::kMaxAheadMs)/1000;
+            for(std::size_t segment=origin;segment<720;++segment)
+                assert(g.can_fetch(segment,origin,ms)==(segment<=cutoff));
+            if(origin)assert(!g.can_fetch(origin-1,origin,ms));
+        }
+    }
     return 0;
 }
