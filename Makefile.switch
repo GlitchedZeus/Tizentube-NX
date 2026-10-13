@@ -98,6 +98,21 @@ endif
 DEFINES += -DTTNX_M4_RING_STREAM_CB_PROBE
 endif
 
+# Test-only M4 normal-Search -> verified HLS -> rolling libmpv route.
+# The accepted M3 binary and normal app have NO additional Play surface.
+ifeq ($(TTNX_M4_NATIVE_TEST_UI),1)
+ifneq ($(TTNX_M3_INTEGRATED),1)
+$(error TTNX_M4_NATIVE_TEST_UI requires TTNX_M3_INTEGRATED=1)
+endif
+ifneq ($(TTNX_M4_ROLLING_STREAM),1)
+$(error TTNX_M4_NATIVE_TEST_UI requires TTNX_M4_ROLLING_STREAM=1)
+endif
+ifneq ($(TTNX_M4_RING_STREAM_CB_PROBE),1)
+$(error TTNX_M4_NATIVE_TEST_UI requires TTNX_M4_RING_STREAM_CB_PROBE=1)
+endif
+DEFINES += -DTTNX_M4_NATIVE_TEST_UI
+endif
+
 # Original TV-style player is separately opted in for visual verification.
 # The default, physically accepted M3 picture and controls stay unchanged.
 ifeq ($(TTNX_M4_TV_PLAYER_UI),1)

@@ -70,6 +70,14 @@ jobs:
                 TTNX_M4_ROLLING_STREAM=1 TTNX_M4_RING_STREAM_CB_PROBE=1 \
                 TARGET=tizentube_nx_m4_stream_cb_abi \
                 BUILD=build-m4-stream-cb -j2
+              # Explicit hardware-lab candidate exercises REAL Search ->
+              # HLS plan -> first verified TS prefix -> isolated mpv callback.
+              # No production menu changes and NO uploaded M4 NRO yet.
+              make -f Makefile.switch TTNX_M3_INTEGRATED=1 \
+                TTNX_M4_ROLLING_STREAM=1 TTNX_M4_RING_STREAM_CB_PROBE=1 \
+                TTNX_M4_NATIVE_TEST_UI=1 \
+                TARGET=tizentube_nx_m4_native_test \
+                BUILD=build-m4-native-test -j2
               # Independent UI integration candidate. It never replaces the
               # last hardware-accepted visible-video NRO or uploaded artifact.
               make -f Makefile.switch TTNX_M3_INTEGRATED=1 \
@@ -112,6 +120,16 @@ jobs:
           sha256sum tizentube_nx_m4_stream_cb_abi.nro
           echo "Callback ABI compiled. This does NOT prove on-device playback."
 
+      - name: Check experimental native Search-to-stream build isolation
+        run: |
+          test -s tizentube_nx_m4_native_test.nro
+          test -s build-m4-native-test/main.o
+          test -s build-m4-native-test/m3_player_activity.o
+          test -s build-m4-native-test/m4_mpv_stream_cb_probe.o
+          test "$(stat -c %s tizentube_nx_m4_native_test.nro)" -le 66445568
+          test ! -e tizentube_nx.nro
+          sha256sum tizentube_nx_m4_native_test.nro
+          echo "M4 hardware-lab route COMPILED only; hardware acceptance remains blocked."
       - name: Check unshipped TV-player candidate and keep installed size bounded
         run: |
           test -s tizentube_nx_m4_tv_preview.nro
