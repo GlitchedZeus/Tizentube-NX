@@ -57,6 +57,17 @@ target_link_libraries(tizentube_nx_host PRIVATE tizentube_nx_core)
 option(TTNX_BUILD_TESTS "Build host tests" ON)
 if(TTNX_BUILD_TESTS)
     enable_testing()
+    # Pure host-only layout geometry tests based on the user's 1280x720
+    # reference captures; do not alter the hardware-accepted M3 UI.
+    add_executable(tizentube_nx_tv_layout_tests tests/tv_layout_tests.cpp)
+    target_include_directories(tizentube_nx_tv_layout_tests PRIVATE include)
+    add_test(NAME tv_layout COMMAND tizentube_nx_tv_layout_tests)
+
+    add_executable(tizentube_nx_tv_player_layout_tests
+        tests/tv_player_layout_tests.cpp)
+    target_include_directories(tizentube_nx_tv_player_layout_tests PRIVATE include)
+    add_test(NAME tv_player_layout COMMAND tizentube_nx_tv_player_layout_tests)
+
     add_executable(tizentube_nx_media_chunks_tests tests/media_chunks_tests.cpp)
     target_link_libraries(tizentube_nx_media_chunks_tests PRIVATE tizentube_nx_core)
     add_test(NAME media_chunks COMMAND tizentube_nx_media_chunks_tests)

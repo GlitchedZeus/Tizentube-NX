@@ -131,14 +131,19 @@ stream media without writing whole segments into RAM.
 7. Normal/sanitizer host tests, native devkitA64 compile and on-device
    10+ minute playback must pass before changing accepted launcher.
 
-## Evidence still needed for exact v2.0.0 appearance
+## Direct screenshot evidence now supplied
 
-Nintendo's published screenshots may reflect a different app revision.
-For a literal pixel-level review of **this uploaded patched v2.0.0
-binary**, the missing evidence is **user-captured screenshots or a
-lawfully decrypted/extracted RomFS resource set**. Do not request
-Google credentials, signed media URLs or console key dumps as an
-ordinary UI reference prerequisite.
+The user subsequently supplied **37 actual 1280×720 screenshots** from
+the patched Switch app. This resolves the earlier **visual layout**
+evidence gap: player timeline/control overlay, right-hand Quality and
+Audio menus, channel banner/shelves, Following, local Library, Search,
+Settings, and both sidebar states are directly visible. See
+[SWITCH_CAPTURE_LAYOUT_REVIEW.md](SWITCH_CAPTURE_LAYOUT_REVIEW.md) for
+approximate positions, intended TizenTube NX design, privacy precautions
+and tested standalone native-layout geometry. The official NSP's
+**decoder and source internals remain encrypted/unverified**. Do not
+publish the user's captured account, history or pairing information,
+and do not request credentials or console keys for UI design.
 
 This report intentionally contains **no Nintendo/Google NCA bytes,
 keys, decrypted copyrighted resources, or extracted code**.

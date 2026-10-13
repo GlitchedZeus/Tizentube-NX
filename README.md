@@ -196,7 +196,8 @@ See [`docs/THIRD_PARTY.md`](docs/THIRD_PARTY.md) for dependency attribution.
 
 ## Useful project docs
 
-- [YouTube Switch NSP forensic/layout reference](docs/SWITCH_YOUTUBE_NSP_UI_REFERENCE.md) — private archived NSP inspection, evidence limits, official TV-style UX screenshots, and original implementation plan; no proprietary assets copied.
+- [Real Switch UI capture layout review](docs/SWITCH_CAPTURE_LAYOUT_REVIEW.md) — 37 user-supplied 1280×720 screenshots analyzed privately: sidebar, video rails, player overlay, quality/audio panels, Library, channel/following views and test-backed original layout geometry.
+- [YouTube Switch NSP forensic/layout reference](docs/SWITCH_YOUTUBE_NSP_UI_REFERENCE.md) — encrypted NSP inspection, evidence limits and native TizenTube NX implementation boundaries; no proprietary assets copied.
 
 Other historical development documentation originally lives on `feature/m2-guest-browsing`:
 
