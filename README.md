@@ -21,7 +21,7 @@ A few rules define the project more strongly than individual features:
 - **No promoted/shopping/Premium clutter.** Ads and promotional surfaces do not become acceptable because YouTube sends them alongside normal content.
 - **Clean links only.** A video shares as `https://www.youtube.com/watch?v=VIDEO_ID`, without tracking junk.
 - **Switch-first UX.** Controller navigation comes first, with touch where it genuinely helps.
-- **Local-first profiles for v1.** TizenTube profiles, follows, playlists, Watch Later, favorites and history are planned without requiring a Google account.
+- **No Google accounts or linking — ever.** TizenTube NX runs without Google/YouTube sign-in, OAuth, cookies, credentials, sync or account profiles. Watch history, resume, Watch Later, favorites, playlists and followed channels are stored **locally on the Switch**, with a small bounded metadata footprint. No login or profile creation is required to use the library.
 - **No credential scraping.** The project will not ask for Google passwords, browser cookies or exported cookie files.
 
 The full contract is in [`docs/PRODUCT_PHILOSOPHY.md`](docs/PRODUCT_PHILOSOPHY.md).
@@ -79,7 +79,7 @@ Current M2 policy:
 - TLS peer CA, hostname and certificate dates are verified;
 - `switch-curl` is not linked into the NRO;
 - remote thumbnail/CDN hosts are still disabled until reviewed separately;
-- Google/YouTube account authentication is not active in M2.
+- Google/YouTube account authentication is deliberately **out of scope for all releases**.
 
 The app does not rely on 90DNS for these protections.
 
@@ -93,10 +93,10 @@ More detail: [`NETWORK_SAFETY.md`](https://github.com/GlitchedZeus/Tizentube-NX/
 | **M1 — Switch shell** | ✅ Complete | Borealis UI, controller/touch navigation, storage, real-hardware shell acceptance |
 | **M2 — Guest browsing** | 🚧 In progress | Safe guest networking, Search, pagination, Home/channel/playlist guest surfaces |
 | **M3 — Playback + ad-free viewing** | 🚧 Foundation only (no playback) | Media pipeline, no YouTube-served ads, SponsorBlock + settings, quality/captions/audio/seek/resume |
-| **M4 — Local profiles** | ⏳ Planned | Local subscriptions/follows, playlists, Watch Later, likes/favorites, history, multiple profiles |
+| **M4 — On-device Library** | ⏳ Planned | Local watch history/resume, Watch Later, favorites, followed channels and playlists; small metadata-only storage |
 | **M5 — Morphe-inspired enhancements** | ⏳ Planned | DeArrow-style metadata, Return YouTube Dislike, player cleanup and selected quality-of-life ideas |
 | **M6 — Daily-driver polish / v1** | ⏳ Planned | Stability, caching/retry, dock/undock, applet/title-takeover testing, release packaging |
-| **M7 — Optional post-v1 YouTube linking** | ⏳ Planned | Official limited-input/device OAuth and controlled import/sync into local profiles |
+| **M7 — Local Library portability** | ⏳ Optional | Compact backup/export/import of on-device metadata; no Google sign-in or account synchronization |
 
 The detailed checklist lives in the active-branch [`docs/ROADMAP.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/ROADMAP.md).
 
@@ -132,8 +132,7 @@ TizenTube NX is still early. In particular, the current builds do **not** yet pr
 - SponsorBlock integration/settings;
 - remote thumbnails;
 - live Home/channel/playlist browsing pages;
-- local TizenTube profiles;
-- YouTube/Google account linking;
+- on-device watch history, resume, Watch Later, favorites and local playlists;
 - DeArrow or Return YouTube Dislike integration;
 - a polished end-user release installer/update flow.
 
@@ -206,8 +205,8 @@ The newest development documentation currently lives on `feature/m2-guest-browsi
 - [`SCOPE.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/SCOPE.md) — project scope and product boundaries
 - [`ARCHITECTURE.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/ARCHITECTURE.md) — code architecture
 - [`NETWORK_SAFETY.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/NETWORK_SAFETY.md) — outbound-network policy
-- [`PROFILES_AND_IMPORT.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/PROFILES_AND_IMPORT.md) — local-first profile direction
-- [`OAUTH_ACCOUNT_LINKING.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/OAUTH_ACCOUNT_LINKING.md) — post-v1 optional account-linking design
+- [`PROFILES_AND_IMPORT.md`](docs/PROFILES_AND_IMPORT.md) — bounded on-device library, history and optional local-only profile settings
+- [`OAUTH_ACCOUNT_LINKING.md`](docs/OAUTH_ACCOUNT_LINKING.md) — archived and explicitly rejected OAuth proposal (no Google account linking)
 - [`MORPHE_REFERENCE.md`](https://github.com/GlitchedZeus/Tizentube-NX/blob/feature/m2-guest-browsing/docs/MORPHE_REFERENCE.md) — Morphe's feature-discovery/research role
 
 ## Contributing / development

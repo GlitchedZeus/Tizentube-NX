@@ -227,24 +227,23 @@ Playback and the ad-free experience are one milestone. **A player that deliberat
 - [ ] Cache/retry behavior that does not block basic player controls
 - [ ] Real-hardware SponsorBlock acceptance alongside playback acceptance
 
-## M4 — Local TizenTube profiles (v1)
+## M4 — Small, on-device Library and watch history (v1)
 
-- [ ] Create a local profile directly on Switch
-- [ ] Display name + avatar
-- [ ] Local channel follows/subscriptions
-- [ ] Local playlists
-- [ ] Local Watch Later
-- [ ] Local likes/favorites
-- [ ] Watch history + resume positions
-- [ ] Per-profile settings/preferences
-- [ ] Optional local search history
-- [ ] Multiple local TizenTube profiles
-- [ ] Optional Switch-user-to-TizenTube-profile mapping
-- [ ] Profile backup/export/import appropriate for local data
-- [ ] No Google/YouTube account authentication required for v1
-- [ ] Never accept/store Google passwords, browser cookies, exported cookie files or equivalent browser/account credentials
+- [ ] Watch history and playback resume positions, with no login/setup required
+- [ ] Continue Watching, completed-video handling and local history controls
+- [ ] Local channel follows/subscriptions (not synced or written to YouTube)
+- [ ] Local playlists and Watch Later
+- [ ] Local likes/favorites (not sent to YouTube)
+- [ ] Optional, separately clearable local search history
+- [ ] Small metadata-only records, deduplication and capped history length
+- [ ] Bound Library state to a proposed 2,000,000 bytes within app-wide persistent quota
+- [ ] Bounded and crash-safe writes, including temporary files/backups
+- [ ] History enable/disable, delete entry, clear history and recovery testing
+- [ ] No stored media, thumbnails, signed CDN links or raw YouTube responses
+- [ ] No Google sign-in, OAuth, YouTube account profiles, cookies or account sync in any release
+- [ ] Optional local-only display/profile customization AFTER basic Library works
 
-See `docs/PROFILES_AND_IMPORT.md` for the profile/security contract.
+See `docs/PROFILES_AND_IMPORT.md` for the Library/storage/security contract.
 
 ## M5 — Morphe-inspired enhancements and metadata
 
@@ -264,55 +263,25 @@ Morphe is a feature-discovery/research source for this milestone; TizenTube and 
 - [ ] Applet vs title-takeover testing
 - [ ] Release audit: playback does not knowingly fall back to YouTube-served ads
 - [ ] Release audit: no network path bypasses outbound policy
-- [ ] Release audit: v1 contains no Google OAuth/account linking implementation
+- [ ] Release audit: **no release** contains Google OAuth/account linking implementation
 - [ ] Release audit: no Google passwords/browser cookies/exported cookie files accepted anywhere
 - [ ] Release packaging
 
-## M7 — Post-v1 optional YouTube linking and migration
+## M7 — Optional small-library portability and polish (post-v1)
 
-Local TizenTube profiles remain canonical. Post-v1 linking is optional and must not be required to use the app.
+- [ ] Compact, versioned local metadata export/import with size and integrity limits
+- [ ] Restore on-device history, follows, Watch Later, favorites and playlists
+- [ ] Import conflicts/deduplication without a second database or hidden cache
+- [ ] Keep backup artifacts inside 100,000,000-byte combined SD ceiling
+- [ ] Optional user-supplied public playlist URLs, without account login
+- [ ] Never add Google OAuth, account profiles, private account sync or credentials
 
-### Official device OAuth linking
-
-- [ ] Switch displays QR code plus human-readable device-code fallback
-- [ ] Phone opens Google's official sign-in/consent UI
-- [ ] Never collect Google passwords, passkeys, 2FA recovery codes or browser cookies
-- [ ] Request the narrowest practical YouTube scope; prefer read-only access
-- [ ] Initial sync direction is `YouTube -> TizenTube profile`
-- [ ] Short-lived access token kept memory-only where practical
-- [ ] Optional `Keep me connected` mode using persistent refresh authorization
-- [ ] Dedicated secure-storage review before any refresh token is persisted
-- [ ] Never store persistent authorization as obvious plaintext on SD
-- [ ] `Reconnect YouTube` when authorization expires/revokes/invalidates
-- [ ] Local TizenTube profile continues working while disconnected
-- [ ] Clear `Unlink YouTube` action removes local authorization and attempts provider revocation when practical
-- [ ] Unlinking does not delete local profile data
-- [ ] Token/authorization values fully redacted from logs, UI, exports and crash diagnostics
-- [ ] All auth/API destinations reviewed through outbound policy before DNS
-
-### Library import/sync
-
-- [ ] Import/sync subscriptions where supported
-- [ ] Import/sync playlists where supported
-- [ ] Import/sync liked/favorite library data where supported
-- [ ] Import approved account/channel metadata needed for migration
-- [ ] Duplicate-safe merge into existing local profile
-- [ ] Preserve local-only follows/playlists/favorites/history
-- [ ] Explicit user control over what is imported/synced
-
-### Optional public/no-auth fallback
-
-- [ ] Public YouTube profile/channel metadata import
-- [ ] Public subscriptions import when the source profile exposes them
-- [ ] Public playlist import
-- [ ] User-supplied unlisted playlist import
-- [ ] Treat unlisted playlist URLs as secrets and redact them from diagnostics
-
-See `docs/PROFILES_AND_IMPORT.md` and `docs/OAUTH_ACCOUNT_LINKING.md` for the full post-v1 design.
+See `docs/PROFILES_AND_IMPORT.md` for the accepted local-only contract.
+The old `docs/OAUTH_ACCOUNT_LINKING.md` is archived/rejected, not future scope.
 
 ## Current gate
 
-**Guest bootstrap, startup recovery, the complete Search slice, inline detail, sidebar traversal, and explicit Search continuation are physically accepted through `428497c90be6e768c607e45c68171827d74f0faf`. The current M2 gate is the first explicit live guest Home page. Preserve the accepted Search implementation, exact `www.youtube.com:443` allowlist, hard Shorts/ad/promoted/shopping firewall, remote-thumbnail block, and post-v1 OAuth documentation-only boundary.**
+**Guest bootstrap, startup recovery, the complete Search slice, inline detail, sidebar traversal, and explicit Search continuation are physically accepted through `428497c90be6e768c607e45c68171827d74f0faf`. The current M2 gate is the first explicit live guest Home page. Preserve the accepted Search implementation, exact `www.youtube.com:443` allowlist, hard Shorts/ad/promoted/shopping firewall, remote-thumbnail block, and permanent no-Google-auth policy.**
 
 
 ## Current gate — Channel pages
