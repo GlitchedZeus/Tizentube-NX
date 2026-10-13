@@ -130,6 +130,46 @@ jobs:
           test ! -e tizentube_nx.nro
           sha256sum tizentube_nx_m4_native_test.nro
           echo "M4 hardware-lab route COMPILED only; hardware acceptance remains blocked."
+      # This is the ONE new streaming candidate for physical testing, not
+      # a public release or evidence that a 10-minute video works. The M3
+      # fallback continues to be built independently and stays selectable
+      # from the same experimental Search result.
+      - name: Prepare exact-head M4 hardware-lab instructions
+        if: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'feature/m3-playback-foundation-20261011') || (github.event_name == 'push' && github.ref == 'refs/heads/feature/m3-playback-foundation-20261011') || (github.event_name == 'workflow_dispatch' && inputs.publish_hardware_candidate) }}
+        run: |
+          sha256sum tizentube_nx_m4_native_test.nro > M4-SHA256SUMS.txt
+          printf 'TizenTube NX M4 native streaming hardware lab\nExact source HEAD: %s\nGitHub Actions run: %s\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" > M4-HARDWARE-TEST.txt
+          cat >> M4-HARDWARE-TEST.txt <<'EOF'
+
+          DEVELOPMENT / UNACCEPTED: Test on a disposable Switch homebrew
+          install only. Do not overwrite the previously accepted M3 NRO.
+          This NRO deliberately has both M3 and M4 Play buttons.
+
+          1. Guest connect -> Search -> choose a normal video (never Shorts).
+          2. Confirm M3 video works first for picture, stereo AAC and controls.
+          3. Return; choose Play streaming (M4 hardware test) on the same
+             eligible normal video. Note if muxed HLS is unavailable.
+          4. If video opens, test visible frames, audible AAC, video loading,
+             pause/resume, Stop, B, 10+ minutes and the 24-MiB rollover.
+          5. Check SD app media files disappear after Stop/exit, including
+             an interrupted or failed stream. No lasting watched-video cache.
+          6. Capture only numeric/short diagnostics. Never share signed
+             CDN URLs, cookies, session identifiers or complete raw logs.
+          7. Track exact native performance, RAM, sleep/wake and docked mode.
+          Real streaming and no-ads acceptance remain separate hardware gates.
+          EOF
+      - name: Upload one exact-head M4 experimental Switch NRO
+        if: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'feature/m3-playback-foundation-20261011') || (github.event_name == 'push' && github.ref == 'refs/heads/feature/m3-playback-foundation-20261011') || (github.event_name == 'workflow_dispatch' && inputs.publish_hardware_candidate) }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: TizenTube-NX-M4-Hardware-Lab-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            tizentube_nx_m4_native_test.nro
+            M4-SHA256SUMS.txt
+            M4-HARDWARE-TEST.txt
+          retention-days: 14
+          if-no-files-found: error
+
       - name: Check unshipped TV-player candidate and keep installed size bounded
         run: |
           test -s tizentube_nx_m4_tv_preview.nro

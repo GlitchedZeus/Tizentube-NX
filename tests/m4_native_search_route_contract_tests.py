@@ -19,6 +19,10 @@ class M4NativeSearchRouteContract(unittest.TestCase):
         self.assertIn("DEFINES += -DTTNX_M4_NATIVE_TEST_UI",MAKE)
         self.assertIn('Play video (M3 experimental)',MAIN)
         self.assertIn('Play streaming (M4 hardware test)',MAIN)
+        self.assertIn('brls::Button* m4_test_video{nullptr};',MAIN)
+        self.assertIn('if(!result.live && !result.upcoming)',MAIN)
+        self.assertIn('start_m3_video(video_id);',MAIN)
+        self.assertIn('start_m4_native_video(verified);',MAIN)
         self.assertIn("start_m4_native_video(verified)",MAIN)
 
     def test_verified_normal_search_identity_not_id_only(self):

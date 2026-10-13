@@ -521,6 +521,9 @@ private:
         brls::Button* follow_channel{nullptr};
 #ifdef TTNX_M3_INTEGRATED
         brls::Button* play_video{nullptr};
+#if defined(TTNX_M4_NATIVE_TEST_UI) && defined(TTNX_M4_RING_STREAM_CB_PROBE)
+        brls::Button* m4_test_video{nullptr};
+#endif
         brls::Label* play_status{nullptr};
         brls::Button* cancel_video{nullptr};
 #endif
@@ -933,6 +936,12 @@ private:
                 row.play_video->setVisibility(
                     selected ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
             }
+#if defined(TTNX_M4_NATIVE_TEST_UI) && defined(TTNX_M4_RING_STREAM_CB_PROBE)
+            if (row.m4_test_video) {
+                row.m4_test_video->setVisibility(
+                    selected ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
+            }
+#endif
             if (row.play_status) {
                 row.play_status->setVisibility(
                     selected ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
@@ -1057,30 +1066,33 @@ private:
         }
 #ifdef TTNX_M3_INTEGRATED
         brls::Button* play_video = nullptr;
+#if defined(TTNX_M4_NATIVE_TEST_UI) && defined(TTNX_M4_RING_STREAM_CB_PROBE)
+        brls::Button* m4_test_video = nullptr;
+#endif
         if (result.kind == ttnx::core::BrowseResultKind::Video &&
             ttnx::core::is_valid_video_id(result.id)) {
-#if defined(TTNX_M4_NATIVE_TEST_UI) && defined(TTNX_M4_RING_STREAM_CB_PROBE)
-            play_video = button(search_results_box_, "Play streaming (M4 hardware test)");
-#else
+            // Keep the physically accepted M3 source/player available in
+            // both standard and M4 experimental hardware-test builds.
             play_video = button(search_results_box_, "Play video (M3 experimental)");
-#endif
             play_video->setVisibility(brls::Visibility::GONE);
             const auto video_id = result.id;
-#if defined(TTNX_M4_NATIVE_TEST_UI) && defined(TTNX_M4_RING_STREAM_CB_PROBE)
-            // This exact normalized Search Video survived the renderer
-            // Shorts/promoted filter. A library ID alone cannot opt into M4.
-            const ttnx::core::ContentItem verified{
-                ttnx::core::ContentKind::Video,video_id,result.title,false,false};
-            const bool normal_vod=!result.live && !result.upcoming;
-            play_video->registerClickAction([this, verified, normal_vod](brls::View*) {
-                if(normal_vod)start_m4_native_video(verified);
-                return true;
-            });
-#else
             play_video->registerClickAction([this, video_id](brls::View*) {
                 start_m3_video(video_id);
                 return true;
             });
+#if defined(TTNX_M4_NATIVE_TEST_UI) && defined(TTNX_M4_RING_STREAM_CB_PROBE)
+            if(!result.live && !result.upcoming) {
+                // M4 requires a current normalized, non-Shorts Search VOD.
+                // A library ID alone is never authority to open CDN media.
+                const ttnx::core::ContentItem verified{
+                    ttnx::core::ContentKind::Video,video_id,result.title,false,false};
+                m4_test_video=button(search_results_box_, "Play streaming (M4 hardware test)");
+                m4_test_video->setVisibility(brls::Visibility::GONE);
+                m4_test_video->registerClickAction([this,verified](brls::View*) {
+                    start_m4_native_video(verified);
+                    return true;
+                });
+            }
 #endif
         }
         brls::Label* play_status = nullptr;
@@ -1104,7 +1116,11 @@ private:
         search_detail_rows_.push_back({
             identity, select, detail_label, open_channel,
             watch_later, favorite_video, follow_channel,
-            play_video, play_status, cancel_video});
+            play_video,
+#if defined(TTNX_M4_NATIVE_TEST_UI) && defined(TTNX_M4_RING_STREAM_CB_PROBE)
+            m4_test_video,
+#endif
+            play_status, cancel_video});
 #else
         search_detail_rows_.push_back({
             identity, select, detail_label, open_channel,
