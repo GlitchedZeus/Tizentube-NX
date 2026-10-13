@@ -36,6 +36,13 @@ int main(){
      first.find("v_00001.ts")!=std::string::npos &&
      first.find("#EXT-X-ENDLIST")==std::string::npos,
      "growing playlist references only durable local files");
+  {
+    ttnx::playback::HlsPlaybackLease decoder;
+    ck(decoder.acquire() && !sink.retire_before(1) &&
+       fs::exists(root/"v_00000.ts") &&
+       read(root/"stream.m3u8")==first,
+       "active decoder lease prevents playlist mutation and old-file unlink");
+  }
   ck(!sink.retire_before(2),"cannot retire entire visible playback window");
   ck(sink.retire_before(1),"advance window before unlinking consumed chunk");
   ck(!sink.retire_before(1),"retiring zero new segments is refused");

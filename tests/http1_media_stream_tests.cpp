@@ -31,6 +31,32 @@ int main(){
   return out;
  };
  assert(check(response(payload),true)==payload);
+ // Accurate byte quota: header callback MUST run before the first body
+ // byte is delivered, independent of network fragmentation.
+ for(std::size_t step:{1u,71u,32768u}) {
+   int admissions=0, body_calls=0;
+   const auto wire=response(payload);
+   Http1MediaStream parser([&](std::size_t n) {
+     ++admissions;
+     assert(body_calls==0);
+     return n==payload.size();
+   });
+   for(std::size_t i=0;i<wire.size();i+=step) {
+     assert(parser.feed(std::string_view(wire).substr(
+       i,std::min(step,wire.size()-i)), [&](std::string_view bytes) {
+         ++body_calls; return !bytes.empty();
+       }));
+   }
+   assert(parser.finish() && admissions==1 && body_calls>0);
+ }
+ {bool emitted=false;
+  Http1MediaStream reject([](std::size_t){return false;});
+  assert(!reject.feed(response(payload),[&](std::string_view){
+     emitted=true;return true;
+  }));
+  assert(!emitted && reject.state()==Http1MediaStream::State::Rejected);
+ }
+
  // Delimiter split exactly before a full 32 KiB media-containing TLS read.
  {Http1MediaStream p;const auto wire=response(payload);
   const auto edge=wire.find("\r\n\r\n")+2;

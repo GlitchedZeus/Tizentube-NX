@@ -101,6 +101,15 @@ if(TTNX_BUILD_TESTS)
     target_include_directories(tizentube_nx_http1_media_stream_tests PRIVATE include)
     add_test(NAME http1_media_stream COMMAND tizentube_nx_http1_media_stream_tests)
 
+    # Actual header-size quota gate: 24-MiB media budget (with metadata
+    # reserve), no premature 16-MiB admission and zero body on refusal.
+    add_executable(tizentube_nx_physical_cache_admission_tests
+        tests/physical_cache_admission_tests.cpp)
+    target_include_directories(tizentube_nx_physical_cache_admission_tests
+        PRIVATE include)
+    add_test(NAME physical_cache_admission
+        COMMAND tizentube_nx_physical_cache_admission_tests)
+
     add_executable(tizentube_nx_media_chunks_tests tests/media_chunks_tests.cpp)
     target_link_libraries(tizentube_nx_media_chunks_tests PRIVATE tizentube_nx_core)
     add_test(NAME media_chunks COMMAND tizentube_nx_media_chunks_tests)

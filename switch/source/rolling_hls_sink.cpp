@@ -268,6 +268,9 @@ bool RollingHlsSink::publish(bool end_list) {
     return true;
 }
 bool RollingHlsSink::retire_before(std::size_t first_index) {
+    // Defense in depth: callers must not bypass the worker's decoder lease
+    // handoff and unlink media while libmpv could still own a segment FD.
+    if(playback::HlsPlaybackLease::is_active())return false;
     if(!started_ || first_index>next_ || segments_.empty() ||
        first_index>=next_ || !ancestors(false))return false;
     const auto first=std::find_if(segments_.begin(),segments_.end(),
@@ -279,7 +282,13 @@ bool RollingHlsSink::retire_before(std::size_t first_index) {
     segments_.erase(segments_.begin(),first);
     if(!publish(finished_)) {segments_=old;return false;}
     for(const auto& s:removed) {
-        if(!remove_file(segment_path(s.index)))return false;
+        if(!remove_file(segment_path(s.index))) {
+            // The playlist has already advanced. Stop new writes instead
+            // of retrying an inconsistent partial retirement transaction.
+            // close_session() can still preflight and purge all app files.
+            started_=false;
+            return false;
+        }
         bytes_-=s.bytes;
     }
     return true;

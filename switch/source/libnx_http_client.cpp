@@ -390,7 +390,8 @@ net::HttpResult perform_single_request(
 // Keep the accepted perform_single_request() byte-for-byte unchanged.
 net::HttpResult perform_single_streamed_media_request(
     const net::HttpRequest& request,const net::HttpsUrl& parsed_url,
-    long timeout_ms,const playback::HlsMediaChunk& emit) {
+    long timeout_ms,const playback::HlsMediaAdmission& admit,
+    const playback::HlsMediaChunk& emit) {
     net::HttpResult result;
     const auto wire_request = net::build_http1_request(request, parsed_url);
     if (!wire_request) {
@@ -505,7 +506,7 @@ net::HttpResult perform_single_streamed_media_request(
     }
 
 
-    net::Http1MediaStream parser;
+    net::Http1MediaStream parser(admit);
     char receive[net::Http1MediaStream::kReceiveChunk];
     for(;;) {
         u32 received=0;
@@ -929,10 +930,11 @@ net::HttpResult LibnxHlsSegmentTransport::perform(const net::HttpRequest& reques
 
 #ifdef TTNX_M4_ROLLING_STREAM
 playback::HlsStreamResult LibnxHlsSegmentTransport::stream_segment(
-    std::string_view url,const playback::HlsMediaChunk& emit) {
+    std::string_view url,const playback::HlsMediaAdmission& admit,
+    const playback::HlsMediaChunk& emit) {
     // Run only from the M4 worker thread; never the Borealis render tick.
     // Strict signed-CDN allowlist at call site AND pre-DNS in the helper.
-    if(!services_.ready() || !emit ||
+    if(!services_.ready() || !admit || !emit ||
        !playback::is_reviewable_hls_child_url(url))return {};
     const auto parsed=net::parse_https_url(url);
     if(!parsed || parsed->port!=443 ||
@@ -947,7 +949,7 @@ playback::HlsStreamResult LibnxHlsSegmentTransport::stream_segment(
     std::size_t byte_count=0;
     const auto result=perform_single_streamed_media_request(
         request,*parsed,normalized_timeout(request.timeout_ms),
-        [&](std::string_view bytes) {
+        admit,[&](std::string_view bytes) {
             if(bytes.size()>32*1024 || !emit(bytes))return false;
             byte_count+=bytes.size();
             return true;

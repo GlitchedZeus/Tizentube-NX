@@ -74,6 +74,17 @@ public:
         return Admission::Accepted;
     }
 
+    // Cheap metadata/timeline preflight before HTTPS/DNS. Precise byte
+    // admission still runs later at validated HTTP Content-Length.
+    [[nodiscard]] bool can_issue_network_request(
+        std::uint64_t start_ms) const noexcept {
+        return state_!=State::Idle && state_!=State::Failed &&
+               state_!=State::Cancelled && !pending_ &&
+               budget_.pieces()<RollingMediaBudget::kMaxPieces &&
+               (start_ms<=position_ms_ ||
+                start_ms-position_ms_<=kMaxAheadMs);
+    }
+
     [[nodiscard]] std::optional<Ticket> pending_ticket() const noexcept {
         return pending_;
     }

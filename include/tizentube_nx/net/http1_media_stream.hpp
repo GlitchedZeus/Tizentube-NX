@@ -6,6 +6,7 @@
 #include <limits>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace ttnx::net {
 // Dedicated HTTP/1.1 *media* stream parser. Never used for M2 browsing.
@@ -16,6 +17,10 @@ public:
     static constexpr std::size_t kMaxBody=16*1024*1024;
     static constexpr std::size_t kReceiveChunk=32*1024;
     using Emit=std::function<bool(std::string_view)>;
+    // Called once with verified Content-Length, BEFORE any body byte may be
+    // emitted. A false result enforces quota backpressure without SD writes.
+    using Admit=std::function<bool(std::size_t)>;
+    explicit Http1MediaStream(Admit admit={}) : admit_(std::move(admit)) {}
     enum class State { Headers, Body, Complete, Rejected };
     enum class Error { None, Headers, Status, Framing, Mime, Length, Consumer };
     [[nodiscard]] bool feed(std::string_view input,const Emit& emit) {
@@ -122,6 +127,7 @@ private:
             at=end+2;
         }
         if(!have_length||!have_mime||length_<376)return reject(Error::Headers);
+        if(admit_ && !admit_(length_))return reject(Error::Consumer);
         headers_.clear();
         state_=State::Body;return true;
     }
@@ -130,6 +136,7 @@ private:
         if(!data.empty() && !emit(data))return reject(Error::Consumer);
         consumed_+=data.size();return true;
     }
+    Admit admit_{};
     State state_{State::Headers};Error error_{Error::None};
     std::string headers_{};
     std::size_t length_{0},consumed_{0};

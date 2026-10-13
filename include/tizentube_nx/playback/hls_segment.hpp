@@ -23,6 +23,9 @@ struct HlsSegmentBytes {
 // Native opt-in streaming interface. Only the dedicated HTTPS media adapter
 // may implement this; never expose libmpv's own HTTP/network stack.
 using HlsMediaChunk = std::function<bool(std::string_view)>;
+// Called only after HTTP 200, accepted MIME and exact Content-Length.
+// Must reserve declared bytes before the stream emits its first body byte.
+using HlsMediaAdmission = std::function<bool(std::size_t)>;
 struct HlsStreamResult {
     bool ok{false};
     std::size_t bytes{0};
@@ -31,6 +34,7 @@ class HlsSegmentStreamTransport {
 public:
     virtual ~HlsSegmentStreamTransport()=default;
     virtual HlsStreamResult stream_segment(std::string_view signed_url,
+                                           const HlsMediaAdmission& admit,
                                            const HlsMediaChunk& sink)=0;
 };
 
@@ -47,6 +51,7 @@ public:
     // Native option sends <=32-KiB chunks straight to a transactionally
     // staged SD .part. Existing host fakes retain a legacy adapter for tests.
     [[nodiscard]] HlsStreamResult stream(std::string_view signed_url,
+                                          const HlsMediaAdmission& admit,
                                           const HlsMediaChunk& emit) const;
     static constexpr std::size_t kMaximumSegmentBytes=16*1024*1024;
 private:

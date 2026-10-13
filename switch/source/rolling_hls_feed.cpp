@@ -3,23 +3,14 @@
 #include "tizentube_nx/core/url.hpp"
 #include "tizentube_nx/playback/hls_manifest.hpp"
 #include "tizentube_nx/playback/ts_streams.hpp"
+#include "tizentube_nx/playback/physical_cache_admission.hpp"
+#include "tizentube_nx/playback/hls_playback_lease.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <limits>
 #include <utility>
 
 namespace ttnx::switch_app {
-namespace {
-bool muxed_ts(const std::string& media) {
-    // Each segment must independently contain PAT/PMT declaring H.264 + AAC.
-    // Sync evidence alone or HTTP Content-Type is not codec verification.
-    if(media.size()<376 || media.size()%188!=0)return false;
-    for(std::size_t i=0;i<media.size();i+=188)
-        if(static_cast<unsigned char>(media[i])!=0x47)return false;
-    const auto info=playback::inspect_mpeg_ts(media);
-    return info.recognized && info.h264 && info.aac;
-}
-}
 
 bool RollingMuxedHlsSession::begin(const playback::HlsProbePlan& plan) {
     if(state_!=State::Idle && state_!=State::Cancelled)return false;
@@ -83,51 +74,78 @@ RollingMuxedHlsSession::State RollingMuxedHlsSession::pump() {
     }
     const auto start=next_==0?0:ends_ms_[next_-1];
     const auto end=ends_ms_[next_];
+    static_assert(playback::PhysicalCacheAdmission::kMediaCapacity==
+                  RollingHlsSink::kMaxMediaBytes);
+    // Preserve zero-network prefetch backpressure: no CDN connection
+    // beyond the 30-second window or full 192-piece metadata ledger.
+    if(!coordinator_.can_issue_network_request(start)) {
+        state_=State::Waiting;
+        return state_;
+    }
+    // An unknown 16-MiB worst-case reservation caused premature
+    // backpressure at only ~8 MiB of a 24-MiB rolling cache. The approved
+    // native HTTP parser now calls the admission hook with the ACTUAL
+    // validated Content-Length before emitting the first media byte.
+    // Host fake transports obey the identical order.
     using Admission=playback::RollingStreamCoordinator::Admission;
-    // Conservatively reserve the full permitted HTTP response. The sink's
-    // separate 128-KiB manifest allocation is outside the media-byte limit;
-    // never fetch a response that would exceed its physical SD quota.
-    if(sink_.bytes()>RollingHlsSink::kMaxMediaBytes-
-                        playback::RollingStreamCoordinator::kMaxSegmentBytes) {
-        state_=State::Waiting;
-        return state_;
-    }
-    const auto decision=coordinator_.reserve(
-        playback::RollingMediaBudget::Track::Muxed,
-        static_cast<std::uint32_t>(next_),start,end,
-        playback::RollingStreamCoordinator::kMaxSegmentBytes);
-    if(decision==Admission::Backpressure ||
-       (decision==Admission::Invalid && coordinator_.state()!=
-                           playback::RollingStreamCoordinator::State::Failed)) {
-        // Future playback window or a full 24 MiB quota: never request the
-        // next CDN segment until libmpv confirms old files are disposable.
-        state_=State::Waiting;
-        return state_;
-    }
-    if(decision!=Admission::Accepted)return failure(Error::Accounting);
-    const auto ticket=*coordinator_.pending_ticket();
-    // The native adapter now emits approved HTTPS body chunks directly into
-    // a private SD .part; the parser checks Content-Length/MIME before any
-    // media can reach the sink. Host fake clients use the legacy adapter.
+    std::optional<playback::RollingStreamCoordinator::Ticket> ticket;
     std::size_t received=0;
-    bool network_ok=false;
+    bool network_ok=false,wait_for_space=false,accounting_bad=false;
     const bool stored=sink_.append_streamed(
         next_,segments_[next_].duration_ms,
         [&](const RollingHlsSink::ChunkEmitter& emit) {
-            const auto incoming=reader_.stream(segments_[next_].url,emit);
+            const auto incoming=reader_.stream(
+                segments_[next_].url,
+                [&](std::size_t actual_length)->bool {
+                    using Physical=playback::PhysicalCacheAdmission;
+                    const auto physical=Physical::decide(
+                        sink_.bytes(),actual_length);
+                    if(physical==Physical::Result::Backpressure) {
+                        wait_for_space=true;return false;
+                    }
+                    if(physical==Physical::Result::Invalid) {
+                        accounting_bad=true;return false;
+                    }
+                    const auto decision=coordinator_.reserve(
+                        playback::RollingMediaBudget::Track::Muxed,
+                        static_cast<std::uint32_t>(next_),start,end,actual_length);
+                    if(decision==Admission::Backpressure ||
+                       (decision==Admission::Invalid &&
+                        coordinator_.state()!=
+                            playback::RollingStreamCoordinator::State::Failed)) {
+                        wait_for_space=true;
+                        return false; // Reject BEFORE any SD body write
+                    }
+                    if(decision!=Admission::Accepted) {
+                        accounting_bad=true;
+                        return false;
+                    }
+                    ticket=coordinator_.pending_ticket();
+                    return ticket.has_value();
+                },[&](std::string_view chunk)->bool {
+                    // A buggy future transport must not bypass header-time
+                    // admission by emitting media before Content-Length.
+                    return ticket.has_value() && emit(chunk);
+                });
             network_ok=incoming.ok;
             received=incoming.bytes;
             return incoming.ok;
         });
     if(!stored) {
         coordinator_.cancel_pending();
-        return failure(network_ok ? Error::MediaWrite : Error::SegmentHttp);
+        if(wait_for_space) {
+            state_=State::Waiting;
+            return state_;
+        }
+        return failure(accounting_bad?Error::Accounting:
+                       network_ok?Error::MediaWrite:Error::SegmentHttp);
     }
-    // Both PAT/PMT and all 188-byte sync boundaries were checked above.
-    // The actual Switch decoder remains responsible for confirming
-    // picture/audio before this experimental route is user-visible.
+    if(!ticket || !network_ok || received!=ticket->reserved_bytes)
+        return failure(Error::Accounting);
+    // Sink validated packet sync and muxed H.264/AAC PAT/PMT, and fsynced
+    // the exact-sized segment BEFORE committing its quota ledger ticket.
     coordinator_.mark_codecs_verified(true,true);
-    if(!coordinator_.committed(ticket,received,true,true))
+    if(!coordinator_.committed(*ticket,received,true,true))
         return failure(Error::Accounting);
     ++next_;
     state_=coordinator_.startup_ready()?State::PrefixReady:State::Fetching;
@@ -142,13 +160,17 @@ bool RollingMuxedHlsSession::retire_before(
        state_!=State::Complete) ||
        first_retained_index<=first_retained_ ||
        first_retained_index>=next_ ||
-       !coordinator_.advance_playhead(playhead_ms))return false;
+       playback::HlsPlaybackLease::is_active())return false;
     for(auto i=first_retained_;i<first_retained_index;++i) {
         if(ends_ms_[i]>playhead_ms ||
            playhead_ms-ends_ms_[i]<
                  playback::RollingMediaBudget::kEvictionGuardMs)
             return false;
     }
+    // Only credit playhead AFTER all release and guard proofs have passed.
+    // A speculative/early request must leave the reservation timeline
+    // unchanged or it could admit future CDN segments too soon.
+    if(!coordinator_.advance_playhead(playhead_ms))return false;
     // The playlist must move first. Then the sink unlinks old files.
     if(!sink_.retire_before(first_retained_index))
         return failure(Error::MediaWrite),false;

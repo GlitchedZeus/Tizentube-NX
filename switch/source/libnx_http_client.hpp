@@ -106,7 +106,8 @@ public:
     net::HttpResult perform(const net::HttpRequest& request) override;
 #ifdef TTNX_M4_ROLLING_STREAM
     [[nodiscard]] playback::HlsStreamResult stream_segment(
-        std::string_view url,const playback::HlsMediaChunk& emit) override;
+        std::string_view url,const playback::HlsMediaAdmission& admit,
+        const playback::HlsMediaChunk& emit) override;
 #endif
     [[nodiscard]] bool ready() const noexcept { return services_.ready(); }
 private:

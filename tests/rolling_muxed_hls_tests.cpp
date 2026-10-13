@@ -77,10 +77,12 @@ struct StreamOnlyMedia final : playback::HlsSegmentStreamTransport {
     std::atomic<int> calls{0};
     int fail_at=0;
     playback::HlsStreamResult stream_segment(
-        std::string_view url,const playback::HlsMediaChunk& emit) override {
+        std::string_view url,const playback::HlsMediaAdmission& admit,
+        const playback::HlsMediaChunk& emit) override {
         if(!playback::is_reviewable_hls_child_url(url))return {};
         const int current=++calls;
         const std::string media=ts(true,6000);
+        if(!admit(media.size()))return {};
         for(std::size_t at=0;at<media.size();at+=32768) {
             if(current==fail_at && at>=32768)return {};
             if(!emit(std::string_view(media).substr(
@@ -89,6 +91,51 @@ struct StreamOnlyMedia final : playback::HlsSegmentStreamTransport {
         return {true,media.size()};
     }
 };
+void physical_quota_and_closed_decoder_window() {
+    reset();
+    LocalMedia legacy;
+    StreamOnlyMedia streaming;
+    playback::HlsSegmentReader reader(legacy,&streaming);
+    Sink sink;
+    Feed feed(reader,sink);
+    ck(feed.begin(plan(14)), "start 14-segment physical-quota session");
+    // ~1.128 MiB each: before this fix a permanent 16-MiB reservation
+    // blocked the 9th small segment with only ~8 MiB on SD.
+    for(unsigned i=0;i<11;++i) {
+        const auto next=feed.pump();
+        ck(next==Feed::State::PrefixReady && feed.downloaded_segments()==i+1,
+           "exact HTTP Content-Length admits small SD segments beyond 8 MiB");
+    }
+    ck(sink.bytes()>8ULL*1024*1024 &&
+       sink.bytes()<=Sink::kMaxMediaBytes &&
+       legacy.hits==0 && streaming.calls.load()==11,
+       "actual media bytes are bounded without any whole-response fetch");
+    ck(feed.pump()==Feed::State::Waiting &&
+       streaming.calls.load()==11,
+       "30-second prefetch window waits without an unauthorized HTTP request");
+    {
+        playback::HlsPlaybackLease lease;
+        ck(lease.acquire() && !feed.retire_before(3,30000,true) &&
+           fs::exists(fs::path(Sink::kRoot)/"v_00000.ts"),
+           "decoder lease vetoes stale segment deletion even if caller lies");
+    }
+    ck(!feed.retire_before(3,7000,true) &&
+       fs::exists(fs::path(Sink::kRoot)/"v_00000.ts"),
+       "insufficient playhead guard cannot mutate retained window");
+    ck(feed.retire_before(3,30000,true) &&
+       !fs::exists(fs::path(Sink::kRoot)/"v_00000.ts"),
+       "only after confirmed decoder closure can early segments be deleted");
+    for(unsigned i=11;i<14;++i)
+        ck(feed.pump()==Feed::State::PrefixReady,
+           "producer resumes after safe release and fetches future segments");
+    ck(feed.pump()==Feed::State::Complete &&
+       streaming.calls.load()==14 &&
+       sink.bytes()<=Sink::kMaxMediaBytes,
+       "future H264/AAC segments finish below disposable quota");
+    ck(feed.close_after_player(true) && !fs::exists(Sink::kRoot),
+       "full finite playback window purge leaves zero SD media");
+}
+
 void native_direct_to_sd_stream() {
     reset();
     LocalMedia legacy;
@@ -322,6 +369,7 @@ void bounded() {
 int main() {
     successful();negative();bounded();threaded();full_native_owner();
     native_direct_to_sd_stream();
+    physical_quota_and_closed_decoder_window();
     reset();
     if(errors)std::cerr<<errors<<" rolling muxed transport failures\n";
     return errors?EXIT_FAILURE:EXIT_SUCCESS;

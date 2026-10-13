@@ -62,6 +62,9 @@ int main(){
     audio=*r.pending_ticket();
     ck(r.committed(audio,MiB/2,true,true) && r.startup_ready(),
        "seeked source starts from its own 3-second verified window");
+    ck(!r.can_issue_network_request(190000) &&
+       r.can_issue_network_request(123000),
+       "pre-DNS gate blocks ahead-of-playback media without a CDN request");
     ck(r.reserve(Track::Video,1,190000,193000,MiB)==Admission::Invalid,
        "cannot prefetch unlimited future video before playback advances");
     ck(r.reserve(Track::Video,1,123000,126000,23*MiB)==Admission::Invalid,
@@ -115,6 +118,8 @@ int main(){
         ck(r.committed(ticket,128,true,true),"tiny segment accounted");
     }
     ck(r.advance_playhead(192000),"playhead reaches the ledger ceiling");
+    ck(!r.can_issue_network_request(192000),
+       "full metadata ledger rejects CDN request before TLS handshake");
     ck(r.reserve(Track::Muxed,192,192000,193000,128)==Admission::Backpressure &&
        !r.pending_ticket().has_value() && r.reserved_bytes()==192*128 &&
        r.state()==R::State::Backpressure,
