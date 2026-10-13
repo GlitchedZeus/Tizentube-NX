@@ -344,10 +344,22 @@ public:
     }
     void stop() {
 #if defined(TTNX_M4_RING_STREAM_CB_PROBE)
-        // Stop wins even if EOF and a new prefix race this UI tick.
+        // A Stop during playback OR while waiting for the next HTTPS prefix
+        // closes the decoder, joins the producer and removes app-owned SD.
         if(ring_epoch_) {
             ring_reprime_.cancel();
-            ring_epoch_->request_stop();
+            if(handle_) {
+                const char* stop_command[]={"stop",nullptr};
+                const int result=mpv_command(handle_,stop_command);
+                M3Diagnostics::record(M3Stage::Player,M3Event::Stop,result,0,0);
+            }
+            close();
+            audio_gate_.reset();
+            audio_failure_latched_=false;
+            have_frame_=false;
+            ring_terminal_retired_=true;
+            status_="Stopped; disposable M4 media retired after decoder close";
+            return;
         }
 #endif
         if(!handle_)return;
@@ -595,7 +607,20 @@ public:
     void service_ring_reprime() {
         if(!ring_epoch_)return;
         using Gate=playback::RollingReprimeGate;
-        if(ring_reprime_.stage()==Gate::Stage::Requested) {
+        const auto stage=ring_reprime_.stage();
+        if(stage==Gate::Stage::Finished || stage==Gate::Stage::Failed) {
+            // No watched video survives EOF or a decoder error. This is
+            // separate from user Stop, which retires media immediately.
+            if(!ring_terminal_retired_) {
+                ring_terminal_retired_=true;
+                close();
+                status_=stage==Gate::Stage::Finished
+                    ?"M4 playback complete; temporary video deleted"
+                    :"M4 playback failed; temporary media retired";
+            }
+            return;
+        }
+        if(stage==Gate::Stage::Requested) {
             const auto next=ring_reprime_.next_segment();
             // close destroys the render context and mpv, joins the worker,
             // verifies zero outstanding decoder readers and unlinks old SD.
@@ -721,6 +746,7 @@ private:
     std::shared_ptr<playback::RollingStreamEpoch> ring_epoch_{};
     playback::RollingReprimeGate ring_reprime_{};
     bool ring_loaded_{false},ring_verified_av_{false};
+    bool ring_terminal_retired_{false};
     std::uint64_t epoch_frame_base_{0};
 #endif
     std::string status_{"Starting libmpv..."};

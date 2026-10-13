@@ -97,6 +97,8 @@ jobs:
             ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
               "/tmp/ttnx-ring-reprime-$mode"
           done
+      - name: Verify M4 native ring re-prime/cleanup isolation contracts
+        run: python3 -m unittest discover -s tests -p m4_ring_reprime_contract_tests.py -v
       - name: Decode real growing H264/AAC HLS and verify zero-video-cache shutdown
         run: python3 -m unittest discover -s tests -p rolling_hls_live_decode_tests.py -v
       - name: Sanitized real growing HLS A/V decode and cancel regressions
