@@ -5,6 +5,7 @@
 // ring storage, decoder leases, backpressure and short-lived media deletion.
 #pragma once
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <condition_variable>
 #include <cstddef>
@@ -124,7 +125,7 @@ public:
         // >0 bytes read; 0 is final EOF; -1 cancelled, failed or invalid.
         std::int64_t read(char* out,std::uint64_t requested) {
             if(!out || !requested)return -1;
-            auto owner=owner_;
+            auto owner=snapshot_owner();
             if(!owner)return -1;
             std::unique_lock<std::mutex> lock(owner->mu_);
             owner->cv_.wait(lock,[&]{return closed_ || owner->cancelled_ || owner->failed_ ||
@@ -147,7 +148,7 @@ public:
         }
         // Unlike SEEK_END, the absolute target must ALREADY be buffered.
         [[nodiscard]] std::int64_t seek(std::int64_t absolute) {
-            auto owner=owner_;
+            auto owner=snapshot_owner();
             if(!owner || absolute<0)return -1;
             std::lock_guard<std::mutex> lock(owner->mu_);
             const auto at=static_cast<std::uint64_t>(absolute);
@@ -157,10 +158,21 @@ public:
             return absolute;
         }
         // mpv cancel_fn can arrive on another thread. Wake blocked read().
-        void cancel() {auto owner=owner_; if(owner)owner->cancel();}
-        [[nodiscard]] std::uint64_t position()const noexcept {return pos_;}
+        void cancel() {
+            // libmpv may call cancel_fn on a different thread than read_fn
+            // or close_fn. Never race a shared_ptr copy with close's move.
+            auto owner=snapshot_owner();
+            if(owner)owner->cancel();
+        }
+        [[nodiscard]] std::uint64_t position()const noexcept {
+            return pos_.load(std::memory_order_acquire);
+        }
         void close() {
-            auto owner=std::move(owner_);
+            std::shared_ptr<RollingFileStream> owner;
+            {
+                std::lock_guard<std::mutex> state_lock(state_mu_);
+                owner=std::move(owner_);
+            }
             if(owner){
                 std::lock_guard<std::mutex> lock(owner->mu_);
                 closed_=true;
@@ -172,8 +184,16 @@ public:
         friend class RollingFileStream;
         explicit Reader(std::shared_ptr<RollingFileStream> owner,std::uint64_t start)
             : owner_(std::move(owner)),pos_(start){}
+        // Lock order: state_mu_ is released before acquiring owner->mu_.
+        // Both close() and cancel() honor this order; a blocked read can
+        // always be woken without self-deadlock or shared_ptr data races.
+        [[nodiscard]] std::shared_ptr<RollingFileStream> snapshot_owner()const {
+            std::lock_guard<std::mutex> state_lock(state_mu_);
+            return owner_;
+        }
+        mutable std::mutex state_mu_;
         std::shared_ptr<RollingFileStream> owner_;
-        std::uint64_t pos_{0};
+        std::atomic<std::uint64_t> pos_{0};
         bool closed_{false};
     };
     [[nodiscard]] std::unique_ptr<Reader> open_reader(std::uint64_t at=0) {

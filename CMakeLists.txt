@@ -105,6 +105,17 @@ if(TTNX_BUILD_TESTS)
     add_test(NAME rolling_file_stream
         COMMAND tizentube_nx_rolling_file_stream_tests)
 
+    # mpv callback reader close/cancel/running read must never race its
+    # shared_ptr lease or expose an unguarded cursor position.
+    add_executable(tizentube_nx_rolling_ring_reader_concurrency_tests
+        tests/rolling_ring_reader_concurrency_tests.cpp)
+    target_include_directories(tizentube_nx_rolling_ring_reader_concurrency_tests
+        PRIVATE include)
+    target_link_libraries(tizentube_nx_rolling_ring_reader_concurrency_tests
+        PRIVATE Threads::Threads)
+    add_test(NAME rolling_ring_reader_concurrency
+        COMMAND tizentube_nx_rolling_ring_reader_concurrency_tests)
+
     add_executable(tizentube_nx_rolling_mpv_stream_bridge_tests
         tests/rolling_mpv_stream_bridge_tests.cpp)
     target_include_directories(tizentube_nx_rolling_mpv_stream_bridge_tests
