@@ -1,6 +1,6 @@
-# M4 historical SD-backed storage experiments — superseded
+# M4 SD-backed streaming experiments and storage budget
 
-> **Product requirement update (2026-10-12):** The planned M4 SD-backed rolling HLS media cache is **not the final architecture**. TizenTube NX must stream verified media through bounded **RAM only**, with **zero media files on SD**. The **100,000,000-byte limit applies to the full installed app and persistent app-owned files**, not to video buffers or a video-download cache. Read [the definitive RAM streaming contract](M4_RAM_STREAMING_REQUIREMENTS.md) before extending M4. The rest of this document describes obsolete or isolated historical experiments, not release acceptance criteria.
+> **Accepted clarification (2026-10-12):** This project's intended streaming architecture is a **small, rolling SD-media working cache (approximately 25 MB)**, **not** a large RAM buffer and **not** an entire-video download. The app, settings and current temporary cache combined must fit in **100,000,000 decimal bytes of SD**. The SD cache must be deleted after playback. See the authoritative [M4 SD streaming requirements](M4_SD_STREAMING_REQUIREMENTS.md). The previous RAM-only direction was superseded; later sections below document engineering progress and blockers, not final hardware acceptance.
 
 Product target: the TizenTube NX NRO (including embedded assets), all app-owned
 settings/diagnostics, and the **maximum simultaneous disposable video/audio
