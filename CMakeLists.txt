@@ -94,6 +94,13 @@ if(TTNX_BUILD_TESTS)
     target_include_directories(tizentube_nx_tv_player_layout_tests PRIVATE include)
     add_test(NAME tv_player_layout COMMAND tizentube_nx_tv_player_layout_tests)
 
+    # Standalone strict HTTP/1.1 streaming body parser, independent of
+    # Horizon SDK; headers may not grant redirects or whole-body buffers.
+    add_executable(tizentube_nx_http1_media_stream_tests
+        tests/http1_media_stream_tests.cpp)
+    target_include_directories(tizentube_nx_http1_media_stream_tests PRIVATE include)
+    add_test(NAME http1_media_stream COMMAND tizentube_nx_http1_media_stream_tests)
+
     add_executable(tizentube_nx_media_chunks_tests tests/media_chunks_tests.cpp)
     target_link_libraries(tizentube_nx_media_chunks_tests PRIVATE tizentube_nx_core)
     add_test(NAME media_chunks COMMAND tizentube_nx_media_chunks_tests)

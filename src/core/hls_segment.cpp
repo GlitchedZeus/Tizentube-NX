@@ -108,4 +108,26 @@ HlsSegmentBytes HlsSegmentReader::fetch(std::string_view url) const {
     out.failure=HlsSegmentFailure::None;
     return out;
 }
+HlsStreamResult HlsSegmentReader::stream(std::string_view url,
+                                          const HlsMediaChunk& emit) const {
+    if(!emit || !is_reviewable_hls_child_url(url))return {};
+    if(stream_)return stream_->stream_segment(url,emit);
+#if defined(__SWITCH__) && defined(TTNX_M4_ROLLING_STREAM)
+    // Never fall back to a 16-MiB whole-response allocation on real
+    // Switch M4 builds. The native streaming adapter must be injected.
+    return {};
+#endif
+    // Fake HttpClient compatibility for *host regressions only*: the
+    // existing fetch() still buffers the complete response. Native rolling
+    // sessions must inject the approved HlsSegmentStreamTransport.
+    const auto response=fetch(url);
+    if(!response.ok())return {};
+    const std::string_view all=response.bytes;
+    for(std::size_t at=0;at<all.size();at+=32*1024) {
+        if(!emit(all.substr(at,std::min<std::size_t>(32*1024,all.size()-at))))
+            return {};
+    }
+    return {true,all.size()};
+}
+
 } // namespace ttnx::playback

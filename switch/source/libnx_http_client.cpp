@@ -7,6 +7,7 @@
 #include "tizentube_nx/playback/playback.hpp"
 #include "tizentube_nx/playback/hls_manifest.hpp"
 #include "tizentube_nx/playback/source_routes.hpp"
+#include "tizentube_nx/net/http1_media_stream.hpp"
 #endif
 
 #include <switch.h>
@@ -380,6 +381,166 @@ net::HttpResult perform_single_request(
     }
     return result;
 }
+
+
+#ifdef TTNX_M3_MEDIA_PLANE
+// Media-only opt-in direct Horizon SSL read to app-owned SD chunks.
+// Keep the accepted perform_single_request() byte-for-byte unchanged.
+net::HttpResult perform_single_streamed_media_request(
+    const net::HttpRequest& request,const net::HttpsUrl& parsed_url,
+    long timeout_ms,const playback::HlsMediaChunk& emit) {
+    net::HttpResult result;
+    const auto wire_request = net::build_http1_request(request, parsed_url);
+    if (!wire_request) {
+        result.failure_stage = net::HttpFailureStage::Http;
+        result.error = "Could not serialize the bounded HTTP/1.1 request.";
+        return result;
+    }
+    if (wire_request->size() > kMaxRequestBytes) {
+        result.failure_stage = net::HttpFailureStage::Http;
+        result.error = "HTTP request exceeds the bounded request limit.";
+        return result;
+    }
+
+    TlsConnection tls;
+    tls.raw_fd = tcp_connect_allowed_host(parsed_url.host, timeout_ms, media_plane);
+    if (tls.raw_fd < 0) {
+        result.failure_stage = net::HttpFailureStage::Tcp;
+        result.error = "TCP connection to the approved YouTube host failed.";
+        return result;
+    }
+
+    u32 tls_versions = SslVersion_TlsV12;
+    if (hosversionAtLeast(11, 0, 0)) tls_versions |= SslVersion_TlsV13;
+
+    Result rc = sslCreateContext(&tls.context, tls_versions);
+    if (R_FAILED(rc)) {
+        result.failure_stage = net::HttpFailureStage::Tls;
+        result.error = result_error("sslCreateContext", rc);
+        return result;
+    }
+    tls.have_context = true;
+
+    rc = sslContextCreateConnection(&tls.context, &tls.connection);
+    if (R_FAILED(rc)) {
+        result.failure_stage = net::HttpFailureStage::Tls;
+        result.error = result_error("sslContextCreateConnection", rc);
+        return result;
+    }
+    tls.have_connection = true;
+
+    // Explicitly require peer-chain, hostname and certificate-date validation.
+    // HostName verification also requires SetHostName, which supplies SNI.
+    rc = sslConnectionSetVerifyOption(
+        &tls.connection,
+        SslVerifyOption_PeerCa | SslVerifyOption_HostName | SslVerifyOption_DateCheck);
+    if (R_FAILED(rc)) {
+        result.failure_stage = net::HttpFailureStage::Tls;
+        result.error = result_error("sslConnectionSetVerifyOption", rc);
+        return result;
+    }
+
+    rc = sslConnectionSetHostName(
+        &tls.connection,
+        parsed_url.host.c_str(),
+        static_cast<u32>(parsed_url.host.size()));
+    if (R_FAILED(rc)) {
+        result.failure_stage = net::HttpFailureStage::Tls;
+        result.error = result_error("sslConnectionSetHostName", rc);
+        return result;
+    }
+
+    errno = 0;
+    const int handed_off_fd = socketSslConnectionSetSocketDescriptor(
+        &tls.connection, tls.raw_fd);
+    // libnx's wrapper consumes the input descriptor. The returned descriptor,
+    // when present, is the descriptor we must close before the SSL connection.
+    tls.raw_fd = -1;
+    if (handed_off_fd < 0 && errno != ENOENT) {
+        result.failure_stage = net::HttpFailureStage::Tls;
+        result.error = "socketSslConnectionSetSocketDescriptor failed.";
+        return result;
+    }
+    if (handed_off_fd >= 0) tls.ssl_fd = handed_off_fd;
+
+    rc = sslConnectionSetIoMode(&tls.connection, SslIoMode_Blocking);
+    if (R_FAILED(rc)) {
+        result.failure_stage = net::HttpFailureStage::Tls;
+        result.error = result_error("sslConnectionSetIoMode", rc);
+        return result;
+    }
+
+    // On HOS 16+, tighten the SSL service's own I/O timeout in addition to the
+    // BSD socket timeouts.
+    if (hosversionAtLeast(16, 0, 0)) {
+        rc = sslConnectionSetIoTimeout(
+            &tls.connection,
+            static_cast<u32>(std::min<long>(timeout_ms, std::numeric_limits<u32>::max())));
+        if (R_FAILED(rc)) {
+            result.failure_stage = net::HttpFailureStage::Tls;
+            result.error = result_error("sslConnectionSetIoTimeout", rc);
+            return result;
+        }
+    }
+
+    u32 certificate_bytes = 0;
+    u32 certificate_count = 0;
+    rc = sslConnectionDoHandshake(
+        &tls.connection,
+        &certificate_bytes,
+        &certificate_count,
+        nullptr,
+        0);
+    if (R_FAILED(rc)) {
+        result.failure_stage = net::HttpFailureStage::Tls;
+        result.error = result_error("sslConnectionDoHandshake", rc);
+        return result;
+    }
+
+    if (!write_all(tls.connection, *wire_request, result.error)) {
+        result.failure_stage = net::HttpFailureStage::Tls;
+        return result;
+    }
+
+
+    net::Http1MediaStream parser;
+    char receive[net::Http1MediaStream::kReceiveChunk];
+    for(;;) {
+        u32 received=0;
+        const Result rc=sslConnectionRead(
+            &tls.connection,receive,static_cast<u32>(sizeof(receive)),&received);
+        if(R_FAILED(rc)) {
+            result.failure_stage=net::HttpFailureStage::Tls;
+            result.error="M4 media SSL receive failure.";
+            return result;
+        }
+        if(received==0) {
+            if(!parser.finish()) {
+                result.failure_stage=net::HttpFailureStage::Http;
+                result.error="M4 media stream truncated or incomplete.";
+                return result;
+            }
+            result.ok=true;result.response.status_code=200;
+            return result;
+        }
+        if(!parser.feed(std::string_view(receive,received),emit)) {
+            result.failure_stage=net::HttpFailureStage::Http;
+            result.error="M4 media HTTP framing, size or SD emission refused.";
+            return result;
+        }
+        if(parser.state()==net::Http1MediaStream::State::Body &&
+           parser.received()==parser.expected()) {
+            if(!parser.finish()) {
+                result.failure_stage=net::HttpFailureStage::Http;
+                result.error="M4 media stream finish refused.";
+                return result;
+            }
+            result.ok=true;result.response.status_code=200;
+            return result; // Content-Length complete; no need to wait for EOF.
+        }
+    }
+}
+#endif
 
 std::optional<std::string> redirect_url(
     const net::HttpResponse& response,
@@ -763,6 +924,36 @@ net::HttpResult LibnxHlsSegmentTransport::perform(const net::HttpRequest& reques
         return reject("M3 HLS segment exceeded bounded body.");
     return result;
 }
+
+playback::HlsStreamResult LibnxHlsSegmentTransport::stream_segment(
+    std::string_view url,const playback::HlsMediaChunk& emit) {
+    // Run only from the M4 worker thread; never the Borealis render tick.
+    // Strict signed-CDN allowlist at call site AND pre-DNS in the helper.
+    if(!services_.ready() || !emit ||
+       !playback::is_reviewable_hls_child_url(url))return {};
+    const auto parsed=net::parse_https_url(url);
+    if(!parsed || parsed->port!=443 ||
+       !playback::is_reviewable_hls_child_url(
+           "https://"+parsed->host+parsed->target))return {};
+    net::HttpRequest request;
+    request.method=net::HttpMethod::Get;
+    request.url=std::string(url);
+    request.timeout_ms=20000;
+    request.headers={{"Accept","application/octet-stream"},
+                     {"Accept-Encoding","identity"}};
+    std::size_t byte_count=0;
+    const auto result=perform_single_streamed_media_request(
+        request,*parsed,normalized_timeout(request.timeout_ms),
+        [&](std::string_view bytes) {
+            if(bytes.size()>32*1024 || !emit(bytes))return false;
+            byte_count+=bytes.size();
+            return true;
+        });
+    if(!result.ok || result.response.status_code!=200 ||
+       byte_count<376 || byte_count>16*1024*1024)return {};
+    return {true,byte_count};
+}
+
 #endif
 
 }  // namespace ttnx::switch_app

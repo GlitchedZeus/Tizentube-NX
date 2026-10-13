@@ -8,7 +8,9 @@ on:
   pull_request:
     paths:
       - 'switch/source/libnx_http_client.*'
+      - 'include/tizentube_nx/net/http1_media_stream.hpp'
       - 'include/tizentube_nx/playback/**'
+      - 'src/core/hls_segment.cpp'
       - 'src/core/media_*.cpp'
       - 'Makefile.switch'
       - 'switch/source/rolling_hls_*'
@@ -16,7 +18,9 @@ on:
   push:
     paths:
       - 'switch/source/libnx_http_client.*'
+      - 'include/tizentube_nx/net/http1_media_stream.hpp'
       - 'include/tizentube_nx/playback/**'
+      - 'src/core/hls_segment.cpp'
       - 'src/core/media_*.cpp'
       - 'Makefile.switch'
       - 'switch/source/rolling_hls_*'
@@ -55,6 +59,8 @@ jobs:
           test -s build-m4-rolling/rolling_hls_sink.o
           test -s build-m4-rolling/rolling_hls_worker.o
           test -s build-m4-rolling/rolling_playback_owner.o
+          test -s build-m4-rolling/libnx_http_client.o
+          test -s build-m4-rolling/hls_segment.o
           sha256sum tizentube_nx.nro
       - name: Clarify acceptance boundary
         run: |

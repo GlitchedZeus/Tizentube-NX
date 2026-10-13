@@ -72,6 +72,59 @@ playback::HlsProbePlan plan(std::size_t count=6) {
     return p;
 }
 void reset() {fs::remove_all("/tmp/ttnx-m4-rolling-test");}
+
+struct StreamOnlyMedia final : playback::HlsSegmentStreamTransport {
+    std::atomic<int> calls{0};
+    int fail_at=0;
+    playback::HlsStreamResult stream_segment(
+        std::string_view url,const playback::HlsMediaChunk& emit) override {
+        if(!playback::is_reviewable_hls_child_url(url))return {};
+        const int current=++calls;
+        const std::string media=ts(true,6000);
+        for(std::size_t at=0;at<media.size();at+=32768) {
+            if(current==fail_at && at>=32768)return {};
+            if(!emit(std::string_view(media).substr(
+                  at,std::min<std::size_t>(32768,media.size()-at))))return {};
+        }
+        return {true,media.size()};
+    }
+};
+void native_direct_to_sd_stream() {
+    reset();
+    LocalMedia legacy;
+    StreamOnlyMedia streaming;
+    // The M4 runtime accepts an explicit native stream transport. No
+    // legacy HttpClient::perform() calls or 16MiB copies are permitted.
+    switch_app::RollingHlsRuntime runtime(legacy,&streaming);
+    ck(runtime.begin(plan(3)), "start native streaming transport fixture");
+    for(unsigned i=0;i<1000 && runtime.snapshot().published_segments<3;++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    ck(streaming.calls.load()==3 && legacy.hits==0 &&
+       runtime.snapshot().published_segments==3,
+       "all 3 segments streamed with zero whole-response fetches");
+    ck(runtime.stored_media_bytes()>0 &&
+       runtime.stored_media_bytes()<=Sink::kMaxMediaBytes,
+       "native streaming enters strictly bounded SD cache");
+    runtime.request_stop();
+    runtime.join_downloads();
+    ck(runtime.cleanup() && !fs::exists(Sink::kRoot),
+       "native streaming session tears down all downloaded media");
+
+    reset();
+    LocalMedia untouched;
+    StreamOnlyMedia broken;broken.fail_at=2;
+    switch_app::RollingHlsRuntime failing(untouched,&broken);
+    ck(failing.begin(plan(3)), "begin intentional mid-body receive failure");
+    for(unsigned i=0;i<1000 && broken.calls.load()<2;++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    failing.request_stop();
+    failing.join_downloads();
+    ck(untouched.hits==0 && broken.calls.load()>=2,
+       "mid-body HTTP failure never retries via memory-buffered fallback");
+    ck(failing.cleanup() && !fs::exists(Sink::kRoot),
+       "failed streaming producer discards all private .part media");
+}
+
 void successful() {
     reset();
     LocalMedia http;
@@ -268,6 +321,7 @@ void bounded() {
 }
 int main() {
     successful();negative();bounded();threaded();full_native_owner();
+    native_direct_to_sd_stream();
     reset();
     if(errors)std::cerr<<errors<<" rolling muxed transport failures\n";
     return errors?EXIT_FAILURE:EXIT_SUCCESS;

@@ -106,38 +106,28 @@ RollingMuxedHlsSession::State RollingMuxedHlsSession::pump() {
     }
     if(decision!=Admission::Accepted)return failure(Error::Accounting);
     const auto ticket=*coordinator_.pending_ticket();
-    const auto response=reader_.fetch(segments_[next_].url);
-    if(!response.ok()) {
-        coordinator_.cancel_pending();
-        return failure(Error::SegmentHttp);
-    }
-    if(!muxed_ts(response.bytes)) {
-        coordinator_.cancel_pending();
-        return failure(Error::Codec);
-    }
-    // Use the same bounded, validated streaming SD writer that a future
-    // chunk-by-chunk libnx HTTPS response will drive. Today HlsSegmentReader
-    // still materializes its HTTP response: THIS DOES NOT YET prove
-    // low-RAM transport, but it does exercise the real write/verify path.
+    // The native adapter now emits approved HTTPS body chunks directly into
+    // a private SD .part; the parser checks Content-Length/MIME before any
+    // media can reach the sink. Host fake clients use the legacy adapter.
+    std::size_t received=0;
+    bool network_ok=false;
     const bool stored=sink_.append_streamed(
         next_,segments_[next_].duration_ms,
         [&](const RollingHlsSink::ChunkEmitter& emit) {
-            const std::string_view all(response.bytes);
-            for(std::size_t off=0;off<all.size();off+=32*1024) {
-                if(!emit(all.substr(off,std::min<std::size_t>(32*1024,all.size()-off))))
-                    return false;
-            }
-            return true;
+            const auto incoming=reader_.stream(segments_[next_].url,emit);
+            network_ok=incoming.ok;
+            received=incoming.bytes;
+            return incoming.ok;
         });
     if(!stored) {
         coordinator_.cancel_pending();
-        return failure(Error::MediaWrite);
+        return failure(network_ok ? Error::MediaWrite : Error::SegmentHttp);
     }
     // Both PAT/PMT and all 188-byte sync boundaries were checked above.
     // The actual Switch decoder remains responsible for confirming
     // picture/audio before this experimental route is user-visible.
     coordinator_.mark_codecs_verified(true,true);
-    if(!coordinator_.committed(ticket,response.bytes.size(),true,true))
+    if(!coordinator_.committed(ticket,received,true,true))
         return failure(Error::Accounting);
     ++next_;
     state_=coordinator_.startup_ready()?State::PrefixReady:State::Fetching;

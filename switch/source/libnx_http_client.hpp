@@ -6,6 +6,7 @@
 #include "tizentube_nx/playback/media_chunks.hpp"
 #include "tizentube_nx/playback/ump_transfer.hpp"
 #include "tizentube_nx/playback/hls_manifest.hpp"
+#include "tizentube_nx/playback/hls_segment.hpp"
 
 #endif
 
@@ -93,10 +94,13 @@ private:
 
 // Segment bytes require a DIFFERENT fixed MIME/size gate from text playlists.
 // No user-supplied cookies, redirects, cross-origin requests or media GET in M2.
-class LibnxHlsSegmentTransport final : public net::HttpClient {
+class LibnxHlsSegmentTransport final : public net::HttpClient,
+                                       public playback::HlsSegmentStreamTransport {
 public:
     LibnxHlsSegmentTransport() = default;
     net::HttpResult perform(const net::HttpRequest& request) override;
+    [[nodiscard]] playback::HlsStreamResult stream_segment(
+        std::string_view url,const playback::HlsMediaChunk& emit) override;
     [[nodiscard]] bool ready() const noexcept { return services_.ready(); }
 private:
     LibnxHttpClient services_;

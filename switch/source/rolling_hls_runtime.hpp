@@ -16,8 +16,11 @@ namespace ttnx::switch_app {
 // therefore no main-menu call path exists yet. Never acquire TWO leases.
 class RollingHlsRuntime final {
 public:
-    explicit RollingHlsRuntime(net::HttpClient& http)
-        : reader_(http),feed_(reader_,sink_) {}
+    explicit RollingHlsRuntime(net::HttpClient& http,
+        playback::HlsSegmentStreamTransport* native_stream=nullptr)
+        : reader_(http,native_stream),feed_(reader_,sink_) {}
+    // For physical M4, pass &LibnxHlsSegmentTransport as native_stream.
+    // Without it, fallback fake HTTP clients still materialize full segments.
     RollingHlsRuntime(const RollingHlsRuntime&)=delete;
     RollingHlsRuntime& operator=(const RollingHlsRuntime&)=delete;
     ~RollingHlsRuntime() = default;
