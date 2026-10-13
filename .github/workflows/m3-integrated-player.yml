@@ -64,6 +64,12 @@ jobs:
                 TTNX_M4_ROLLING_STREAM=1 TTNX_M4_PLAYER_PROBE=1 \
                 TARGET=tizentube_nx_m4_local_probe \
                 BUILD=build-m4-player -j2
+              # Header ABI integration for actual Switch portlib libmpv.
+              # This NRO is NOT uploaded, launched, or called hardware-ready.
+              make -f Makefile.switch TTNX_M3_INTEGRATED=1 \
+                TTNX_M4_ROLLING_STREAM=1 TTNX_M4_RING_STREAM_CB_PROBE=1 \
+                TARGET=tizentube_nx_m4_stream_cb_abi \
+                BUILD=build-m4-stream-cb -j2
               # Independent UI integration candidate. It never replaces the
               # last hardware-accepted visible-video NRO or uploaded artifact.
               make -f Makefile.switch TTNX_M3_INTEGRATED=1 \
@@ -96,6 +102,14 @@ jobs:
           test -s build-m4-player/rolling_playback_owner.o
           sha256sum tizentube_nx_m4_local_probe.nro
           echo "Local HLS probe compiled; NOT hardware-accepted or released."
+      - name: Check pinned libmpv stream callback ABI probe
+        run: |
+          test -s tizentube_nx_m4_stream_cb_abi.nro
+          test -s build-m4-stream-cb/m4_mpv_stream_cb_probe.o
+          test "$(stat -c %s tizentube_nx_m4_stream_cb_abi.nro)" -le 66445568
+          sha256sum tizentube_nx_m4_stream_cb_abi.nro
+          echo "Callback ABI compiled. This does NOT prove on-device playback."
+
       - name: Check unshipped TV-player candidate and keep installed size bounded
         run: |
           test -s tizentube_nx_m4_tv_preview.nro

@@ -41,3 +41,19 @@ even upstream July 2026 successes can be incompatible with October 2026
 playability/token enforcement. This imported parser is NOT authorization for
 arbitrary media network calls, bypassing access restrictions, or auto-following
 redirects. TizenTube's physical offline libmpv checkpoint remains separate.
+
+
+## Native libmpv stream-callback bridge inspired by Switch-NewPipe
+
+The experimental M4 buffered stream mechanism references
+[Switch-NewPipe's pinned callback implementation](https://github.com/mirusu400/switch-newpipe/blob/1cd590e212807a200ca5d90043051ce0f8cdbfb3/src/switch/switch_player.cpp)
+(GPL-3.0) and [mpv v0.36.0's documented stream callback ABI](https://github.com/mpv-player/mpv/blob/v0.36.0/libmpv/stream_cb.h).
+
+TizenTube NX reimplements that callback design around a bounded
+app-owned SD ring instead of the upstream unbounded growing file.
+The NULL size callback, cancellation, buffered-window seek behavior
+and mpv cookie lifetime are documented in
+[UPSTREAM_NATIVE_STREAM_BRIDGE.md](UPSTREAM_NATIVE_STREAM_BRIDGE.md).
+These are **opt-in engineering components**, not a currently
+hardware-accepted streaming engine, and the user-supplied proprietary
+YouTube Switch NSP contributes no source/asset bytes.

@@ -86,6 +86,18 @@ endif
 ifeq ($(TTNX_M4_ROLLING_STREAM),1)
 DEFINES += -DTTNX_M4_ROLLING_STREAM
 endif
+# Imported Switch-NewPipe concept, original M4 SD ring + mpv stream_cb ABI
+# candidate. Compile-time ONLY and never used in the accepted M3 NRO.
+ifeq ($(TTNX_M4_RING_STREAM_CB_PROBE),1)
+ifneq ($(TTNX_M3_INTEGRATED),1)
+$(error TTNX_M4_RING_STREAM_CB_PROBE requires TTNX_M3_INTEGRATED=1)
+endif
+ifneq ($(TTNX_M4_ROLLING_STREAM),1)
+$(error TTNX_M4_RING_STREAM_CB_PROBE requires TTNX_M4_ROLLING_STREAM=1)
+endif
+DEFINES += -DTTNX_M4_RING_STREAM_CB_PROBE
+endif
+
 # Original TV-style player is separately opted in for visual verification.
 # The default, physically accepted M3 picture and controls stay unchanged.
 ifeq ($(TTNX_M4_TV_PLAYER_UI),1)
