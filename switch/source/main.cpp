@@ -36,6 +36,7 @@
 #include "tizentube_nx/core/search_model.hpp"
 #include "tizentube_nx/core/search_presentation.hpp"
 #include "tizentube_nx/ui/navigation.hpp"
+#include "tizentube_nx/library/local_library.hpp"
 #include "tizentube_nx/youtube/guest_api.hpp"
 #include "tizentube_nx/youtube/guest_home.hpp"
 #include "tizentube_nx/youtube/guest_channel.hpp"
@@ -354,7 +355,21 @@ private:
 
     ttnx::core::Settings settings_;
     bool storage_ready_;
+    ttnx::library::LocalLibrary library_{};
+    bool history_clear_armed_{false};
     std::string query_;
+
+    [[nodiscard]] std::string library_path()const {
+        return std::string(ttnx::kAppDirectory)+"/library.txt";
+    }
+    void refresh_library_metadata() {
+        ttnx::library::LocalLibrary loaded;
+        if(storage_ready_ && loaded.load(library_path()))
+            library_=std::move(loaded);
+    }
+    [[nodiscard]] bool persist_library_metadata() {
+        return storage_ready_ && library_.save(library_path());
+    }
 
     // main() owns this app-lifetime client. Workers only borrow it, so repeated
     // guest-test/Search presses never cycle socket/SSL service initialization.
@@ -478,6 +493,9 @@ private:
         brls::Button* button{nullptr};
         brls::Label* detail{nullptr};
         brls::Button* open_channel{nullptr};
+        brls::Button* watch_later{nullptr};
+        brls::Button* favorite_video{nullptr};
+        brls::Button* follow_channel{nullptr};
 #ifdef TTNX_M3_INTEGRATED
         brls::Button* play_video{nullptr};
         brls::Label* play_status{nullptr};
@@ -877,6 +895,16 @@ private:
                 row.open_channel->setVisibility(
                     selected ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
             }
+            if (row.watch_later) {
+                row.watch_later->setVisibility(
+                    selected ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
+            }
+            if (row.favorite_video)
+                row.favorite_video->setVisibility(selected
+                    ?brls::Visibility::VISIBLE:brls::Visibility::GONE);
+            if (row.follow_channel)
+                row.follow_channel->setVisibility(selected
+                    ?brls::Visibility::VISIBLE:brls::Visibility::GONE);
 #ifdef TTNX_M3_INTEGRATED
             if (row.play_video) {
                 row.play_video->setVisibility(
@@ -963,6 +991,47 @@ private:
                 return true;
             });
         }
+        brls::Button* follow_channel = nullptr;
+        if(result.kind == ttnx::core::BrowseResultKind::Channel &&
+           ttnx::library::LocalLibrary::valid_channel_id(result.id)) {
+            const auto channel_id=result.id;
+            follow_channel=button(search_results_box_,"Follow on this Switch");
+            follow_channel->setVisibility(brls::Visibility::GONE);
+            follow_channel->registerClickAction([this,channel_id,follow_channel](brls::View*) {
+                refresh_library_metadata();
+                if(library_.follow_channel(channel_id) &&
+                   persist_library_metadata())
+                    follow_channel->setText("Following locally");
+                else follow_channel->setText("Cannot save local follow");
+                return true;
+            });
+        }
+        brls::Button* favorite_video = nullptr;
+        brls::Button* watch_later = nullptr;
+        if (result.kind == ttnx::core::BrowseResultKind::Video &&
+            ttnx::library::LocalLibrary::valid_id(result.id)) {
+            const auto video_id = result.id;
+            watch_later = button(search_results_box_, "Add to Watch Later (local)");
+            watch_later->setVisibility(brls::Visibility::GONE);
+            watch_later->registerClickAction([this, video_id, watch_later](brls::View*) {
+                refresh_library_metadata();
+                if(library_.add_watch_later(video_id) &&
+                   persist_library_metadata())
+                    watch_later->setText("Saved to Watch Later");
+                else watch_later->setText("Could not save: SD/library limit");
+                return true;
+            });
+            favorite_video=button(search_results_box_,"Add to Favorites (local)");
+            favorite_video->setVisibility(brls::Visibility::GONE);
+            favorite_video->registerClickAction([this,video_id,favorite_video](brls::View*) {
+                refresh_library_metadata();
+                if(library_.add_favorite(video_id) &&
+                   persist_library_metadata())
+                    favorite_video->setText("Saved to Favorites");
+                else favorite_video->setText("Could not save local favorite");
+                return true;
+            });
+        }
 #ifdef TTNX_M3_INTEGRATED
         brls::Button* play_video = nullptr;
         if (result.kind == ttnx::core::BrowseResultKind::Video &&
@@ -995,9 +1064,12 @@ private:
         }
         search_detail_rows_.push_back({
             identity, select, detail_label, open_channel,
+            watch_later, favorite_video, follow_channel,
             play_video, play_status, cancel_video});
 #else
-        search_detail_rows_.push_back({identity, select, detail_label, open_channel});
+        search_detail_rows_.push_back({
+            identity, select, detail_label, open_channel,
+            watch_later, favorite_video, follow_channel});
 #endif
 
         const auto metadata = ttnx::core::search_result_metadata_display(result);
@@ -1888,11 +1960,11 @@ private:
         }
         publish_m3_feedback_on_ui(active_m3_video_id_);
         if(success && pending_media_hls_)
-            ttnx::switch_app::open_m3_completed_hls();
+            ttnx::switch_app::open_m3_completed_hls(active_m3_video_id_);
         else if(success && pending_media_adaptive_)
-            ttnx::switch_app::open_m3_completed_adaptive();
+            ttnx::switch_app::open_m3_completed_adaptive(active_m3_video_id_);
         else if(success)
-            ttnx::switch_app::open_m3_completed_media();
+            ttnx::switch_app::open_m3_completed_media(active_m3_video_id_);
     }
 #endif
 
@@ -2262,20 +2334,121 @@ private:
             ttnx::record_boot_event("boot-11-search-created");
             break;
         }
-        case RootSection::Subscriptions:
-            label(content, "Subscriptions", 34);
-            label(content, "Keep up with the channels you follow.", 26);
-            label(content, "YouTube sign-in is not available in this preview.");
-            label(content, "Your subscriptions will appear here once local profile support is ready.");
+        case RootSection::Subscriptions: {
+            refresh_library_metadata();
+            label(content, "Following", 34);
+            label(content, "Locally followed channels. No Google sign-in.", 22);
+            if(library_.followed_channels().empty())
+                label(content, "Open a channel result in Search and select Follow on this Switch.", 17);
+            unsigned shown=0;
+            for(const auto& id:library_.followed_channels()) {
+                if(++shown>20)break;
+                auto* row=button(content,"Open channel: "+id);
+                row->registerClickAction([this,id](brls::View*) {
+                    open_channel_page(id,"Followed channel");
+                    return true;
+                });
+            }
             break;
-        case RootSection::Library:
+        }
+        case RootSection::Library: {
+            refresh_library_metadata();
             label(content, "Library", 34);
-            label(content, "A place for your playlists and watched videos.", 26);
-            label(content, "YouTube sign-in is not available in this preview.");
-            label(content, "There is no watch history or saved video data yet.");
+            label(content, "Local History / Watch Later", 25);
+            label(content,
+                "Only video IDs and playback positions are stored. No videos, thumbnails or Google account.",
+                17);
+            auto* library_feedback=label(content,
+                storage_ready_ ? "Private, on-device metadata" : "SD unavailable: Library is read-only",
+                17);
+            label(content, "Watch Later", 25);
+            if(library_.watch_later().empty())
+                label(content, "Choose Add to Watch Later on a Search video.", 17);
+            unsigned later_count=0;
+            for(const auto& id:library_.watch_later()) {
+                if(++later_count>20)break; // bounded Borealis view count
+                auto* row=button(content, "Play saved video: "+id);
+                row->registerClickAction([this,id,library_feedback](brls::View*) {
+#ifdef TTNX_M3_INTEGRATED
+                    if(!guest_session_ || !guest_session_->usable()) {
+                        library_feedback->setText("Connect to guest YouTube first.");
+                    } else start_m3_video(id);
+#else
+                    library_feedback->setText("Playback requires integrated player.");
+#endif
+                    return true;
+                });
+            }
+            label(content, "Favorites", 25);
+            if(library_.favorites().empty())
+                label(content, "Use Add to Favorites on any Search video.", 17);
+            unsigned favorites_count=0;
+            for(const auto& id:library_.favorites()) {
+                if(++favorites_count>20)break;
+                auto* row=button(content,"Play favorite: "+id);
+                row->registerClickAction([this,id,library_feedback](brls::View*) {
+#ifdef TTNX_M3_INTEGRATED
+                    if(!guest_session_ || !guest_session_->usable())
+                        library_feedback->setText("Connect to guest YouTube first.");
+                    else start_m3_video(id);
+#else
+                    library_feedback->setText("Playback requires integrated player.");
+#endif
+                    return true;
+                });
+            }
+            label(content, "Recent playback", 25);
+            if(library_.history().empty())
+                label(content, "Videos appear here only after their picture and audio start.", 17);
+            unsigned recent_count=0;
+            for(const auto& video:library_.history()) {
+                if(++recent_count>20)break;
+                const std::string id=video.video_id;
+                auto* row=button(content,id+" | "+std::to_string(video.resume_seconds)+"s");
+                row->registerClickAction([this,id,library_feedback](brls::View*) {
+#ifdef TTNX_M3_INTEGRATED
+                    if(!guest_session_ || !guest_session_->usable())
+                        library_feedback->setText("Connect to guest YouTube first.");
+                    else start_m3_video(id);
+#else
+                    library_feedback->setText("Playback requires integrated player.");
+#endif
+                    return true;
+                });
+            }
             break;
+        }
         case RootSection::Settings: {
+            refresh_library_metadata();
+            history_clear_armed_=false;
             label(content, "Settings", 34);
+            label(content, "History & data", 23);
+            auto* history_toggle=button(content,
+                library_.history_enabled()?"Pause watch history":"Resume watch history");
+            history_toggle->registerClickAction([this,history_toggle](brls::View*) {
+                library_.set_history_enabled(!library_.history_enabled());
+                if(persist_library_metadata())
+                    history_toggle->setText(library_.history_enabled()
+                        ?"Pause watch history":"Resume watch history");
+                else history_toggle->setText("Unable to save watch history setting");
+                return true;
+            });
+            auto* clear_history=button(content,"Clear watch history (two presses)");
+            clear_history->registerClickAction([this,clear_history](brls::View*) {
+                if(!history_clear_armed_) {
+                    history_clear_armed_=true;
+                    clear_history->setText("Confirm: clear local watch history");
+                    return true;
+                }
+                history_clear_armed_=false;
+                auto copy=library_;
+                library_.clear_history();
+                if(!persist_library_metadata()) {
+                    library_=std::move(copy);
+                    clear_history->setText("Unable to clear history on SD");
+                } else clear_history->setText("Watch history cleared");
+                return true;
+            });
             label(content, "Appearance follows your Switch system theme.");
             auto* fps = button(content,
                 settings_.show_fps ? "Show frame rate: On" : "Show frame rate: Off");

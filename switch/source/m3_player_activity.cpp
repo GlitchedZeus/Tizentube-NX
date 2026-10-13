@@ -1,6 +1,8 @@
 #ifdef TTNX_M3_INTEGRATED
 #include "m3_player_activity.hpp"
 #include "m3_diagnostics.hpp"
+#include "app_storage.hpp"
+#include "tizentube_nx/library/local_library.hpp"
 #include "media_file_sink.hpp"
 #include "hls_cache_sink.hpp"
 #include "tizentube_nx/playback/audio_gate.hpp"
@@ -17,6 +19,8 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
+#include <ctime>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -457,6 +461,14 @@ public:
         }
         return pixels_;
     }
+    [[nodiscard]] std::uint32_t playback_seconds()const noexcept {
+        if(!handle_)return 0;
+        double time=0;
+        if(mpv_get_property(handle_,"time-pos",MPV_FORMAT_DOUBLE,&time)<0 ||
+           !std::isfinite(time) || time<0 ||
+           time>static_cast<double>(UINT32_MAX))return 0;
+        return static_cast<std::uint32_t>(time);
+    }
     bool have_frame()const{return have_frame_;}
     std::uint64_t frames_rendered()const noexcept{return frames_;}
     bool new_frame()const{return new_frame_;}
@@ -576,10 +588,15 @@ void add_button(brls::Box* row,const char* title,std::function<void()> action) {
 }
 class M3Activity final:public brls::Activity {
 public:
-    explicit M3Activity(bool hls,bool adaptive=false,bool live=false):
+    explicit M3Activity(bool hls,bool adaptive=false,bool live=false,
+                        std::string video_id={}):
         player_(hls,adaptive,live),hls_(hls),adaptive_(adaptive),
-        live_(live){active_=this;}
-    ~M3Activity() override {active_=nullptr;player_.stop();}
+        live_(live),video_id_(std::move(video_id)){active_=this;}
+    ~M3Activity() override {
+        persist_history();
+        active_=nullptr;
+        player_.stop();
+    }
     brls::View* createContentView() override {
         auto* root=new brls::Box(brls::Axis::COLUMN);
         root->setPadding(12,20,12,20);
@@ -603,18 +620,20 @@ public:
         auto* one=new brls::Box(brls::Axis::ROW);one->setHeight(56);root->addView(one);
         add_button(one,"Replay (A)",[this]{player_.play();update();});
         add_button(one,"Pause / Resume",[this]{player_.pause();update();});
-        add_button(one,"Stop (X)",[this]{player_.stop();update();});
+        add_button(one,"Stop (X)",[this]{
+            persist_history();player_.stop();update();
+        });
         auto* two=new brls::Box(brls::Axis::ROW);two->setHeight(56);root->addView(two);
         add_button(two,"Seek -10s (L)",[this]{player_.seek(-10);update();});
         add_button(two,"Seek +10s (R)",[this]{player_.seek(10);update();});
         root->registerAction("Back",brls::BUTTON_B,[this](brls::View*) {
-            player_.stop();brls::Application::popActivity();return true;
+            persist_history();player_.stop();brls::Application::popActivity();return true;
         });
         root->registerAction("Pause",brls::BUTTON_Y,[this](brls::View*) {
             player_.pause();update();return true;
         });
         root->registerAction("Stop",brls::BUTTON_X,[this](brls::View*) {
-            player_.stop();update();return true;
+            persist_history();player_.stop();update();return true;
         });
         root->registerAction("Seek -10s",brls::BUTTON_LB,[this](brls::View*) {
             player_.seek(-10);update();return true;
@@ -641,6 +660,21 @@ public:
         // Software frame dequeue must not depend on widget draw invalidation:
         // audio can advance even when Borealis does not redraw this View.
         (void)player_.render();
+        // Record only *actually rendered* normal videos with selected audio,
+        // not failed downloads, loadfile errors, or Shorts. No signed URLs
+        // or thumbnails are ever persisted. Writes are spaced to 30s or exit.
+        if(!video_id_.empty() &&
+           library::LocalLibrary::valid_id(video_id_) &&
+           player_.frames_rendered()>0 && player_.selected_audio_track()) {
+            const auto current=player_.playback_seconds();
+            if(!history_started_) {
+                history_started_=true;
+                persist_history();
+            } else if(current>=last_persisted_resume_+30 &&
+                      playback_clock_ms()-last_history_write_ms_>=30000) {
+                persist_history();
+            }
+        }
         // An audio-only-looking black screen is now distinguishable from
         // actual decode failure. Pinned Borealis draws active views on each
         // frame; 90 decoded non-black frames without a SINGLE widget draw
@@ -658,6 +692,31 @@ public:
     }
     static void tick_current(){if(active_)active_->tick();}
 private:
+    void persist_history() {
+        if(!history_started_ || !library::LocalLibrary::valid_id(video_id_))
+            return;
+        const auto seconds=player_.playback_seconds();
+        const auto now=playback_clock_ms();
+        // On stop, libmpv can clear time-pos before Borealis destroys the
+        // activity. Never replace a real resume position with that missing
+        // property interpreted as zero. An explicit fresh seek is handled
+        // by playback's periodic positive-time checkpoint instead.
+        if(history_persisted_ && seconds==0 && last_persisted_resume_>0)return;
+        if(history_persisted_ && seconds==last_persisted_resume_)return;
+        const std::string file=std::string(ttnx::kAppDirectory)+"/library.txt";
+        library::LocalLibrary local;
+        (void)local.load(file);
+        const std::time_t wall=std::time(nullptr);
+        local.record_watch(video_id_,wall>0?static_cast<std::uint64_t>(wall):0,
+                           seconds);
+        if(local.save(file)) {
+            history_persisted_=true;
+            last_persisted_resume_=seconds;
+            last_history_write_ms_=now;
+        } else {
+            M3Diagnostics::record(M3Stage::Cache,M3Event::Fail,8,0,0);
+        }
+    }
     void update(){
         if(status_)status_->setText(player_.status());
         if(info_)info_->setText(player_.stats());
@@ -665,6 +724,10 @@ private:
     static M3Activity* active_;
     CachedMpv player_;
     bool hls_{false},adaptive_{false},live_{false};
+    std::string video_id_{};
+    bool history_started_{false},history_persisted_{false};
+    std::uint32_t last_persisted_resume_{0};
+    std::uint64_t last_history_write_ms_{0};
     bool presentation_warning_latched_{false};
     VideoFrame* video_{nullptr}; // borrowed, destroyed by the activity tree
     brls::Label* status_{nullptr};
@@ -674,14 +737,14 @@ private:
 M3Activity* M3Activity::active_=nullptr;
 } // namespace
 
-void open_m3_completed_media(){
-    brls::Application::pushActivity(new M3Activity(false));
+void open_m3_completed_media(const std::string& video_id){
+    brls::Application::pushActivity(new M3Activity(false,false,false,video_id));
 }
-void open_m3_completed_hls(){
-    brls::Application::pushActivity(new M3Activity(true));
+void open_m3_completed_hls(const std::string& video_id){
+    brls::Application::pushActivity(new M3Activity(true,false,false,video_id));
 }
-void open_m3_completed_adaptive(){
-    brls::Application::pushActivity(new M3Activity(false,true));
+void open_m3_completed_adaptive(const std::string& video_id){
+    brls::Application::pushActivity(new M3Activity(false,true,false,video_id));
 }
 #if defined(TTNX_M4_ROLLING_STREAM) && defined(TTNX_M4_PLAYER_PROBE)
 // This symbol intentionally has no main-menu entry. Integration must

@@ -57,6 +57,13 @@ target_link_libraries(tizentube_nx_host PRIVATE tizentube_nx_core)
 option(TTNX_BUILD_TESTS "Build host tests" ON)
 if(TTNX_BUILD_TESTS)
     enable_testing()
+    # Genuine local-only Library engine: history/resume, Watch Later,
+    # Favorites and followed channel IDs, quotas, CRC, FAT backup recovery.
+    add_executable(tizentube_nx_local_library_tests
+        tests/local_library_tests.cpp)
+    target_include_directories(tizentube_nx_local_library_tests PRIVATE include)
+    add_test(NAME local_library COMMAND tizentube_nx_local_library_tests)
+
     # Pure host-only layout geometry tests based on the user's 1280x720
     # reference captures; do not alter the hardware-accepted M3 UI.
     add_executable(tizentube_nx_tv_layout_tests tests/tv_layout_tests.cpp)
