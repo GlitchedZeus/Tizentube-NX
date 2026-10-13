@@ -107,6 +107,15 @@ if(TTNX_BUILD_TESTS)
 
     # mpv callback reader close/cancel/running read must never race its
     # shared_ptr lease or expose an unguarded cursor position.
+    # lseek/read compatibility with Switch libnx and independently positioned
+    # libmpv read cookies on the same ring descriptor.
+    add_executable(tizentube_nx_rolling_ring_portable_read_tests
+        tests/rolling_ring_portable_read_tests.cpp)
+    target_include_directories(tizentube_nx_rolling_ring_portable_read_tests PRIVATE include)
+    target_link_libraries(tizentube_nx_rolling_ring_portable_read_tests PRIVATE Threads::Threads)
+    add_test(NAME rolling_ring_portable_read
+        COMMAND tizentube_nx_rolling_ring_portable_read_tests)
+
     add_executable(tizentube_nx_rolling_ring_reader_concurrency_tests
         tests/rolling_ring_reader_concurrency_tests.cpp)
     target_include_directories(tizentube_nx_rolling_ring_reader_concurrency_tests
@@ -443,15 +452,18 @@ if(TTNX_BUILD_TESTS)
     # Header-only bounded streaming scheduler: deterministic host coverage.
     add_executable(tizentube_nx_rolling_media_budget_tests
         tests/rolling_media_budget_tests.cpp)
+    target_include_directories(tizentube_nx_rolling_media_budget_tests PRIVATE include)
     add_test(NAME rolling_media_budget COMMAND tizentube_nx_rolling_media_budget_tests)
 
     add_executable(tizentube_nx_local_live_hls_gate_tests
         tests/local_live_hls_gate_tests.cpp)
+    target_include_directories(tizentube_nx_local_live_hls_gate_tests PRIVATE include)
     add_test(NAME local_live_hls_gate
         COMMAND tizentube_nx_local_live_hls_gate_tests)
 
     add_executable(tizentube_nx_rolling_stream_coordinator_tests
         tests/rolling_stream_coordinator_tests.cpp)
+    target_include_directories(tizentube_nx_rolling_stream_coordinator_tests PRIVATE include)
     add_test(NAME rolling_stream_coordinator
         COMMAND tizentube_nx_rolling_stream_coordinator_tests)
 
@@ -490,7 +502,7 @@ if(TTNX_BUILD_TESTS)
             tests/rolling_hls_worker_tests.cpp
             switch/source/rolling_hls_worker.cpp)
         target_include_directories(tizentube_nx_rolling_hls_worker_tests
-            PRIVATE switch/source)
+            PRIVATE include switch/source)
         target_compile_definitions(tizentube_nx_rolling_hls_worker_tests
             PRIVATE TTNX_M4_ROLLING_HOST_TEST=1)
         target_link_libraries(tizentube_nx_rolling_hls_worker_tests
@@ -506,7 +518,7 @@ if(TTNX_BUILD_TESTS)
             switch/source/rolling_playback_owner.cpp
             switch/source/rolling_hls_worker.cpp)
         target_include_directories(tizentube_nx_rolling_playback_owner_tests
-            PRIVATE switch/source)
+            PRIVATE include switch/source)
         target_compile_definitions(tizentube_nx_rolling_playback_owner_tests
             PRIVATE TTNX_M4_ROLLING_HOST_TEST=1)
         target_link_libraries(tizentube_nx_rolling_playback_owner_tests

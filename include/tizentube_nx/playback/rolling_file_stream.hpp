@@ -135,10 +135,18 @@ public:
             const auto count=std::min<std::uint64_t>({requested,
                 owner->end_-pos_,kMaximumChunk,
                 owner->capacity_-(pos_%owner->capacity_)});
+            // libnx/devkitA64 does not export pread(). All decoder read
+            // cookies and producer writes share owner->mu_, allowing the
+            // portable lseek/read path without corrupting the file offset.
+            const auto offset=static_cast<off_t>(pos_%owner->capacity_);
+            for(;;) {
+                if(::lseek(owner->fd_,offset,SEEK_SET)>=0)break;
+                if(errno==EINTR)continue;
+                owner->failed_=true;owner->cv_.notify_all();return -1;
+            }
             std::size_t got=0;
             while(got<count) {
-                const auto n=::pread(owner->fd_,out+got,count-got,
-                    static_cast<off_t>((pos_%owner->capacity_)+got));
+                const auto n=::read(owner->fd_,out+got,count-got);
                 if(n<0 && errno==EINTR)continue;
                 if(n<=0){owner->failed_=true;owner->cv_.notify_all();return -1;}
                 got+=static_cast<std::size_t>(n);
