@@ -219,6 +219,12 @@ public:
         }
         return true;
     }
+    [[nodiscard]] bool requires_audio_gate()const noexcept {
+#if defined(TTNX_M4_RING_STREAM_CB_PROBE)
+        if(ring_epoch_)return true; // muxed H264/AAC must prove selected audio
+#endif
+        return use_hls_ || use_adaptive_ || use_live_hls_;
+    }
     bool play() {
         if (!renderer_ && !init())return false;
 #if defined(TTNX_M4_RING_STREAM_CB_PROBE)
@@ -335,6 +341,9 @@ public:
     }
     void stop() {
         if(!handle_)return;
+#if defined(TTNX_M4_RING_STREAM_CB_PROBE)
+        if(ring_epoch_)ring_epoch_->request_stop();
+#endif
         const char* cmd[]={"stop",nullptr};
         const int result=mpv_command(handle_,cmd);
         M3Diagnostics::record(M3Stage::Player,M3Event::Stop,result,0,0);
@@ -424,15 +433,19 @@ public:
             }
             if(e->event_id==MPV_EVENT_FILE_LOADED) {
                 M3Diagnostics::record(M3Stage::Decode,M3Event::Loaded,e->error,0,0);
-                if((use_hls_||use_adaptive_||use_live_hls_) && audio_gate_.state()==
+                if((requires_audio_gate()) && audio_gate_.state()==
                    playback::AudioSelectionGate::State::Idle)
                     audio_gate_.begin(playback_clock_ms());
                 status_="Local media loaded; validating selected AAC audio...";
+#if defined(TTNX_M4_RING_STREAM_CB_PROBE)
+                if(ring_epoch_)status_="Ring MPEG-TS loaded; verifying AAC audio...";
+                else
+#endif
                 if(!use_hls_&&!use_adaptive_)status_="Local MP4 loaded";
             }
             if(e->event_id==MPV_EVENT_PLAYBACK_RESTART) {
                 M3Diagnostics::record(M3Stage::Decode,M3Event::Restart,e->error,0,0);
-                if(use_hls_||use_adaptive_||use_live_hls_) {
+                if(requires_audio_gate()) {
                     if(audio_gate_.state()!=
                        playback::AudioSelectionGate::State::Checking)
                         audio_gate_.begin(playback_clock_ms());
@@ -455,7 +468,7 @@ public:
                          "Video stopped or finished";
             }
         }
-        if((use_hls_||use_adaptive_||use_live_hls_) && audio_gate_.state()==
+        if((requires_audio_gate()) && audio_gate_.state()==
                        playback::AudioSelectionGate::State::Checking) {
             const auto outcome=audio_gate_.observe(
                 selected_audio_track(),playback_clock_ms());
@@ -535,6 +548,15 @@ public:
         }
         return pixels_;
     }
+#if defined(TTNX_M4_RING_STREAM_CB_PROBE)
+    void update_ring_buffer_window() noexcept {
+        if(!ring_epoch_ || !ring_loaded_ || !frames_ ||
+           !selected_audio_track())return;
+        const auto elapsed=playback_seconds();
+        ring_epoch_->advance_playback_ms(
+            static_cast<std::uint64_t>(elapsed)*1000);
+    }
+#endif
     [[nodiscard]] std::uint32_t playback_seconds()const noexcept {
         if(!handle_)return 0;
         double time=0;
@@ -562,7 +584,7 @@ public:
         const char* a=mpv_get_property_string(handle_,"audio-codec");
         double seconds=0;
         const bool time=mpv_get_property(handle_,"time-pos",MPV_FORMAT_DOUBLE,&seconds)>=0;
-        const auto str=std::string("V ")+(selected_video_track()?"yes":"no")+
+        auto str=std::string("V ")+(selected_video_track()?"yes":"no")+
             " A "+(selected_audio_track()?"yes":"no")+
             " | HW "+(h?h:"unknown")+
             " | "+(v?v:"--")+" / "+(a?a:"--")+
@@ -571,6 +593,16 @@ public:
         if(h)mpv_free(const_cast<char*>(h));
         if(v)mpv_free(const_cast<char*>(v));
         if(a)mpv_free(const_cast<char*>(a));
+#if defined(TTNX_M4_RING_STREAM_CB_PROBE)
+        if(ring_epoch_) {
+            const auto s=ring_epoch_->snapshot();
+            // Only numeric, bounded diagnostics. Signed CDN URLs and
+            // response headers must NEVER reach UI logs or files.
+            str+=" | M4 "+std::to_string(s.peak_file_bytes/1024)+
+                 " KiB "+std::to_string(s.segments_committed)+" seg";
+            if(s.waiting_for_playback)str+=" wait";
+        }
+#endif
         return str;
     }
 private:
@@ -882,6 +914,11 @@ public:
         // Software frame dequeue must not depend on widget draw invalidation:
         // audio can advance even when Borealis does not redraw this View.
         (void)player_.render();
+#if defined(TTNX_M4_RING_STREAM_CB_PROBE)
+        // After actual picture and selected audio, wake the producer to
+        // fetch at most 15s ahead of the real decoder clock.
+        player_.update_ring_buffer_window();
+#endif
 #ifdef TTNX_M4_TV_PLAYER_UI
         tv_controls_.tick(playback_clock_ms(),player_.is_paused());
 #endif

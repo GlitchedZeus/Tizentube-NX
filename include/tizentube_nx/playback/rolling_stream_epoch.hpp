@@ -2,7 +2,9 @@
 #pragma once
 #include "tizentube_nx/playback/verified_ring_hls_ingest.hpp"
 #include "tizentube_nx/playback/rolling_mpv_stream_bridge.hpp"
+#include "tizentube_nx/playback/rolling_prefetch_window.hpp"
 #include <atomic>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -24,7 +26,7 @@ public:
     using Fetch=std::function<VerifiedRingHlsIngest::Result(
         std::shared_ptr<RollingFileStream>,std::string_view)>;
     enum class Phase : std::uint8_t {
-        Prepared, Fetching, PrefixReady, Backpressure, Complete,
+        Prepared, Fetching, PrefixReady, WaitingForPlayback, Backpressure, Complete,
         Failed, StopRequested, Joined, DecoderClosed, Cleaned
     };
     struct Snapshot {
@@ -35,11 +37,13 @@ public:
         std::uint64_t peak_file_bytes{0};
         bool decoder_attached{false};
         bool producer_joined{false};
+        bool waiting_for_playback{false};
     };
     static std::unique_ptr<RollingStreamEpoch> create(
         std::string app_owned_path,std::vector<std::string> approved_segment_urls,
         Fetch fetch,AllowUrl allow,
-        std::uint64_t capacity=RollingFileStream::kMaximumMedia) {
+        std::uint64_t capacity=RollingFileStream::kMaximumMedia,
+        std::vector<std::uint64_t> segment_durations_ms={}) {
         if(app_owned_path.empty() || !fetch || !allow || approved_segment_urls.empty() ||
            approved_segment_urls.size()>4096)return {};
         std::size_t plan_bytes=0;
@@ -48,17 +52,22 @@ public:
                plan_bytes>512*1024-url.size() || !allow(url))return {};
             plan_bytes+=url.size();
         }
+        RollingPrefetchWindow window;
+        if(!segment_durations_ms.empty() &&
+           (segment_durations_ms.size()!=approved_segment_urls.size() ||
+            !window.configure(segment_durations_ms)))return {};
         auto ring=RollingFileStream::create(app_owned_path,capacity);
         if(!ring)return {};
         return std::unique_ptr<RollingStreamEpoch>(new RollingStreamEpoch(
             std::move(app_owned_path),std::move(approved_segment_urls),
-            std::move(fetch),std::move(ring),capacity));
+            std::move(fetch),std::move(ring),capacity,std::move(window)));
     }
     template<class Reader>
     static std::unique_ptr<RollingStreamEpoch> with_reader(
         std::string app_owned_path,std::vector<std::string> urls,
         std::shared_ptr<Reader> reader,AllowUrl allow,
-        std::uint64_t capacity=RollingFileStream::kMaximumMedia) {
+        std::uint64_t capacity=RollingFileStream::kMaximumMedia,
+        std::vector<std::uint64_t> segment_durations_ms={}) {
         if(!reader)return {};
         Fetch callback=[reader=std::move(reader)](
             std::shared_ptr<RollingFileStream> ring,std::string_view url) {
@@ -66,7 +75,8 @@ public:
             return staging.ingest(*reader,url);
         };
         return create(std::move(app_owned_path),std::move(urls),
-                      std::move(callback),std::move(allow),capacity);
+                      std::move(callback),std::move(allow),capacity,
+                      std::move(segment_durations_ms));
     }
     RollingStreamEpoch(const RollingStreamEpoch&)=delete;
     RollingStreamEpoch& operator=(const RollingStreamEpoch&)=delete;
@@ -80,7 +90,7 @@ public:
     [[nodiscard]] bool start() {
         std::lock_guard<std::mutex> lock(mu_);
         if(phase_!=Phase::Prepared || !ring_ || worker_.joinable())return false;
-        stop_=false;phase_=Phase::Fetching;
+        stop_=false;playback_ms_=0;phase_=Phase::Fetching;
         try {worker_=std::thread([this]{run();});}
         catch(...) {phase_=Phase::Failed;return false;}
         return true;
@@ -89,13 +99,23 @@ public:
         std::lock_guard<std::mutex> lock(mu_);
         const auto stats=ring_?ring_->stats():RollingFileStream::Stats{};
         return {phase_,committed_,urls_.size(),stats.written_end,
-                stats.physical_size,decoder_attached_,joined_};
+                stats.physical_size,decoder_attached_,joined_,
+                phase_==Phase::WaitingForPlayback};
     }
     [[nodiscard]] std::shared_ptr<RollingFileStream> ring_for_decoder()const {
         std::lock_guard<std::mutex> lock(mu_);
         return (committed_ && ring_ && !stop_ &&
                 phase_!=Phase::Failed && !ring_->stats().failed)
             ?ring_:nullptr;
+    }
+    // Feed only verified decoder time-pos, never speculative UI seeks.
+    // An epoch-relative timeline resets on decoder-close/reprime.
+    void advance_playback_ms(std::uint64_t ms) noexcept {
+        std::lock_guard<std::mutex> lock(mu_);
+        if(stop_ || !decoder_attached_ || !window_.configured() ||
+           ms<playback_ms_ || ms>window_.total_duration_ms())return;
+        playback_ms_=ms;
+        wake_.notify_all();
     }
     // Call after mpv_create and BEFORE mpv_initialize. The returned cookie
     // bridge is owned until explicit decoder-destroyed acknowledgement.
@@ -110,13 +130,16 @@ public:
         return true;
     }
     void request_stop() {
+        std::shared_ptr<RollingFileStream> active;
         {
             std::lock_guard<std::mutex> lock(mu_);
             stop_=true;
             if(phase_!=Phase::Cleaned && phase_!=Phase::DecoderClosed)
                 phase_=Phase::StopRequested;
+            active=ring_;
         }
-        if(ring_)ring_->cancel(); // wake blocked mpv read callbacks
+        wake_.notify_all(); // unblock prefetch wait immediately
+        if(active)active->cancel(); // unblock decoder read and staging
     }
     void stop_and_join() {
         request_stop();
@@ -159,6 +182,8 @@ public:
         ring_=std::move(fresh);
         committed_=0;
         next_=segment_index;
+        epoch_origin_=segment_index;
+        playback_ms_=0;
         joined_=false;
         stop_=false;
         phase_=Phase::Prepared;
@@ -166,20 +191,33 @@ public:
     }
 private:
     RollingStreamEpoch(std::string path,std::vector<std::string> urls,
-        Fetch fetch,std::shared_ptr<RollingFileStream> ring,std::uint64_t capacity)
+        Fetch fetch,std::shared_ptr<RollingFileStream> ring,std::uint64_t capacity,
+        RollingPrefetchWindow window)
         : path_(std::move(path)),urls_(std::move(urls)),fetch_(std::move(fetch)),
-          ring_(std::move(ring)),capacity_(capacity){}
+          ring_(std::move(ring)),capacity_(capacity),window_(std::move(window)){}
     void run() noexcept {
         for(;;) {
             std::size_t current=0;
             {
-                std::lock_guard<std::mutex> lock(mu_);
+                std::unique_lock<std::mutex> lock(mu_);
                 if(stop_)return;
                 if(next_>=urls_.size()) {
                     ring_->finish(true);
                     phase_=Phase::Complete;
                     return;
                 }
+                // No CDN request beyond a 15-second lead over verified
+                // decoder time-pos. A stopped/offscreen player cannot
+                // silently download 25 MiB while the user does nothing.
+                if(!window_.can_fetch(next_,epoch_origin_,playback_ms_)) {
+                    phase_=Phase::WaitingForPlayback;
+                    wake_.wait(lock,[this] {
+                        return stop_ || next_>=urls_.size() ||
+                            window_.can_fetch(next_,epoch_origin_,playback_ms_);
+                    });
+                    if(stop_)return;
+                }
+                phase_=Phase::Fetching;
                 current=next_;
             }
             VerifiedRingHlsIngest::Result result=VerifiedRingHlsIngest::Result::Transport;
@@ -205,8 +243,11 @@ private:
     const std::uint64_t capacity_;
     std::unique_ptr<RollingMpvStreamBridge> bridge_;
     mutable std::mutex mu_;
+    std::condition_variable wake_{};
     std::thread worker_;
-    std::size_t next_{0},committed_{0};
+    std::size_t next_{0},committed_{0},epoch_origin_{0};
+    std::uint64_t playback_ms_{0};
+    RollingPrefetchWindow window_{};
     Phase phase_{Phase::Prepared};
     bool stop_{false},joined_{false},decoder_attached_{false};
 };

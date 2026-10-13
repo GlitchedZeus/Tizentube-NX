@@ -56,7 +56,9 @@ create_native_ring_epoch(const playback::HlsProbePlan& plan,
        plan.video_segments.segments.size()>4096 ||
        plan.source.duration_ms==0) return {};
     std::vector<std::string> urls;
+    std::vector<std::uint64_t> segment_durations;
     urls.reserve(plan.video_segments.segments.size());
+    segment_durations.reserve(plan.video_segments.segments.size());
     std::uint64_t duration=0;
     for(const auto& segment:plan.video_segments.segments) {
         if(!segment.duration_ms || segment.duration_ms>60000 ||
@@ -64,6 +66,7 @@ create_native_ring_epoch(const playback::HlsProbePlan& plan,
            duration>UINT64_MAX-segment.duration_ms)return {};
         duration+=segment.duration_ms;
         urls.push_back(segment.url);
+        segment_durations.push_back(segment.duration_ms);
     }
     const auto mismatch=duration>plan.source.duration_ms
         ?duration-plan.source.duration_ms
@@ -77,7 +80,8 @@ create_native_ring_epoch(const playback::HlsProbePlan& plan,
         path,std::move(urls),std::move(reader),
         [](std::string_view url) {
             return playback::is_reviewable_hls_child_url(url);
-        });
+        },playback::RollingFileStream::kMaximumMedia,
+        std::move(segment_durations));
     return owned
         ? std::shared_ptr<playback::RollingStreamEpoch>(std::move(owned))
         : nullptr;

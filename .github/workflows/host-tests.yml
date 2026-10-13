@@ -310,3 +310,24 @@ jobs:
             ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
               "/tmp/ttnx-orphan-clean-${mode}"
           done
+      - name: Playback-gated M4 prefetch, epoch wakeup and decoder-safe restart
+        run: |
+          set -euo pipefail
+          for source in rolling_prefetch_window rolling_stream_epoch_prefetch; do
+            for mode in normal sanitized; do
+              flags="-O2"
+              if [ "$mode" = sanitized ]; then
+                flags="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer"
+              fi
+              extras=""
+              if [ "$source" = rolling_stream_epoch_prefetch ]; then
+                extras="src/core/ts_streams.cpp"
+              fi
+              g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror $flags \
+                -pthread -Iinclude -Itests/stubs \
+                "tests/${source}_tests.cpp" $extras \
+                -o "/tmp/ttnx-${source}-${mode}"
+              ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+                "/tmp/ttnx-${source}-${mode}"
+            done
+          done

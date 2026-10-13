@@ -142,6 +142,24 @@ if(TTNX_BUILD_TESTS)
     add_test(NAME rolling_stream_epoch
         COMMAND tizentube_nx_rolling_stream_epoch_tests)
 
+    add_executable(tizentube_nx_rolling_prefetch_window_tests
+        tests/rolling_prefetch_window_tests.cpp)
+    target_include_directories(tizentube_nx_rolling_prefetch_window_tests
+        PRIVATE include)
+    add_test(NAME rolling_prefetch_window
+        COMMAND tizentube_nx_rolling_prefetch_window_tests)
+
+    # Run the exact owned-epoch class with fake H264/AAC CDN chunks,
+    # a bounded producer window, mock mpv read cookie and stop/reprime.
+    add_executable(tizentube_nx_rolling_stream_epoch_prefetch_tests
+        tests/rolling_stream_epoch_prefetch_tests.cpp)
+    target_include_directories(tizentube_nx_rolling_stream_epoch_prefetch_tests
+        PRIVATE include tests/stubs)
+    target_link_libraries(tizentube_nx_rolling_stream_epoch_prefetch_tests
+        PRIVATE tizentube_nx_core Threads::Threads)
+    add_test(NAME rolling_stream_epoch_prefetch
+        COMMAND tizentube_nx_rolling_stream_epoch_prefetch_tests)
+
     # Fixed app-owned crash-orphan sweep; symlinks/user files must survive.
     add_executable(tizentube_nx_ring_orphan_cleanup_tests
         tests/ring_orphan_cleanup_tests.cpp)
