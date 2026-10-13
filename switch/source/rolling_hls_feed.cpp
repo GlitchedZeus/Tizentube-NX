@@ -138,6 +138,7 @@ RollingMuxedHlsSession::State RollingMuxedHlsSession::pump() {
             return state_;
         }
         return failure(accounting_bad?Error::Accounting:
+                       sink_.last_stream_codec_rejected()?Error::Codec:
                        network_ok?Error::MediaWrite:Error::SegmentHttp);
     }
     if(!ticket || !network_ok || received!=ticket->reserved_bytes)
@@ -173,12 +174,12 @@ bool RollingMuxedHlsSession::retire_before(
     if(!coordinator_.advance_playhead(playhead_ms))return false;
     // The playlist must move first. Then the sink unlinks old files.
     if(!sink_.retire_before(first_retained_index))
-        return failure(Error::MediaWrite),false;
+        { (void)failure(Error::MediaWrite); return false; }
     for(auto i=first_retained_;i<first_retained_index;++i) {
         if(!coordinator_.acknowledge_unlinked(
                 playback::RollingMediaBudget::Track::Muxed,
                 static_cast<std::uint32_t>(i)))
-            return failure(Error::Accounting),false;
+            { (void)failure(Error::Accounting); return false; }
     }
     first_retained_=first_retained_index;
     if(state_==State::Waiting)state_=State::Fetching;

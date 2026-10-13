@@ -154,6 +154,7 @@ bool RollingHlsSink::append(std::size_t index,std::uint64_t duration_ms,
 bool RollingHlsSink::append_streamed(
     std::size_t index,std::uint64_t duration_ms,
     const ChunkProducer& producer) {
+    stream_codec_rejected_=false;
     // Unlike append(string_view), this staging API validates every packet
     // as a bounded producer emits it and stores <=64 KiB of TS metadata.
     // The producer MUST already be an approved CDN HTTPS transport; this
@@ -173,8 +174,13 @@ bool RollingHlsSink::append_streamed(
     // Single producer owns this fd synchronously. Network cancellation,
     // partial writes, overlarge chunks or corrupt TS are never published.
     const ChunkEmitter emit=[&](std::string_view chunk)->bool {
-        if(!good || chunk.empty() || chunk.size()>32*1024 ||
-           !verifier.push(chunk)) {
+        if(!good || chunk.empty() || chunk.size()>32*1024) {
+            good=false;return false;
+        }
+        if(!verifier.push(chunk)) {
+            // The original error is bad TS sync, even if its HTTPS caller
+            // subsequently observes a rejected/cancelled emission.
+            stream_codec_rejected_=true;
             good=false;return false;
         }
         std::size_t written=0;
@@ -187,7 +193,12 @@ bool RollingHlsSink::append_streamed(
     };
     bool producer_ok=false;
     try {producer_ok=producer(emit);} catch(...) {producer_ok=false;}
-    if(!producer_ok || !good || !verifier.finish())good=false;
+    if(producer_ok && good && !verifier.finish()) {
+        // Successful transfer without verified muxed H264 and AAC.
+        stream_codec_rejected_=true;
+        good=false;
+    }
+    if(!producer_ok)good=false;
     if(good && fsync(fd)!=0)good=false;
     if(close(fd)!=0)good=false;
     if(!good) {

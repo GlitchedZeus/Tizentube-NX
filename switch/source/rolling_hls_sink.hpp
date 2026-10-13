@@ -54,6 +54,10 @@ public:
     [[nodiscard]] std::uint64_t bytes() const noexcept {return bytes_;}
     [[nodiscard]] std::size_t active_segments() const noexcept {return segments_.size();}
     [[nodiscard]] std::size_t next_index() const noexcept {return next_;}
+    // Expose only a bounded reason flag; no signed URL or TS content.
+    [[nodiscard]] bool last_stream_codec_rejected() const noexcept {
+        return stream_codec_rejected_;
+    }
 private:
     struct Segment {std::size_t index;std::uint64_t duration_ms,bytes;};
     [[nodiscard]] bool publish(bool end_list);
@@ -63,6 +67,7 @@ private:
     std::uint64_t target_seconds_{0};
     bool started_{false};
     bool finished_{false};
+    bool stream_codec_rejected_{false};
 #ifdef TTNX_M4_ROLLING_HOST_TEST
     static inline bool test_promotion_failure_{false};
 #endif
