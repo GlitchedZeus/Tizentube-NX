@@ -64,6 +64,11 @@ if(TTNX_BUILD_TESTS)
     target_include_directories(tizentube_nx_local_library_tests PRIVATE include)
     add_test(NAME local_library COMMAND tizentube_nx_local_library_tests)
 
+    add_executable(tizentube_nx_playback_resume_gate_tests
+        tests/playback_resume_gate_tests.cpp)
+    target_include_directories(tizentube_nx_playback_resume_gate_tests PRIVATE include)
+    add_test(NAME playback_resume_gate COMMAND tizentube_nx_playback_resume_gate_tests)
+
     # Pure host-only layout geometry tests based on the user's 1280x720
     # reference captures; do not alter the hardware-accepted M3 UI.
     add_executable(tizentube_nx_tv_layout_tests tests/tv_layout_tests.cpp)

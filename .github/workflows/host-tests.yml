@@ -132,3 +132,12 @@ jobs:
             -o /tmp/ttnx-local-library-san
           ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
             /tmp/ttnx-local-library-san
+      - name: Resume-to-playback gate under ASan and UBSan
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror -O1 -g \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iinclude tests/playback_resume_gate_tests.cpp \
+            -o /tmp/ttnx-playback-resume-san
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/ttnx-playback-resume-san

@@ -3,6 +3,7 @@
 #include "m3_diagnostics.hpp"
 #include "app_storage.hpp"
 #include "tizentube_nx/library/local_library.hpp"
+#include "tizentube_nx/library/playback_resume_gate.hpp"
 #include "media_file_sink.hpp"
 #include "hls_cache_sink.hpp"
 #include "tizentube_nx/playback/audio_gate.hpp"
@@ -288,6 +289,23 @@ public:
         audio_failure_latched_=false;
         have_frame_=false;
         status_="Stopped. A replays completed cache.";
+    }
+    [[nodiscard]] bool seek_absolute(std::uint32_t seconds) {
+        if(!handle_ || use_live_hls_ || seconds<5)return false;
+        const auto text=std::to_string(seconds);
+        const char* cmd[]={"seek",text.c_str(),"absolute",nullptr};
+        const int result=mpv_command(handle_,cmd);
+        M3Diagnostics::record(M3Stage::Player,M3Event::Seek,
+                              static_cast<int>(seconds),result,1);
+        return result>=0;
+    }
+    [[nodiscard]] std::uint32_t duration_seconds()const noexcept {
+        if(!handle_)return 0;
+        double duration=0;
+        if(mpv_get_property(handle_,"duration",MPV_FORMAT_DOUBLE,&duration)<0 ||
+           !std::isfinite(duration) || duration<0 ||
+           duration>static_cast<double>(UINT32_MAX))return 0;
+        return static_cast<std::uint32_t>(duration);
     }
     // The audio gate counts bounded active UI time, so sleep/wake cannot
     // instantly trip the missing-AAC timeout after a long suspend.
@@ -589,9 +607,11 @@ void add_button(brls::Box* row,const char* title,std::function<void()> action) {
 class M3Activity final:public brls::Activity {
 public:
     explicit M3Activity(bool hls,bool adaptive=false,bool live=false,
-                        std::string video_id={}):
+                        std::string video_id={},
+                        std::uint32_t resume_seconds=0):
         player_(hls,adaptive,live),hls_(hls),adaptive_(adaptive),
-        live_(live),video_id_(std::move(video_id)){active_=this;}
+        live_(live),video_id_(std::move(video_id)),
+        resume_gate_(resume_seconds){active_=this;}
     ~M3Activity() override {
         persist_history();
         active_=nullptr;
@@ -663,9 +683,14 @@ public:
         // Record only *actually rendered* normal videos with selected audio,
         // not failed downloads, loadfile errors, or Shorts. No signed URLs
         // or thumbnails are ever persisted. Writes are spaced to 30s or exit.
+        std::uint32_t resume_target=0;
+        if(resume_gate_.offer(player_.have_frame(),player_.selected_audio_track(),
+                              live_,player_.duration_seconds(),resume_target))
+            resume_gate_.acknowledge(player_.seek_absolute(resume_target));
         if(!video_id_.empty() &&
            library::LocalLibrary::valid_id(video_id_) &&
-           player_.frames_rendered()>0 && player_.selected_audio_track()) {
+           player_.frames_rendered()>0 && player_.selected_audio_track() &&
+           resume_gate_.can_checkpoint(player_.playback_seconds())) {
             const auto current=player_.playback_seconds();
             if(!history_started_) {
                 history_started_=true;
@@ -725,6 +750,7 @@ private:
     CachedMpv player_;
     bool hls_{false},adaptive_{false},live_{false};
     std::string video_id_{};
+    library::PlaybackResumeGate resume_gate_{};
     bool history_started_{false},history_persisted_{false};
     std::uint32_t last_persisted_resume_{0};
     std::uint64_t last_history_write_ms_{0};
@@ -737,14 +763,17 @@ private:
 M3Activity* M3Activity::active_=nullptr;
 } // namespace
 
-void open_m3_completed_media(const std::string& video_id){
-    brls::Application::pushActivity(new M3Activity(false,false,false,video_id));
+void open_m3_completed_media(const std::string& video_id,
+                             std::uint32_t resume_seconds){
+    brls::Application::pushActivity(new M3Activity(false,false,false,video_id,resume_seconds));
 }
-void open_m3_completed_hls(const std::string& video_id){
-    brls::Application::pushActivity(new M3Activity(true,false,false,video_id));
+void open_m3_completed_hls(const std::string& video_id,
+                           std::uint32_t resume_seconds){
+    brls::Application::pushActivity(new M3Activity(true,false,false,video_id,resume_seconds));
 }
-void open_m3_completed_adaptive(const std::string& video_id){
-    brls::Application::pushActivity(new M3Activity(false,true,false,video_id));
+void open_m3_completed_adaptive(const std::string& video_id,
+                                std::uint32_t resume_seconds){
+    brls::Application::pushActivity(new M3Activity(false,true,false,video_id,resume_seconds));
 }
 #if defined(TTNX_M4_ROLLING_STREAM) && defined(TTNX_M4_PLAYER_PROBE)
 // This symbol intentionally has no main-menu entry. Integration must

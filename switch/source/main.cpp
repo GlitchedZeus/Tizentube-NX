@@ -400,6 +400,7 @@ private:
     std::string pending_media_feedback_;
     std::string media_feedback_{"Choose a normal video, then Play video (M3)."};
     std::string active_m3_video_id_;
+    std::uint32_t active_m3_resume_seconds_{0};
     std::atomic<int> media_step_{0}; // 0 resolver, 1 media URL accepted, 2 downloading
     std::atomic<std::uint64_t> media_progress_bytes_{0};
     std::atomic<std::uint64_t> media_progress_total_{0};
@@ -1559,7 +1560,8 @@ private:
         refresh_footer();
     }
 
-    void start_m3_video(std::string normal_video_id) {
+    void start_m3_video(std::string normal_video_id,
+                        std::uint32_t resume_seconds=0) {
         if (media_busy_.load() || !guest_session_ || !guest_session_->usable()) {
             media_feedback_ = "Connect to guest YouTube first, or wait for current download.";
             publish_m3_feedback_on_ui(normal_video_id);
@@ -1578,6 +1580,7 @@ private:
             return;
         }
         active_m3_video_id_ = normal_video_id;
+        active_m3_resume_seconds_ = resume_seconds;
         const bool diagnostic_recording=ttnx::switch_app::M3Diagnostics::begin_session();
         (void)diagnostic_recording;
         const auto guest = *guest_session_;
@@ -1960,11 +1963,14 @@ private:
         }
         publish_m3_feedback_on_ui(active_m3_video_id_);
         if(success && pending_media_hls_)
-            ttnx::switch_app::open_m3_completed_hls(active_m3_video_id_);
+            ttnx::switch_app::open_m3_completed_hls(
+                active_m3_video_id_,active_m3_resume_seconds_);
         else if(success && pending_media_adaptive_)
-            ttnx::switch_app::open_m3_completed_adaptive(active_m3_video_id_);
+            ttnx::switch_app::open_m3_completed_adaptive(
+                active_m3_video_id_,active_m3_resume_seconds_);
         else if(success)
-            ttnx::switch_app::open_m3_completed_media(active_m3_video_id_);
+            ttnx::switch_app::open_m3_completed_media(
+                active_m3_video_id_,active_m3_resume_seconds_);
     }
 #endif
 
@@ -2404,12 +2410,13 @@ private:
             for(const auto& video:library_.history()) {
                 if(++recent_count>20)break;
                 const std::string id=video.video_id;
-                auto* row=button(content,id+" | "+std::to_string(video.resume_seconds)+"s");
-                row->registerClickAction([this,id,library_feedback](brls::View*) {
+                const auto resume_seconds=video.resume_seconds;
+                auto* row=button(content,id+" | "+std::to_string(resume_seconds)+"s");
+                row->registerClickAction([this,id,resume_seconds,library_feedback](brls::View*) {
 #ifdef TTNX_M3_INTEGRATED
                     if(!guest_session_ || !guest_session_->usable())
                         library_feedback->setText("Connect to guest YouTube first.");
-                    else start_m3_video(id);
+                    else start_m3_video(id,resume_seconds);
 #else
                     library_feedback->setText("Playback requires integrated player.");
 #endif

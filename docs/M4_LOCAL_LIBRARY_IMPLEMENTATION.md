@@ -83,10 +83,16 @@ until those CI/hardware gates pass.
 2. Verify History records only after visible/audible playback,
    updates resume on stop and after long videos, and stays zero for
    failed downloads; no corrupt SD writes across sleep/exit.
-3. Complete real resume-from-position on reopening a history record
-   (currently the position is **saved and displayed but not automatically
-   applied to the next decoder session**). Implement precise seeking
-   without accessing deleted SD cache.
+3. **Resume implementation added after this checkpoint:** opening a
+   recent History item passes its saved seconds through the existing
+   approved media worker to the completed-cache M3 player. A separate
+   `PlaybackResumeGate` waits for rendered video and a selected audio
+   track, issues an absolute seek, then blocks stale zero-second frames
+   from overwriting the prior resume position. Normal and ASan/UBSan
+   host tests for readiness, repeated seek prevention, completed-video
+   clamping and in-progress-seek checkpoint protection passed.
+   This is **not** yet hardware-tested; the future rolling SD streamer
+   must re-prime the correct window rather than seek into evicted files.
 4. Implement UI pagination/recycling for History beyond its first
    twenty visible items, local item removal, local unfollow/unfavorite.
 5. Implement original thumbnail rails and fullscreen player overlay from
