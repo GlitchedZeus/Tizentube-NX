@@ -131,6 +131,49 @@ if(TTNX_BUILD_TESTS)
     add_test(NAME verified_ring_hls_ingest
         COMMAND tizentube_nx_verified_ring_hls_ingest_tests)
 
+    # Full producer -> verified ring -> mpv callback epoch ownership.
+    # Tests enforce close/join/delete and safe re-prime at a segment boundary.
+    add_executable(tizentube_nx_rolling_stream_epoch_tests
+        tests/rolling_stream_epoch_tests.cpp)
+    target_include_directories(tizentube_nx_rolling_stream_epoch_tests
+        PRIVATE include tests/stubs)
+    target_link_libraries(tizentube_nx_rolling_stream_epoch_tests
+        PRIVATE tizentube_nx_core Threads::Threads)
+    add_test(NAME rolling_stream_epoch
+        COMMAND tizentube_nx_rolling_stream_epoch_tests)
+
+    # Fixed app-owned crash-orphan sweep; symlinks/user files must survive.
+    add_executable(tizentube_nx_ring_orphan_cleanup_tests
+        tests/ring_orphan_cleanup_tests.cpp)
+    target_include_directories(tizentube_nx_ring_orphan_cleanup_tests PRIVATE include)
+    add_test(NAME ring_orphan_cleanup COMMAND tizentube_nx_ring_orphan_cleanup_tests)
+
+    # True FFmpeg H264/AAC through a 2-segment ring, libmpv callback
+    # lease, tear-down and fresh seek epoch. Optional only when ffmpeg exists.
+    find_program(TTNX_TEST_FFMPEG ffmpeg)
+    if(TTNX_TEST_FFMPEG)
+        add_executable(tizentube_nx_rolling_stream_epoch_real_av_tests
+            tests/rolling_stream_epoch_real_av_tests.cpp)
+        target_include_directories(tizentube_nx_rolling_stream_epoch_real_av_tests
+            PRIVATE include tests/stubs)
+        target_link_libraries(tizentube_nx_rolling_stream_epoch_real_av_tests
+            PRIVATE tizentube_nx_core Threads::Threads)
+        add_test(NAME rolling_epoch_ffmpeg_prepare
+            COMMAND ${TTNX_TEST_FFMPEG} -hide_banner -loglevel error -y
+                -f lavfi -i testsrc2=size=320x180:rate=30
+                -f lavfi -i sine=frequency=440:sample_rate=48000
+                -t 2 -c:v libx264 -preset ultrafast -pix_fmt yuv420p
+                -c:a aac -b:a 96k -f mpegts
+                ${CMAKE_CURRENT_BINARY_DIR}/ttnx-epoch-real-av.ts)
+        set_tests_properties(rolling_epoch_ffmpeg_prepare PROPERTIES
+            FIXTURES_SETUP ttnx_epoch_av)
+        add_test(NAME rolling_epoch_real_av
+            COMMAND tizentube_nx_rolling_stream_epoch_real_av_tests
+                ${CMAKE_CURRENT_BINARY_DIR}/ttnx-epoch-real-av.ts)
+        set_tests_properties(rolling_epoch_real_av PROPERTIES
+            FIXTURES_REQUIRED ttnx_epoch_av)
+    endif()
+
     # Standalone strict HTTP/1.1 streaming body parser, independent of
     # Horizon SDK; headers may not grant redirects or whole-body buffers.
     add_executable(tizentube_nx_http1_media_stream_tests

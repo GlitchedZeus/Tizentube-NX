@@ -1,4 +1,6 @@
 #include "app_storage.hpp"
+#include "tizentube_nx/playback/ring_orphan_cleanup.hpp"
+#include "tizentube_nx/playback/hls_playback_lease.hpp"
 
 #include <cerrno>
 #include <cstdio>
@@ -31,8 +33,14 @@ std::optional<core::Settings> read_settings(const std::string& path) {
 } // namespace
 
 bool initialize_storage() {
-    if (!directory("sdmc:/switch") || !directory(kAppDirectory)) return false;
-    return directory(std::string(kAppDirectory) + "/logs");
+    if (!directory("sdmc:/switch") || !directory(kAppDirectory) ||
+        !directory(std::string(kAppDirectory) + "/logs")) return false;
+    // On a crash, the unfinished M4 stream ring can remain on SD.
+    // Delete ONLY this fixed app-owned file, strictly after verifying that
+    // no decoder owns a lease. No recursive/user-file cache deletion.
+    // This runs even on a default M3 build after a previous M4 crash.
+    return playback::RingOrphanCleanup::at_startup(
+        kAppDirectory,!playback::HlsPlaybackLease::is_active());
 }
 
 core::Settings load_settings() {

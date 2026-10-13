@@ -271,3 +271,42 @@ jobs:
             ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
               "/tmp/ttnx-real-av-ring-${mode}" /tmp/ttnx-real-av.ts
           done
+      - name: Owned M4 producer/decoder SD ring epoch and restart sanitizers
+        run: |
+          set -euo pipefail
+          for mode in normal sanitized; do
+            flags="-O2"
+            if [ "$mode" = sanitized ]; then
+              flags="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer"
+            fi
+            g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror $flags \
+              -pthread -Iinclude -Itests/stubs tests/rolling_stream_epoch_tests.cpp \
+              src/core/ts_streams.cpp -o "/tmp/ttnx-rolling-epoch-${mode}"
+            ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+              "/tmp/ttnx-rolling-epoch-${mode}"
+          done
+      - name: Orphan cleanup and real H264 AAC decoder-epoch tests under ASan UBSan
+        run: |
+          set -euo pipefail
+          ffmpeg -hide_banner -loglevel error -y \
+            -f lavfi -i 'testsrc2=size=320x180:rate=30' \
+            -f lavfi -i 'sine=frequency=440:sample_rate=48000' \
+            -t 2 -c:v libx264 -preset ultrafast -pix_fmt yuv420p \
+            -c:a aac -b:a 96k -f mpegts /tmp/ttnx-epoch-av.ts
+          for mode in normal sanitized; do
+            flags="-O2"
+            if [ "$mode" = sanitized ]; then
+              flags="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer"
+            fi
+            g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror $flags \
+              -pthread -Iinclude -Itests/stubs \
+              tests/rolling_stream_epoch_real_av_tests.cpp \
+              src/core/ts_streams.cpp -o "/tmp/ttnx-real-epoch-${mode}"
+            ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+              "/tmp/ttnx-real-epoch-${mode}" /tmp/ttnx-epoch-av.ts
+            g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror $flags \
+              -Iinclude tests/ring_orphan_cleanup_tests.cpp \
+              -o "/tmp/ttnx-orphan-clean-${mode}"
+            ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+              "/tmp/ttnx-orphan-clean-${mode}"
+          done

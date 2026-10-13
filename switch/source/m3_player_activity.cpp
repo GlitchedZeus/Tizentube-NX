@@ -4,6 +4,9 @@
 #include "app_storage.hpp"
 #include "tizentube_nx/library/local_library.hpp"
 #include "tizentube_nx/library/playback_resume_gate.hpp"
+#if defined(TTNX_M4_RING_STREAM_CB_PROBE)
+#include "tizentube_nx/playback/rolling_stream_epoch.hpp"
+#endif
 #include "media_file_sink.hpp"
 #include "hls_cache_sink.hpp"
 #include "tizentube_nx/playback/audio_gate.hpp"
@@ -29,6 +32,8 @@
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <memory>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -42,9 +47,17 @@ std::uint64_t playback_clock_ms() {
 }
 class CachedMpv {
 public:
-    explicit CachedMpv(bool hls=false,bool adaptive=false,bool live=false):
+    explicit CachedMpv(bool hls=false,bool adaptive=false,bool live=false
+#if defined(TTNX_M4_RING_STREAM_CB_PROBE)
+        ,std::shared_ptr<playback::RollingStreamEpoch> ring_epoch={}
+#endif
+    ):
         pixels_(kWidth*kHeight*4,0),use_hls_(hls),
-        use_adaptive_(adaptive),use_live_hls_(live){}
+        use_adaptive_(adaptive),use_live_hls_(live)
+#if defined(TTNX_M4_RING_STREAM_CB_PROBE)
+        ,ring_epoch_(std::move(ring_epoch))
+#endif
+    {}
     ~CachedMpv() {
         // Closing libmpv releases every media FD and the exclusive lease.
         // Only now may the app erase the playback session's disposable SD
@@ -87,6 +100,9 @@ public:
             !required("ytdl","no") ||
             !required("input-default-bindings","no") ||
             !required("demuxer-lavf-o",
+#if defined(TTNX_M4_RING_STREAM_CB_PROBE)
+                      ring_epoch_ ? "protocol_whitelist=file,ttnxring" :
+#endif
 #if defined(TTNX_M4_ROLLING_STREAM) && defined(TTNX_M4_PLAYER_PROBE)
                       use_live_hls_
                           ? "protocol_whitelist=file,crypto,data"
@@ -143,6 +159,15 @@ public:
                 }
             }
         }
+#if defined(TTNX_M4_RING_STREAM_CB_PROBE)
+        // Switch-NewPipe-style callback MUST be registered before initialize.
+        // The player holds exactly one M3 lease; the ring does not acquire a
+        // second lease or let libmpv open a network URL.
+        if(ring_epoch_ && !ring_epoch_->register_decoder(handle_)) {
+            status_="Bounded ring prefix/decoder ownership not ready";
+            close();return false;
+        }
+#endif
         const int init_result=mpv_initialize(handle_);
         if (init_result<0) {
             M3Diagnostics::record(M3Stage::Player,M3Event::Error,2,init_result,0);
@@ -196,6 +221,25 @@ public:
     }
     bool play() {
         if (!renderer_ && !init())return false;
+#if defined(TTNX_M4_RING_STREAM_CB_PROBE)
+        if(ring_epoch_) {
+            if(!ring_epoch_->ring_for_decoder() || ring_loaded_) {
+                status_="Ring replay/seek requires a new, verified stream epoch";
+                return false;
+            }
+            const char* cmd[]={"loadfile",playback::RollingMpvStreamBridge::kURI,
+                              "replace",nullptr};
+            audio_gate_.reset();
+            audio_failure_latched_=false;
+            have_frame_=false;
+            const int result=mpv_command(handle_,cmd);
+            M3Diagnostics::record(M3Stage::Player,M3Event::Begin,result,0,0);
+            if(result<0){status_="Local ring protocol was rejected";return false;}
+            ring_loaded_=true;
+            status_="Opening verified *local* H264/AAC ring stream...";
+            return true;
+        }
+#endif
         const char* path=use_hls_
             ? SwitchHlsCacheSink::kReadyMaster
             : use_adaptive_?SwitchMediaCacheSink::kAdaptiveVideo:
@@ -272,6 +316,12 @@ public:
     }
     void seek(int sec) {
         if(!handle_)return;
+#if defined(TTNX_M4_RING_STREAM_CB_PROBE)
+        if(ring_epoch_) {
+            status_="Ring seek requires decoder-close and a new stream epoch";
+            return;
+        }
+#endif
         if(use_live_hls_) {
             // Seeking outside the retained HLS window requires the producer
             // to stop, re-prime and create a new epoch before opening mpv.
@@ -295,6 +345,9 @@ public:
     }
     [[nodiscard]] bool seek_absolute(std::uint32_t seconds) {
         if(!handle_ || use_live_hls_ || seconds<5)return false;
+#if defined(TTNX_M4_RING_STREAM_CB_PROBE)
+        if(ring_epoch_)return false;
+#endif
         const auto text=std::to_string(seconds);
         const char* cmd[]={"seek",text.c_str(),"absolute",nullptr};
         const int result=mpv_command(handle_,cmd);
@@ -526,6 +579,9 @@ private:
             render_notifications_.fetch_add(1,std::memory_order_release);
     }
     void close() {
+#if defined(TTNX_M4_RING_STREAM_CB_PROBE)
+        if(ring_epoch_)ring_epoch_->request_stop();
+#endif
         if(renderer_){
             mpv_render_context_set_update_callback(renderer_,nullptr,nullptr);
             mpv_render_context_free(renderer_);renderer_=nullptr;
@@ -533,6 +589,15 @@ private:
         if(handle_){mpv_terminate_destroy(handle_);handle_=nullptr;}
         // Release ONLY after libmpv has closed every file descriptor.
         ready_lease_.release();
+#if defined(TTNX_M4_RING_STREAM_CB_PROBE)
+        if(ring_epoch_) {
+            // This may block on a bounded SSL timeout: never call from draw.
+            // The optional activity is unavailable from production menus.
+            ring_epoch_->stop_and_join();
+            (void)ring_epoch_->notify_decoder_destroyed();
+            (void)ring_epoch_->cleanup();
+        }
+#endif
         M3Diagnostics::record(M3Stage::Player,M3Event::End,static_cast<std::int64_t>(frames_),0,0);
     }
     mpv_handle* handle_{nullptr};
@@ -540,6 +605,10 @@ private:
     std::vector<unsigned char> pixels_;
     bool use_hls_{false},use_adaptive_{false},use_live_hls_{false};
     bool live_loaded_{false};
+#if defined(TTNX_M4_RING_STREAM_CB_PROBE)
+    std::shared_ptr<playback::RollingStreamEpoch> ring_epoch_{};
+    bool ring_loaded_{false};
+#endif
     std::string status_{"Starting libmpv..."};
     bool have_frame_{false},new_frame_{false};
     playback::AudioSelectionGate audio_gate_{};
@@ -679,8 +748,16 @@ class M3Activity final:public brls::Activity {
 public:
     explicit M3Activity(bool hls,bool adaptive=false,bool live=false,
                         std::string video_id={},
-                        std::uint32_t resume_seconds=0):
-        player_(hls,adaptive,live),hls_(hls),adaptive_(adaptive),
+                        std::uint32_t resume_seconds=0
+#if defined(TTNX_M4_RING_STREAM_CB_PROBE)
+                        ,std::shared_ptr<playback::RollingStreamEpoch> ring_epoch={}
+#endif
+                        ):
+        player_(hls,adaptive,live
+#if defined(TTNX_M4_RING_STREAM_CB_PROBE)
+                ,std::move(ring_epoch)
+#endif
+                ),hls_(hls),adaptive_(adaptive),
         live_(live),video_id_(std::move(video_id)),
         resume_gate_(resume_seconds){active_=this;}
     ~M3Activity() override {
@@ -919,6 +996,14 @@ void open_m3_completed_adaptive(const std::string& video_id,
 // prove producer-join + decoder-close ordering before enabling access.
 void open_m4_local_hls_probe(){
     brls::Application::pushActivity(new M3Activity(false,false,true));
+}
+#endif
+#if defined(TTNX_M4_RING_STREAM_CB_PROBE)
+void open_m4_native_ring_candidate(std::shared_ptr<playback::RollingStreamEpoch> epoch) {
+    // Never expose a half-written stream or a URL to libmpv.
+    if(!epoch || !epoch->ring_for_decoder())return;
+    brls::Application::pushActivity(new M3Activity(false,false,false,{},0,
+                                                  std::move(epoch)));
 }
 #endif
 void tick_m3_player(){M3Activity::tick_current();}

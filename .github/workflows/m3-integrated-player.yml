@@ -106,6 +106,8 @@ jobs:
         run: |
           test -s tizentube_nx_m4_stream_cb_abi.nro
           test -s build-m4-stream-cb/m4_mpv_stream_cb_probe.o
+          test -s build-m4-stream-cb/m3_player_activity.o
+          test -s build-m4-stream-cb/rolling_hls_feed.o
           test "$(stat -c %s tizentube_nx_m4_stream_cb_abi.nro)" -le 66445568
           sha256sum tizentube_nx_m4_stream_cb_abi.nro
           echo "Callback ABI compiled. This does NOT prove on-device playback."

@@ -1,6 +1,10 @@
 #pragma once
 #include <string>
 #include <cstdint>
+#include <memory>
+#if defined(TTNX_M4_RING_STREAM_CB_PROBE)
+namespace ttnx::playback {class RollingStreamEpoch;}
+#endif
 #ifdef TTNX_M3_INTEGRATED
 namespace ttnx::switch_app {
 
@@ -16,6 +20,11 @@ void open_m3_completed_adaptive(const std::string& video_id={},
 #if defined(TTNX_M4_ROLLING_STREAM) && defined(TTNX_M4_PLAYER_PROBE)
 // Local growing HLS only. No menu call until worker lifetime proven.
 void open_m4_local_hls_probe();
+#endif
+#if defined(TTNX_M4_RING_STREAM_CB_PROBE)
+// Explicit opt-in only, no Search/main-menu route until NRO + hardware pass.
+// Producer session must have reported a verified playable TS prefix.
+void open_m4_native_ring_candidate(std::shared_ptr<playback::RollingStreamEpoch> epoch);
 #endif
 void tick_m3_player();
 
