@@ -59,28 +59,62 @@ public:
     }
     [[nodiscard]] Write append(std::string_view bytes) {
         std::lock_guard<std::mutex> lock(mu_);
-        if(cancelled_ || finished_ || failed_)return Write::Closed;
+        if(cancelled_ || finished_ || failed_ || staging_)return Write::Closed;
         if(bytes.empty() || bytes.size()>kMaximumChunk)return Write::Invalid;
         if(bytes.size()>capacity_-(end_-begin_))return Write::Backpressure;
-        std::size_t at=0;
-        while(at<bytes.size()){
-            const auto slot=(end_+at)%capacity_;
-            const auto count=std::min<std::size_t>(bytes.size()-at,capacity_-slot);
-            std::size_t progress=0;
-            while(progress<count) {
-                const auto n=::pwrite(fd_,bytes.data()+at+progress,count-progress,
-                                      static_cast<off_t>(slot+progress));
-                if(n<0 && errno==EINTR)continue;
-                if(n<=0){failed_=true;cv_.notify_all();return Write::IoError;}
-                progress+=static_cast<std::size_t>(n);
-            }
-            at+=count;
-        }
+        if(!write_at_locked(end_,bytes))return Write::IoError;
         end_+=bytes.size();
         high_water_=std::max(high_water_,end_-begin_);
         physical_size_=std::max<std::uint64_t>(physical_size_,std::min(end_,capacity_));
         cv_.notify_all();
         return Write::Written;
+    }
+    // Staged network segment writes are invisible to mpv until the HTTPS
+    // length, transport packets and H264/AAC streams are ALL verified.
+    // This uses the SAME bounded SD ring: no second 16-MiB temporary file.
+    [[nodiscard]] bool begin_segment(std::uint64_t declared_bytes) {
+        std::lock_guard<std::mutex> lock(mu_);
+        if(cancelled_ || finished_ || failed_ || staging_ ||
+           declared_bytes < 376 || declared_bytes > 16ULL*1024*1024 ||
+           declared_bytes > capacity_ - (end_ - begin_))return false;
+        staging_=true;
+        staging_expected_=declared_bytes;
+        staged_end_=end_;
+        return true;
+    }
+    [[nodiscard]] Write append_staged(std::string_view bytes) {
+        std::lock_guard<std::mutex> lock(mu_);
+        if(cancelled_ || finished_ || failed_ || !staging_)return Write::Closed;
+        if(bytes.empty() || bytes.size()>kMaximumChunk ||
+           bytes.size()>staging_expected_-(staged_end_-end_))return Write::Invalid;
+        if(!write_at_locked(staged_end_,bytes))return Write::IoError;
+        staged_end_+=bytes.size();
+        physical_size_=std::max<std::uint64_t>(physical_size_,
+                              std::min(staged_end_,capacity_));
+        return Write::Written;
+    }
+    [[nodiscard]] bool commit_segment() {
+        std::lock_guard<std::mutex> lock(mu_);
+        if(!staging_ || cancelled_ || finished_ || failed_ ||
+           staged_end_-end_!=staging_expected_)return false;
+        if(::fsync(fd_)!=0){failed_=true;cv_.notify_all();return false;}
+        end_=staged_end_;
+        staging_=false;
+        staging_expected_=0;
+        high_water_=std::max(high_water_,end_-begin_);
+        cv_.notify_all();
+        return true;
+    }
+    void abort_segment() noexcept {
+        std::lock_guard<std::mutex> lock(mu_);
+        staged_end_=end_;
+        staging_=false;
+        staging_expected_=0;
+        cv_.notify_all();
+    }
+    [[nodiscard]] bool staging()const noexcept {
+        std::lock_guard<std::mutex> lock(mu_);
+        return staging_;
     }
     class Reader final {
     public:
@@ -152,7 +186,7 @@ public:
     // playhead/timestamp that a demuxer released its file descriptors.
     [[nodiscard]] bool release_before(std::uint64_t absolute) {
         std::lock_guard<std::mutex> lock(mu_);
-        if(readers_ || cancelled_ || failed_ || absolute<begin_ || absolute>end_)return false;
+        if(readers_ || staging_ || cancelled_ || failed_ || absolute<begin_ || absolute>end_)return false;
         begin_=absolute;
         cv_.notify_all();
         return true;
@@ -160,12 +194,14 @@ public:
     void finish(bool success=true) {
         std::lock_guard<std::mutex> lock(mu_);
         finished_=true;
-        failed_=failed_||!success;
+        failed_=failed_||!success||staging_;
+        staged_end_=end_;staging_=false;staging_expected_=0;
         cv_.notify_all();
     }
     void cancel() {
         std::lock_guard<std::mutex> lock(mu_);
         cancelled_=true;
+        staged_end_=end_;staging_=false;staging_expected_=0;
         cv_.notify_all();
     }
     [[nodiscard]] Stats stats()const {
@@ -180,13 +216,31 @@ public:
 private:
     RollingFileStream(std::string path,int fd,std::uint64_t max)
         :path_(std::move(path)),fd_(fd),capacity_(max){}
+    [[nodiscard]] bool write_at_locked(std::uint64_t absolute,std::string_view bytes) {
+        std::size_t at=0;
+        while(at<bytes.size()) {
+            const auto slot=(absolute+at)%capacity_;
+            const auto count=std::min<std::size_t>(bytes.size()-at,capacity_-slot);
+            std::size_t progress=0;
+            while(progress<count) {
+                const auto n=::pwrite(fd_,bytes.data()+at+progress,count-progress,
+                                      static_cast<off_t>(slot+progress));
+                if(n<0 && errno==EINTR)continue;
+                if(n<=0) {failed_=true;cv_.notify_all();return false;}
+                progress+=static_cast<std::size_t>(n);
+            }
+            at+=count;
+        }
+        return true;
+    }
     std::string path_;
     int fd_{-1};
     std::uint64_t capacity_;
     mutable std::mutex mu_;
     std::condition_variable cv_;
-    std::uint64_t begin_{0},end_{0},physical_size_{0},high_water_{0};
+    std::uint64_t begin_{0},end_{0},staged_end_{0},staging_expected_{0},
+                  physical_size_{0},high_water_{0};
     std::uint32_t readers_{0};
-    bool cancelled_{false},finished_{false},failed_{false};
+    bool cancelled_{false},finished_{false},failed_{false},staging_{false};
 };
 } // namespace ttnx::playback

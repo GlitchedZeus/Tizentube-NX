@@ -113,6 +113,24 @@ if(TTNX_BUILD_TESTS)
     add_test(NAME rolling_mpv_stream_bridge
         COMMAND tizentube_nx_rolling_mpv_stream_bridge_tests)
 
+    # Hold mpv reads behind unpublished segment transactions; verify
+    # cancel/abort and reader visibility with real concurrent threads.
+    add_executable(tizentube_nx_rolling_ring_atomic_commit_tests
+        tests/rolling_ring_atomic_commit_tests.cpp)
+    target_include_directories(tizentube_nx_rolling_ring_atomic_commit_tests PRIVATE include)
+    target_link_libraries(tizentube_nx_rolling_ring_atomic_commit_tests PRIVATE Threads::Threads)
+    add_test(NAME rolling_ring_atomic_commit
+        COMMAND tizentube_nx_rolling_ring_atomic_commit_tests)
+
+    # Actual native-media HTTP admission => invisible ring staging =>
+    # verified H264/AAC TS commit => readable libmpv byte window.
+    add_executable(tizentube_nx_verified_ring_hls_ingest_tests
+        tests/verified_ring_hls_ingest_tests.cpp)
+    target_link_libraries(tizentube_nx_verified_ring_hls_ingest_tests
+        PRIVATE tizentube_nx_core Threads::Threads)
+    add_test(NAME verified_ring_hls_ingest
+        COMMAND tizentube_nx_verified_ring_hls_ingest_tests)
+
     # Standalone strict HTTP/1.1 streaming body parser, independent of
     # Horizon SDK; headers may not grant redirects or whole-body buffers.
     add_executable(tizentube_nx_http1_media_stream_tests
