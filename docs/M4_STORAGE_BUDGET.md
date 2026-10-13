@@ -267,3 +267,46 @@ time alone, and joining a potentially timed-out HTTPS request must never
 happen inside the draw callback. If the player still owns media or
 downloaders have not joined, zero-cache cleanup must fail closed.
 The M3 accepted picture/audio path remains the default.
+
+## M4 native producer/decoder lifecycle ownership and FD-race closure
+
+The standalone M4 worker previously accepted a caller's
+`decoder_released=true` flag without checking whether an HLS decoder was
+active. This was unsafe for the current pinned Switch libmpv: no dependable
+per-segment file-descriptor-release signal has been demonstrated.
+
+The worker now blocks segment retirement during any active global
+`HlsPlaybackLease`. Its new `enter_player_mode()` handshake also
+**atomically closes the retirement queue** before the owner acquires the
+decoder lease and refuses to open a decoder while an unlink callback is
+already executing. An early request cannot race media deletion against
+mpv initialization. This handoff also accepts a verified video that finished
+downloading before the UI had a chance to open it.
+
+`RollingPlaybackOwner` owns the worker `Job`, so the network callback can
+never outlive its feed. Its state machine requires a verified prefix,
+exclusive decoder ownership, a worker stop and join, and explicit
+post-`mpv_terminate_destroy` notification before clearing any local media.
+If the cleanup callback fails, ownership and SD accounting remain available
+for retry. A job that fails during HTTPS download can still be joined and
+cleaned safely without ever opening a player. `RollingHlsRuntime` ties the
+actual `HlsSegmentReader`, `RollingHlsSink`, `RollingMuxedHlsSession`,
+the native worker adapter and this owner into one lifetime.
+
+The new host owner tests passed `-Wall -Wextra -Werror` and ASan+UBSan,
+along with 70 repeated worker/owner normal executions. Additional
+worker tests prove that an in-flight unlink prevents the player handoff,
+subsequent retirements are refused, and quickly completed playlists still
+open. Existing rolling sink, media budget, stream coordinator and local HLS
+manifest tests also passed locally. Full native runtime integration is
+registered in CMake host testing and separate opt-in Switch object checks.
+
+**Do not enable in the regular app yet:** the existing `CachedMpv` also
+acquires its own exclusive `HlsPlaybackLease`; M4 must be taught to use
+the single lease owned by `RollingHlsRuntime`, not acquire a second one.
+More importantly, because per-segment decoder FD release remains unproven,
+no segments can be evicted while the decoder runs. An extended high-bitrate
+video will therefore hit the 24-MiB rolling limit and pause, rather than
+violating the SD cap. That is an explicit acceptance blocker; do not ship
+a bounded long-form player until this is solved and hardware-tested.
+No currently accepted M3 playback or main-menu code was modified.

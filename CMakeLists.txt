@@ -292,6 +292,22 @@ if(TTNX_BUILD_TESTS)
         add_test(NAME rolling_hls_worker
             COMMAND tizentube_nx_rolling_hls_worker_tests)
 
+        # Native media/player lifetime owned as one durable transaction.
+        # A decoder lease cannot be released until downloads join and the
+        # renderer closes; no timestamp-guessed segment retirement.
+        add_executable(tizentube_nx_rolling_playback_owner_tests
+            tests/rolling_playback_owner_tests.cpp
+            switch/source/rolling_playback_owner.cpp
+            switch/source/rolling_hls_worker.cpp)
+        target_include_directories(tizentube_nx_rolling_playback_owner_tests
+            PRIVATE switch/source)
+        target_compile_definitions(tizentube_nx_rolling_playback_owner_tests
+            PRIVATE TTNX_M4_ROLLING_HOST_TEST=1)
+        target_link_libraries(tizentube_nx_rolling_playback_owner_tests
+            PRIVATE Threads::Threads)
+        add_test(NAME rolling_playback_owner
+            COMMAND tizentube_nx_rolling_playback_owner_tests)
+
         # Opt-in file-backed HLS rolling cache. Accepted M3 path unchanged.
         add_executable(tizentube_nx_rolling_hls_sink_tests
             tests/rolling_hls_sink_tests.cpp switch/source/rolling_hls_sink.cpp)
@@ -307,7 +323,8 @@ if(TTNX_BUILD_TESTS)
             tests/rolling_muxed_hls_tests.cpp
             switch/source/rolling_hls_feed.cpp
             switch/source/rolling_hls_sink.cpp
-            switch/source/rolling_hls_worker.cpp)
+            switch/source/rolling_hls_worker.cpp
+            switch/source/rolling_playback_owner.cpp)
         target_include_directories(tizentube_nx_rolling_muxed_hls_tests
             PRIVATE switch/source)
         target_compile_definitions(tizentube_nx_rolling_muxed_hls_tests

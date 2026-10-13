@@ -17,6 +17,7 @@ template<typename F> bool until(F&& f) {
 struct Fake:RollingHlsWorker::Job {
     std::atomic<unsigned> pumps{0},retired{0},cleanups{0};
     std::atomic<bool> completed{false},throw_on_pump{false},block_once{false},throw_on_cleanup{false};
+    std::atomic<bool> hold_retirement{false},retirement_started{false};
     std::thread::id worker_id{};
     RollingHlsWorker::Step fetch_one() override {
         worker_id=std::this_thread::get_id();
@@ -28,6 +29,8 @@ struct Fake:RollingHlsWorker::Job {
         return RollingHlsWorker::Step::Waiting;
     }
     bool retire_before(std::size_t n,std::uint64_t ms) override {
+        retirement_started=true;
+        while(hold_retirement)std::this_thread::sleep_for(1ms);
         if(std::this_thread::get_id()!=worker_id || n==999 || ms<4000)return false;
         ++retired;return true;
     }
@@ -92,6 +95,45 @@ int main() {
     w.join_downloads();
     ck(interrupted.pumps<=1 && w.cleanup_after_decoder_closed(),
        "stop joins pending work and permits safe final teardown");
+    Fake in_flight;
+    RollingHlsWorker gated;
+    ck(gated.start(in_flight),"handoff race worker starts");
+    ck(until([&]{return gated.snapshot().state==RollingHlsWorker::State::Waiting;}),
+       "handoff worker primed then backpressured");
+    in_flight.hold_retirement=true;
+    ck(gated.request_retirement(1,5000,true),"one decoder release queued before playback");
+    ck(until([&]{return in_flight.retirement_started.load();}),
+       "actual unlink callback entered on producer");
+    ck(!gated.enter_player_mode(),
+       "libmpv may not open while an old-media unlink is executing");
+    in_flight.hold_retirement=false;
+    ck(until([&]{return in_flight.retired==1;}),
+       "release callback finished before reader switches modes");
+    ck(until([&]{return gated.snapshot().state==RollingHlsWorker::State::Waiting;}),
+       "post-retirement producer re-enters bounded wait");
+    ck(gated.enter_player_mode(),
+       "atomic handoff disables any future segment retirement");
+    ck(!gated.request_retirement(2,9999,true),
+       "active reader mode refuses timestamp-based file deletion");
+    gated.request_stop();gated.join_downloads();
+    ck(gated.cleanup_after_decoder_closed(),"closed reader mode safely cleans up");
+    struct QuickComplete final:RollingHlsWorker::Job {
+        unsigned count=0;
+        RollingHlsWorker::Step fetch_one() override {
+            return ++count==1?RollingHlsWorker::Step::PrefixReady:
+                               RollingHlsWorker::Step::Complete;
+        }
+        bool retire_before(std::size_t,std::uint64_t) override {return false;}
+        bool cleanup_after_decoder() override{return true;}
+    } fast;
+    RollingHlsWorker fast_worker;
+    ck(fast_worker.start(fast),"fast fully cached session starts");
+    ck(until([&]{return fast_worker.snapshot().state==RollingHlsWorker::State::Complete;}),
+       "fast session finishes before the UI opens player");
+    ck(fast_worker.enter_player_mode(),
+       "verified finished local HLS remains openable without redownloading");
+    fast_worker.join_downloads();
+    ck(fast_worker.cleanup_after_decoder_closed(),"finished stream cleanup passes");
     if(failures)std::cerr<<failures<<" M4 worker test failures\n";
     return failures?EXIT_FAILURE:EXIT_SUCCESS;
 }

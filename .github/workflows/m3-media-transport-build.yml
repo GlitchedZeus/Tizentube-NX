@@ -54,6 +54,7 @@ jobs:
           test -s build-m4-rolling/rolling_hls_feed.o
           test -s build-m4-rolling/rolling_hls_sink.o
           test -s build-m4-rolling/rolling_hls_worker.o
+          test -s build-m4-rolling/rolling_playback_owner.o
           sha256sum tizentube_nx.nro
       - name: Clarify acceptance boundary
         run: |

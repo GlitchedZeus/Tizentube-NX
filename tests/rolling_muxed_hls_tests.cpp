@@ -1,4 +1,5 @@
 #include "rolling_hls_feed.hpp"
+#include "rolling_hls_runtime.hpp"
 #include "rolling_hls_native_job.hpp"
 #include "rolling_hls_worker.hpp"
 #include <atomic>
@@ -152,6 +153,37 @@ void threaded() {
        worker.snapshot().state==State::Cleared,
        "complete downloader join and decoder close leaves zero SD media");
 }
+void full_native_owner() {
+    reset();
+    LocalMedia http;
+    switch_app::RollingHlsRuntime runtime(http);
+    ck(runtime.begin(plan()),"native owner validates video and starts async feed");
+    using State=switch_app::RollingHlsWorker::State;
+    const auto until=[&](auto predicate) {
+        for(unsigned i=0;i<5000;++i) {
+            if(predicate())return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        return predicate();
+    };
+    ck(until([&]{return runtime.snapshot().state==State::Complete;}),
+       "real HTTPS muxed TS VOD can complete before player UI opens");
+    ck(runtime.snapshot().prefix_ready && runtime.stored_media_bytes()>0,
+       "runtime advertises verified prefix and retains bounded media");
+    ck(runtime.prepare_decoder() && playback::HlsPlaybackLease::is_active(),
+       "existing local HLS files protected by owned decoder lease");
+    ck(!runtime.cleanup(),"cannot erase video while renderer still has FD access");
+    runtime.request_stop();runtime.join_downloads();
+    ck(!runtime.cleanup(),"download join alone cannot delete active mpv media");
+    ck(runtime.decoder_destroyed() && !playback::HlsPlaybackLease::is_active(),
+       "real native player-destroy signal releases session lease");
+    ck(runtime.cleanup() && !runtime.active() &&
+       !fs::exists(Sink::kRoot),"session safely tears down verified media");
+    ck(runtime.begin(plan()),"same native owner reopens next video from scratch");
+    runtime.request_stop();runtime.join_downloads();
+    ck(runtime.cleanup() && !fs::exists(Sink::kRoot),
+       "early cancellation leaves zero private SD cache");
+}
 void negative() {
     reset();
     {
@@ -226,7 +258,7 @@ void bounded() {
 }
 }
 int main() {
-    successful();negative();bounded();threaded();
+    successful();negative();bounded();threaded();full_native_owner();
     reset();
     if(errors)std::cerr<<errors<<" rolling muxed transport failures\n";
     return errors?EXIT_FAILURE:EXIT_SUCCESS;

@@ -18,6 +18,8 @@ bool RollingHlsWorker::start(Job& job) {
         return false;
     job_=&job;
     stop_=false;
+    retirement_enabled_=true;
+    retirement_in_flight_=false;
     pending_.reset();
     status_={};
     status_.state=State::Fetching;
@@ -38,14 +40,30 @@ RollingHlsWorker::Snapshot RollingHlsWorker::snapshot() const noexcept {
 
 bool RollingHlsWorker::request_retirement(
     std::size_t first_index,std::uint64_t playhead_ms,bool released) {
-    if(!released || first_index==0)return false;
+    // A caller-supplied flag is NOT evidence of per-segment FD retirement.
+    // The pinned Switch libmpv has no proven per-segment release callback;
+    // fail closed during any active decoding session, even when a caller
+    // claims old segments were released. The new owner controls this lease.
+    if(!released || first_index==0 ||
+       playback::HlsPlaybackLease::is_active())return false;
     std::lock_guard lock(mutex_);
-    if(!job_ || stop_ || pending_ || status_.worker_ended ||
+    if(!job_ || stop_ || !retirement_enabled_ || pending_ ||
+       retirement_in_flight_ || status_.worker_ended ||
        (status_.state!=State::Fetching &&
         status_.state!=State::PrefixReady &&
         status_.state!=State::Waiting))return false;
     pending_=Retirement{first_index,playhead_ms};
     wake_.notify_one();
+    return true;
+}
+
+bool RollingHlsWorker::enter_player_mode() noexcept {
+    std::lock_guard lock(mutex_);
+    if(!job_ || stop_ || retirement_in_flight_ ||
+       (status_.worker_ended && status_.state!=State::Complete))
+        return false;
+    retirement_enabled_=false;
+    pending_.reset();
     return true;
 }
 
@@ -94,15 +112,22 @@ void RollingHlsWorker::run() noexcept {
             }
             if(pending_) {
                 retirement=std::exchange(pending_,std::nullopt);
+                retirement_in_flight_=true;
             }
             job=job_;
         }
         if(!job)break;
         if(retirement) {
             bool ok=false;
-            try {ok=job->retire_before(retirement->first_index,
-                                        retirement->playhead_ms);}catch(...){ok=false;}
+            try {
+                // Defensive check for independently acquired libmpv leases;
+                // owner mode handoff also serializes queued retirements.
+                if(!playback::HlsPlaybackLease::is_active())
+                    ok=job->retire_before(retirement->first_index,
+                                           retirement->playhead_ms);
+            }catch(...){ok=false;}
             std::lock_guard lock(mutex_);
+            retirement_in_flight_=false;
             if(!ok)++status_.rejected_retirements;
             else if(status_.state==State::Waiting)status_.state=State::Fetching;
             // A false/early release never credits bytes or spins the worker.

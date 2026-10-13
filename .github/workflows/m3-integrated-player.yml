@@ -87,6 +87,7 @@ jobs:
           test -s build-m4-player/m3_player_activity.o
           test -s build-m4-player/rolling_hls_sink.o
           test -s build-m4-player/rolling_hls_feed.o
+          test -s build-m4-player/rolling_playback_owner.o
           sha256sum tizentube_nx_m4_local_probe.nro
           echo "Local HLS probe compiled; NOT hardware-accepted or released."
       # One exact-head NRO artifact, not a public release or an automatic

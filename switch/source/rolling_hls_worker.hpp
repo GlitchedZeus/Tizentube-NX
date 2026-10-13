@@ -47,6 +47,10 @@ public:
     [[nodiscard]] bool request_retirement(std::size_t first_index,
                                           std::uint64_t playhead_ms,
                                           bool decoder_released);
+    // One-way handoff: before opening libmpv, disable and flush retired-file
+    // requests. Return false while an unlink callback is still in flight;
+    // the UI must retry on a later tick rather than blocking its renderer.
+    [[nodiscard]] bool enter_player_mode() noexcept;
     void request_stop() noexcept;
     // Can block for an in-flight approved HTTP timeout; do NOT join from
     // the draw/render callback or while holding libmpv internal locks.
@@ -64,5 +68,7 @@ private:
     Snapshot status_{};
     std::optional<Retirement> pending_{};
     bool stop_{false};
+    bool retirement_enabled_{true};
+    bool retirement_in_flight_{false};
 };
 } // namespace ttnx::switch_app

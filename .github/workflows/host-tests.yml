@@ -100,3 +100,15 @@ jobs:
             -o /tmp/ttnx-rolling-worker-san
           ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
             /tmp/ttnx-rolling-worker-san
+      - name: Sanitized M4 player/producer lifetime and ownership gates
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -Wall -Wextra -Werror -O1 -g -pthread \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -DTTNX_M4_ROLLING_HOST_TEST=1 -Iinclude -Iswitch/source \
+            tests/rolling_playback_owner_tests.cpp \
+            switch/source/rolling_playback_owner.cpp \
+            switch/source/rolling_hls_worker.cpp \
+            -o /tmp/ttnx-rolling-owner-san
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/ttnx-rolling-owner-san
