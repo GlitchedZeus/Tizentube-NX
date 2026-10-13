@@ -38,11 +38,13 @@ std::string ts(bool aac=true,std::size_t packets=2) {
     return b;
 }
 struct LocalMedia : net::HttpClient {
-    int hits=0, fail_at=0;
+    int hits=0, fail_at=0, delay_ms=0;
     bool aac=true,broken_sync=false;
     std::size_t packets=2;
     net::HttpResult perform(const net::HttpRequest& req) override {
         ++hits;
+        if(delay_ms>0)
+            std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
         net::HttpResult o;
         o.ok=hits!=fail_at;
         o.response.status_code=o.ok?200:403;
@@ -156,6 +158,7 @@ void threaded() {
 void full_native_owner() {
     reset();
     LocalMedia http;
+    http.delay_ms=60; // emulate a real CDN instead of instant test responses
     switch_app::RollingHlsRuntime runtime(http);
     ck(runtime.begin(plan()),"native owner validates video and starts async feed");
     using State=switch_app::RollingHlsWorker::State;
@@ -166,12 +169,18 @@ void full_native_owner() {
         }
         return predicate();
     };
-    ck(until([&]{return runtime.snapshot().state==State::Complete;}),
-       "real HTTPS muxed TS VOD can complete before player UI opens");
-    ck(runtime.snapshot().prefix_ready && runtime.stored_media_bytes()>0,
-       "runtime advertises verified prefix and retains bounded media");
+    ck(until([&]{return runtime.snapshot().state==State::PrefixReady &&
+                         runtime.snapshot().published_segments>=1;}),
+       "initial verified A/V prefix available while later HTTPS segments fetch");
+    ck(runtime.snapshot().published_segments<6 &&
+       runtime.stored_media_bytes()>0,
+       "3-second startup prefix does NOT require complete VOD downloading");
     ck(runtime.prepare_decoder() && playback::HlsPlaybackLease::is_active(),
-       "existing local HLS files protected by owned decoder lease");
+       "decoder opens with lease before the worker finishes fetching");
+    ck(until([&]{return runtime.snapshot().state==State::Complete;}),
+       "network producer finishes remaining TS while player lease is active");
+    ck(runtime.snapshot().prefix_ready,
+       "completed stream preserves initial verified prefix");
     ck(!runtime.cleanup(),"cannot erase video while renderer still has FD access");
     runtime.request_stop();runtime.join_downloads();
     ck(!runtime.cleanup(),"download join alone cannot delete active mpv media");
