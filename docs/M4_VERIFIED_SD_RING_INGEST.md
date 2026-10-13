@@ -96,3 +96,22 @@ GPL-3.0. The transactional bounded ring/validator is original
 TizenTube NX code to meet stricter SD and low-RAM requirements.
 No upstream copyrighted assets or proprietary YouTube NSP binary
 were imported.
+
+## Additional real H264/AAC media regression
+
+A separately executed local test generated a **224,472-byte**,
+two-second FFmpeg `libx264` 320x180 / AAC 48-kHz stereo-compatible
+MPEG-TS file. `ffprobe` verified both H.264 and AAC streams. The
+`tests/real_media_ring_ingest_tests.cpp` fixture delivered that
+file in **32-KiB chunks** through the exact
+`VerifiedRingHlsIngest` callback contract, checked that the resulting
+app-owned SD ring was at most 1 MiB, read the **entire media back
+byte-for-byte**, then proved the cache file disappeared once the
+last owner closed. Both **normal and ASan/UBSan** local executions
+passed.
+
+CI now regenerates that audiovisual fixture with FFmpeg and runs
+the same source in normal/sanitizer modes. This is an offline
+transport/TS validation test, **not** a claim that the Switch decoded
+the video, that real YouTube HTTPS was reached, or that long video
+has been tested through a live decoder.

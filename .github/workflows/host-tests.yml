@@ -248,3 +248,26 @@ jobs:
             ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
               "/tmp/ttnx-ring-atomic-${mode}"
           done
+      - name: Real FFmpeg H264/AAC TS through the verified disposable SD ring
+        run: |
+          set -euo pipefail
+          ffmpeg -hide_banner -loglevel error -y \
+            -f lavfi -i 'testsrc2=size=320x180:rate=30' \
+            -f lavfi -i 'sine=frequency=440:sample_rate=48000' \
+            -t 2 -c:v libx264 -preset ultrafast -pix_fmt yuv420p \
+            -c:a aac -b:a 96k -f mpegts /tmp/ttnx-real-av.ts
+          ffprobe -v error -show_entries stream=codec_name \
+            -of csv=p=0 /tmp/ttnx-real-av.ts | grep -q h264
+          ffprobe -v error -show_entries stream=codec_name \
+            -of csv=p=0 /tmp/ttnx-real-av.ts | grep -q aac
+          for mode in normal sanitized; do
+            flags="-O2"
+            if [ "$mode" = sanitized ]; then
+              flags="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer"
+            fi
+            g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror $flags \
+              -pthread -Iinclude tests/real_media_ring_ingest_tests.cpp \
+              src/core/ts_streams.cpp -o "/tmp/ttnx-real-av-ring-${mode}"
+            ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+              "/tmp/ttnx-real-av-ring-${mode}" /tmp/ttnx-real-av.ts
+          done
