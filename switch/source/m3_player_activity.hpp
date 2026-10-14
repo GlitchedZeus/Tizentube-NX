@@ -5,6 +5,9 @@
 #if defined(TTNX_M4_RING_STREAM_CB_PROBE)
 namespace ttnx::playback {class RollingStreamEpoch;}
 #endif
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+namespace ttnx::switch_app {class NativeDirectAvSession;}
+#endif
 #ifdef TTNX_M3_INTEGRATED
 namespace ttnx::switch_app {
 
@@ -25,6 +28,10 @@ void open_m4_local_hls_probe();
 // Explicit opt-in only, no Search/main-menu route until NRO + hardware pass.
 // Producer session must have reported a verified playable TS prefix.
 void open_m4_native_ring_candidate(std::shared_ptr<playback::RollingStreamEpoch> epoch);
+#endif
+#if defined(TTNX_M4_DIRECT_AV_PROBE) && defined(TTNX_M4_RING_STREAM_CB_PROBE)
+void open_m4_native_direct_candidate(std::shared_ptr<NativeDirectAvSession> stream,
+                                     const std::string& video_id);
 #endif
 void tick_m3_player();
 

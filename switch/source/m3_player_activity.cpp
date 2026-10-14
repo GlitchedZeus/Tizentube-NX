@@ -10,6 +10,9 @@
 #include "tizentube_nx/playback/rolling_epoch_clock.hpp"
 #endif
 #include "media_file_sink.hpp"
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+#include "m4_direct_av.hpp"
+#endif
 #include "hls_cache_sink.hpp"
 #include "tizentube_nx/playback/audio_gate.hpp"
 #include "tizentube_nx/playback/player_volume.hpp"
@@ -57,11 +60,17 @@ public:
 #if defined(TTNX_M4_RING_STREAM_CB_PROBE)
         ,std::shared_ptr<playback::RollingStreamEpoch> ring_epoch={}
 #endif
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+        ,std::shared_ptr<NativeDirectAvSession> direct_session={}
+#endif
     ):
         pixels_(kWidth*kHeight*4,0),use_hls_(hls),
         use_adaptive_(adaptive),use_live_hls_(live)
 #if defined(TTNX_M4_RING_STREAM_CB_PROBE)
         ,ring_epoch_(std::move(ring_epoch))
+#endif
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+        ,direct_session_(std::move(direct_session))
 #endif
     {}
     ~CachedMpv() {
@@ -108,6 +117,9 @@ public:
             !required("demuxer-lavf-o",
 #if defined(TTNX_M4_RING_STREAM_CB_PROBE)
                       ring_epoch_ ? "protocol_whitelist=file,ttnxring" :
+#endif
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+                      direct_session_ ? "protocol_whitelist=file,ttnxav" :
 #endif
 #if defined(TTNX_M4_ROLLING_STREAM) && defined(TTNX_M4_PLAYER_PROBE)
                       use_live_hls_
@@ -175,6 +187,12 @@ public:
                 }
             }
         }
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+        if(direct_session_ && direct_session_->register_decoder(handle_)<0) {
+            status_="Bounded video/AAC callback registration failed";
+            close();return false;
+        }
+#endif
 #if defined(TTNX_M4_RING_STREAM_CB_PROBE)
         // Switch-NewPipe-style callback MUST be registered before initialize.
         // The player holds exactly one M3 lease; the ring does not acquire a
@@ -239,6 +257,9 @@ public:
         return true;
     }
     [[nodiscard]] bool requires_audio_gate()const noexcept {
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+        if(direct_session_)return true;
+#endif
 #if defined(TTNX_M4_RING_STREAM_CB_PROBE)
         if(ring_epoch_)return true; // muxed H264/AAC must prove selected audio
 #endif
@@ -246,6 +267,23 @@ public:
     }
     bool play() {
         if (!renderer_ && !init())return false;
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+        if(direct_session_) {
+            if(direct_loaded_) {
+                status_="Direct A/V replay requires a fresh approved source";
+                return false;
+            }
+            const auto local=NativeDirectAvSession::edl_uri();
+            const char* cmd[]={"loadfile",local.c_str(),"replace",nullptr};
+            audio_gate_.reset();audio_failure_latched_=false;have_frame_=false;
+            const int result=mpv_command(handle_,cmd);
+            M3Diagnostics::record(M3Stage::Player,M3Event::Begin,result,7,0);
+            if(result<0) {status_="Direct A/V local EDL rejected";return false;}
+            direct_loaded_=true;
+            status_="Opening two bounded HTTPS-range streams (no SD media)";
+            return true;
+        }
+#endif
 #if defined(TTNX_M4_RING_STREAM_CB_PROBE)
         if(ring_epoch_) {
             if(!ring_epoch_->ring_for_decoder() || ring_loaded_) {
@@ -397,6 +435,15 @@ public:
         M3Diagnostics::record(M3Stage::Player,M3Event::Seek,sec,result,0);
     }
     void stop() {
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+        if(direct_session_) {
+            direct_session_->cancel();
+            close();
+            audio_gate_.reset();audio_failure_latched_=false;have_frame_=false;
+            status_="Stopped; HTTPS range streams released; no SD video cached";
+            return;
+        }
+#endif
 #if defined(TTNX_M4_RING_STREAM_CB_PROBE)
         // A Stop during playback OR while waiting for the next HTTPS prefix
         // closes the decoder, joins the producer and removes app-owned SD.
@@ -444,6 +491,10 @@ public:
         return result>=0;
     }
     [[nodiscard]] std::uint32_t duration_seconds()const noexcept {
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+        if(direct_session_)return static_cast<std::uint32_t>(
+            direct_session_->duration_ms()/1000);
+#endif
 #if defined(TTNX_M4_RING_STREAM_CB_PROBE)
         if(ring_epoch_)return static_cast<std::uint32_t>(
             ring_epoch_->total_duration_ms()/1000);
@@ -781,6 +832,12 @@ public:
         if(h)mpv_free(const_cast<char*>(h));
         if(v)mpv_free(const_cast<char*>(v));
         if(a)mpv_free(const_cast<char*>(a));
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+        if(direct_session_)
+            str+=" | direct "+std::to_string(direct_session_->range_requests())+
+                 " ranges "+std::to_string(direct_session_->retained_bytes()/1024)+
+                 " KiB RAM";
+#endif
 #if defined(TTNX_M4_RING_STREAM_CB_PROBE)
         if(ring_epoch_) {
             const auto s=ring_epoch_->snapshot();
@@ -810,6 +867,11 @@ private:
             render_notifications_.fetch_add(1,std::memory_order_release);
     }
     void close() {
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+        // Cancel new HTTPS reads before waiting for libmpv's demux threads.
+        // Keep the signed URL / SSL owner alive through terminate_destroy.
+        if(direct_session_)direct_session_->cancel();
+#endif
 #if defined(TTNX_M4_RING_STREAM_CB_PROBE)
         if(ring_epoch_)ring_epoch_->request_stop();
 #endif
@@ -844,6 +906,10 @@ private:
     bool ring_loaded_{false},ring_verified_av_{false};
     bool ring_terminal_retired_{false};
     std::uint64_t epoch_frame_base_{0};
+#endif
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+    std::shared_ptr<NativeDirectAvSession> direct_session_{};
+    bool direct_loaded_{false};
 #endif
     std::string status_{"Starting libmpv..."};
     bool have_frame_{false},new_frame_{false};
@@ -990,10 +1056,16 @@ public:
 #if defined(TTNX_M4_RING_STREAM_CB_PROBE)
                         ,std::shared_ptr<playback::RollingStreamEpoch> ring_epoch={}
 #endif
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+                        ,std::shared_ptr<NativeDirectAvSession> direct_session={}
+#endif
                         ):
         player_(hls,adaptive,live
 #if defined(TTNX_M4_RING_STREAM_CB_PROBE)
                 ,std::move(ring_epoch)
+#endif
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+                ,std::move(direct_session)
 #endif
                 ),hls_(hls),adaptive_(adaptive),
         live_(live),video_id_(std::move(video_id)),
@@ -1263,6 +1335,14 @@ void open_m4_native_ring_candidate(std::shared_ptr<playback::RollingStreamEpoch>
     if(!epoch || !epoch->ring_for_decoder())return;
     brls::Application::pushActivity(new M3Activity(false,false,false,{},0,
                                                   std::move(epoch)));
+}
+#endif
+#if defined(TTNX_M4_DIRECT_AV_PROBE) && defined(TTNX_M4_RING_STREAM_CB_PROBE)
+void open_m4_native_direct_candidate(std::shared_ptr<NativeDirectAvSession> stream,
+                                     const std::string& video_id) {
+    if(!stream||!library::LocalLibrary::valid_id(video_id))return;
+    brls::Application::pushActivity(new M3Activity(false,false,false,video_id,0,
+                                                  {},std::move(stream)));
 }
 #endif
 void tick_m3_player(){M3Activity::tick_current();}
