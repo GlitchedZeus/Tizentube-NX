@@ -44,6 +44,10 @@ public:
         return (video_?video_->fetched_ranges():0)+
                (audio_?audio_->fetched_ranges():0);
     }
+    [[nodiscard]] std::uint64_t range_retries()const noexcept {
+        return (video_?video_->range_retries():0)+
+               (audio_?audio_->range_retries():0);
+    }
     [[nodiscard]] std::uint64_t retained_bytes()const noexcept {
         return (video_?video_->retained_bytes():0)+
                (audio_?audio_->retained_bytes():0);

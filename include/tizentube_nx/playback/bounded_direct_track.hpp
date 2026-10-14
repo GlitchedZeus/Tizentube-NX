@@ -5,12 +5,14 @@
 #include <utility>
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <limits>
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace ttnx::playback {
@@ -82,7 +84,26 @@ public:
             const std::uint64_t first=(offset/kWindow)*kWindow;
             const auto range=next_media_range(first,size_,kWindow);
             if(!range) {fault_=Fault::Http;return -1;}
+            // A single transient 502/503/504 or socket error must not
+            // poison the entire 35-minute VOD. Never retry 403/429, 200,
+            // invalid Content-Range, HTML, redirects or policy failures.
+            // Retry the EXACT same reviewed bounded range once, not a new
+            // URL, and remain interruptible by the app's Stop button.
             auto bytes=reader_.read(url_,*range);
+            if(cancelled_.load(std::memory_order_acquire)) {
+                fault_=Fault::Cancelled;return -1;
+            }
+            if(!bytes.ok() && is_transient(bytes) &&
+               !cancelled_.load(std::memory_order_acquire)) {
+                for(unsigned wait=0;wait<4 &&
+                    !cancelled_.load(std::memory_order_acquire);++wait)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                if(cancelled_.load(std::memory_order_acquire)) {
+                    fault_=Fault::Cancelled;return -1;
+                }
+                ++range_retries_;
+                bytes=reader_.read(url_,*range);
+            }
             if(cancelled_.load(std::memory_order_acquire)) {
                 fault_=Fault::Cancelled;return -1;
             }
@@ -123,18 +144,30 @@ public:
     [[nodiscard]] std::uint64_t fetched_ranges()const noexcept {
         std::lock_guard<std::mutex> lock(mu_);return ranges_fetched_;
     }
+    [[nodiscard]] std::uint64_t range_retries()const noexcept {
+        std::lock_guard<std::mutex> lock(mu_);return range_retries_;
+    }
     [[nodiscard]] std::uint64_t retained_bytes()const noexcept {
         std::lock_guard<std::mutex> lock(mu_);
         return window_.size()+previous_window_.size();
     }
     void cancel()noexcept {cancelled_.store(true,std::memory_order_release);}
 private:
+    [[nodiscard]] static bool is_transient(const MediaReadResult& r)noexcept {
+        if(r.failure==MediaReadFailure::TransportError ||
+           r.failure==MediaReadFailure::TransportUnavailable)
+            return r.http_status==0;
+        if(r.failure!=MediaReadFailure::UnexpectedStatus)return false;
+        return r.http_status==502 || r.http_status==503 ||
+               r.http_status==504;
+    }
     MediaChunkReader& reader_;
     std::string url_; // ephemeral; never diagnostics or SD
     mutable std::mutex mu_;
     std::atomic<bool> cancelled_{false};
     std::vector<char> window_,previous_window_;
-    std::uint64_t size_{0},window_first_{0},previous_first_{0},ranges_fetched_{0};
+    std::uint64_t size_{0},window_first_{0},previous_first_{0},
+                  ranges_fetched_{0},range_retries_{0};
     Fault fault_{Fault::None};
 };
 } // namespace ttnx::playback

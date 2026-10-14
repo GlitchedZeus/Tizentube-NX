@@ -14,8 +14,17 @@ public:
     std::uint64_t changed_size=0;
     unsigned calls=0;
     bool html=false, wrong_status=false;
+    unsigned temporary_errors=0;
+    int temporary_status=0;
     net::HttpResult perform(const net::HttpRequest& q)override {
         ++calls;
+        if(temporary_errors) {
+            --temporary_errors;
+            net::HttpResult failure;
+            failure.ok=false;
+            failure.response.status_code=temporary_status;
+            return failure;
+        }
         net::HttpResult out;out.ok=true;
         const auto value=q.headers[0].value;
         assert(value.starts_with("bytes="));
@@ -78,6 +87,31 @@ int main() {
     playback::MediaChunkReader bad_http(unsafe);
     playback::BoundedDirectTrack bad(bad_http,url);
     assert(!bad.prime()&&bad.fault()==playback::BoundedDirectTrack::Fault::Http);
+    // Recover only a transient network failure, preserving the precise
+    // byte-range and at most two buffered 256-KiB windows.
+    FakeTransport flaky;flaky.source=fake.source;flaky.temporary_errors=1;
+    playback::MediaChunkReader flaky_reader(flaky);
+    playback::BoundedDirectTrack rescued(flaky_reader,url);
+    assert(rescued.prime());
+    assert(flaky.calls==2 && rescued.range_retries()==1);
+    assert(rescued.retained_bytes()==playback::BoundedDirectTrack::kWindow);
+    // One temporary 503 on a new range is independently retried.
+    flaky.temporary_errors=1;flaky.temporary_status=503;
+    assert(rescued.read_at(262144,block,64)==64);
+    assert(flaky.calls==4 && rescued.range_retries()==2);
+    // Permanent 403 and HTTP 200 are NEVER retried.
+    FakeTransport forbidden;forbidden.source=fake.source;
+    forbidden.temporary_errors=1;forbidden.temporary_status=403;
+    playback::MediaChunkReader forbidden_reader(forbidden);
+    playback::BoundedDirectTrack denied(forbidden_reader,url);
+    assert(!denied.prime() && forbidden.calls==1);
+    assert(denied.range_retries()==0);
+    FakeTransport persistent;persistent.source=fake.source;
+    persistent.temporary_errors=2;persistent.temporary_status=502;
+    playback::MediaChunkReader persistent_reader(persistent);
+    playback::BoundedDirectTrack exhausted(persistent_reader,url);
+    assert(!exhausted.prime() && persistent.calls==2);
+    assert(exhausted.range_retries()==1);
     FakeTransport wrong;wrong.source=std::string(512*1024,'a');
     playback::MediaChunkReader wrong_reader(wrong);
     playback::BoundedDirectTrack not_mp4(wrong_reader,url);

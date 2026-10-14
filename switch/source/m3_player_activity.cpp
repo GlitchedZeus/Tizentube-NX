@@ -836,7 +836,7 @@ public:
         if(direct_session_)
             str+=" | direct "+std::to_string(direct_session_->range_requests())+
                  " ranges "+std::to_string(direct_session_->retained_bytes()/1024)+
-                 " KiB RAM";
+                 " KiB RAM | retry "+std::to_string(direct_session_->range_retries());
 #endif
 #if defined(TTNX_M4_RING_STREAM_CB_PROBE)
         if(ring_epoch_) {
