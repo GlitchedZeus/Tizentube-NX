@@ -64,6 +64,14 @@ int main(){
     assert(vinfo.seek_fn(vinfo.cookie,650001)<0);
     ainfo.cancel_fn(ainfo.cookie);
     assert(ainfo.read_fn(ainfo.cookie,part,32)<0);
+    // mpv can reopen the SAME audio source after a seek-time cancel.
+    mpv_stream_cb_info audio_reopened{};
+    assert(playback::DirectAvMpvBridge::open(&bridge,audiouri,
+                                            &audio_reopened)==0);
+    assert(audio_reopened.seek_fn(audio_reopened.cookie,150000)==150000);
+    assert(audio_reopened.read_fn(audio_reopened.cookie,part,32)==32);
+    assert(std::memcmp(part,audio.file.data()+150000,32)==0);
+    audio_reopened.close_fn(audio_reopened.cookie);
     // A per-cookie cancellation does not poison independent video transport.
     assert(vinfo.seek_fn(vinfo.cookie,0)==0);
     assert(vinfo.read_fn(vinfo.cookie,part,8)==8);

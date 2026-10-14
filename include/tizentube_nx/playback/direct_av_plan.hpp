@@ -2,6 +2,7 @@
 #pragma once
 #include "tizentube_nx/playback/playback.hpp"
 #include "tizentube_nx/core/content_filter.hpp"
+#include "tizentube_nx/core/url.hpp"
 #include <optional>
 #include <string>
 

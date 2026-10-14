@@ -97,8 +97,11 @@ private:
     static void cancel_cookie(void* ptr) {
         if(!ptr)return;
         auto* c=static_cast<Cookie*>(ptr);
+        // mpv uses cancel_fn to interrupt obsolete demux reads on seek.
+        // Only retire this cookie; an *entire* track remains usable for
+        // a newly opened cookie at another range offset. Whole-session
+        // cancellation is an explicit Stop via DirectAvMpvBridge::cancel.
         c->cancelled.store(true,std::memory_order_release);
-        c->track->cancel();
     }
     static void close_cookie(void* ptr) {
         delete static_cast<Cookie*>(ptr);
