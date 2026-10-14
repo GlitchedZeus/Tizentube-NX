@@ -190,6 +190,19 @@ jobs:
             -o /tmp/ttnx-direct-admission-san
           ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
             /tmp/ttnx-direct-admission-san
+      - name: Structural direct A/V native route and no-SD safety contracts
+        run: python3 -m unittest discover -s tests -p m4_direct_av_integration_contract_tests.py -v
+      - name: Sanitized 35-minute virtual VOD zero-SD two-track seek proof
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror -O1 -g \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -pthread -Iinclude tests/direct_av_long_vod_tests.cpp \
+            src/core/media_chunks.cpp src/core/playback.cpp \
+            src/core/outbound_policy.cpp src/core/url.cpp \
+            -o /tmp/ttnx-direct-long-vod-san
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/ttnx-direct-long-vod-san
       - name: M4 native libmpv local-only probe isolation contract
         run: python3 -m unittest discover -s tests -p m4_local_player_contract_tests.py -v
       - name: Sanitized rolling local-playlist admission and hostile URI gate

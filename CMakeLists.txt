@@ -294,6 +294,11 @@ if(TTNX_BUILD_TESTS)
     target_link_libraries(tizentube_nx_direct_av_mpv_bridge_tests PRIVATE tizentube_nx_core)
     add_test(NAME direct_av_mpv_bridge COMMAND tizentube_nx_direct_av_mpv_bridge_tests)
 
+    add_executable(tizentube_nx_direct_av_long_vod_tests
+        tests/direct_av_long_vod_tests.cpp)
+    target_link_libraries(tizentube_nx_direct_av_long_vod_tests PRIVATE tizentube_nx_core Threads::Threads)
+    add_test(NAME direct_av_long_vod COMMAND tizentube_nx_direct_av_long_vod_tests)
+
     add_executable(tizentube_nx_direct_av_plan_tests
         tests/direct_av_plan_tests.cpp)
     target_link_libraries(tizentube_nx_direct_av_plan_tests PRIVATE tizentube_nx_core)
