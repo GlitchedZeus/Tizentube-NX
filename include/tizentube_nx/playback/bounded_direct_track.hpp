@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include "tizentube_nx/playback/media_chunks.hpp"
+#include "tizentube_nx/playback/playback.hpp"
+#include <utility>
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
