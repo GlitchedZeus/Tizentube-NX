@@ -30,6 +30,7 @@
 #include "tizentube_nx/playback/hls_fallback.hpp"
 #include "tizentube_nx/playback/hls_segment.hpp"
 #include "tizentube_nx/playback/hls_cache.hpp"
+#include "tizentube_nx/playback/adaptive_media_budget.hpp"
 #if defined(TTNX_M4_NATIVE_TEST_UI) && defined(TTNX_M4_RING_STREAM_CB_PROBE)
 #include "m4_mpv_stream_cb_probe.hpp"
 #include "tizentube_nx/core/content_filter.hpp"
@@ -1833,6 +1834,8 @@ private:
                                             ttnx::playback::AudioCodec::Aac;
                                     ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Direct,ttnx::switch_app::M3Event::Selected,have_muxed ? 1 : 0,have_pair ? 1 : 0,static_cast<std::int64_t>(resolved->video.size())*1000+static_cast<std::int64_t>(resolved->audio.size()));
                                     using Cache=ttnx::switch_app::SwitchMediaCacheSink;
+                                    ttnx::playback::AdaptiveMediaBudget pair_budget;
+                                    std::atomic_bool pair_too_large{false};
                                     ttnx::playback::MediaChunkReader reader(audio_transport);
                                     auto download=[&](const std::string& url,Cache& sink,
                                                       int phase,
@@ -1844,6 +1847,18 @@ private:
                                             if(sibling_failed)sibling_failed->store(true);
                                             ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Cache,ttnx::switch_app::M3Event::Fail,phase,static_cast<int>(sink.last_storage_error()),sink.last_storage_errno());
                                             ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Transfer,ttnx::switch_app::M3Event::Fail,phase,static_cast<int>(job.error()),0);
+                                            return false;
+                                        }
+                                        if((phase==4 || phase==5) &&
+                                           !pair_budget.admit(job.total_bytes())) {
+                                            pair_too_large.store(true);
+                                            if(sibling_failed)sibling_failed->store(true);
+                                            job.cancel();
+                                            ttnx::switch_app::M3Diagnostics::record(
+                                                ttnx::switch_app::M3Stage::Cache,
+                                                ttnx::switch_app::M3Event::Refused,
+                                                phase,static_cast<std::int64_t>(job.total_bytes()),
+                                                static_cast<std::int64_t>(pair_budget.reserved()));
                                             return false;
                                         }
                                         media_step_.store(phase);
@@ -1970,6 +1985,7 @@ private:
                                                 audio_ok?1:0,video_ok?1:0);
                                             feedback=media_cancel_requested_.load()
                                                 ?"M3 adaptive download cancelled."
+                                                :pair_too_large.load()?"M3: full download over 60MB SD limit; requires streaming."
                                                 :!audio_ok?"M3 adaptive AAC range download failed."
                                                 :"M3 adaptive video transfer/MP4 validation failed.";
                                         }

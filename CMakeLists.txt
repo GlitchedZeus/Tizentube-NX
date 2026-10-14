@@ -98,6 +98,12 @@ if(TTNX_BUILD_TESTS)
     # File-backed ring never uses media-sized RAM, and decoder readers
     # prevent unsafe eviction. Host stub matches the pinned 0.36 API.
     find_package(Threads REQUIRED)
+    add_executable(tizentube_nx_adaptive_playback_policy_tests
+        tests/adaptive_playback_policy_tests.cpp)
+    target_include_directories(tizentube_nx_adaptive_playback_policy_tests PRIVATE include)
+    target_link_libraries(tizentube_nx_adaptive_playback_policy_tests PRIVATE Threads::Threads)
+    add_test(NAME adaptive_playback_policy COMMAND tizentube_nx_adaptive_playback_policy_tests)
+
     add_executable(tizentube_nx_rolling_file_stream_tests
         tests/rolling_file_stream_tests.cpp)
     target_include_directories(tizentube_nx_rolling_file_stream_tests PRIVATE include)

@@ -13,6 +13,9 @@
 #include "hls_cache_sink.hpp"
 #include "tizentube_nx/playback/audio_gate.hpp"
 #include "tizentube_nx/playback/hls_playback_lease.hpp"
+#if defined(TTNX_M3_ADAPTIVE_EDL_SEEK)
+#include "tizentube_nx/playback/local_adaptive_edl.hpp"
+#endif
 #ifdef TTNX_M4_TV_PLAYER_UI
 #include "tizentube_nx/ui/tv_player_controls.hpp"
 #endif
@@ -123,8 +126,12 @@ public:
         if(use_adaptive_) {
             const bool pair_ready=SwitchMediaCacheSink::adaptive_pair_valid();
             M3Diagnostics::record(M3Stage::Cache,M3Event::Status,3,pair_ready ? 1 : 0,0);
+#if defined(TTNX_M3_ADAPTIVE_EDL_SEEK)
+            if(!pair_ready) {
+#else
             if(!pair_ready ||
                !attach_external_aac(SwitchMediaCacheSink::kAdaptiveAudio)) {
+#endif
                 status_="Adaptive H.264/AAC files incomplete or unverified";
                 close();return false;
             }
@@ -308,6 +315,19 @@ public:
             live_loaded_=true;
         }
 #endif
+#if defined(TTNX_M3_ADAPTIVE_EDL_SEEK)
+        // mpv EDL new_stream puts two already-verified local tracks in
+        // one timeline, avoiding the known --audio-files fast-seek bug.
+        std::string edl;
+        if(use_adaptive_) {
+            auto combined=playback::local_adaptive_edl(
+                SwitchMediaCacheSink::kAdaptiveVideo,
+                SwitchMediaCacheSink::kAdaptiveAudio);
+            if(!combined){status_="Local A/V EDL rejected";return false;}
+            edl=*combined;
+            path=edl.c_str();
+        }
+#endif
         const char* cmd[]={"loadfile",path,"replace",nullptr};
         audio_gate_.reset();
         audio_failure_latched_=false;
@@ -344,7 +364,13 @@ public:
             return;
         }
         const auto arg=std::to_string(sec);
-        const char* cmd[]={"seek",arg.c_str(),"relative",nullptr};
+#if defined(TTNX_M3_ADAPTIVE_EDL_SEEK)
+        // Exact, not mpv's keyframe-only default relative seek.
+        const char* mode=use_adaptive_?"relative+exact":"relative";
+#else
+        const char* mode="relative";
+#endif
+        const char* cmd[]={"seek",arg.c_str(),mode,nullptr};
         const int result=mpv_command(handle_,cmd);
         M3Diagnostics::record(M3Stage::Player,M3Event::Seek,sec,result,0);
     }

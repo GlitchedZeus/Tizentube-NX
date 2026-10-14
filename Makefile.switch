@@ -111,6 +111,8 @@ ifneq ($(TTNX_M4_RING_STREAM_CB_PROBE),1)
 $(error TTNX_M4_NATIVE_TEST_UI requires TTNX_M4_RING_STREAM_CB_PROBE=1)
 endif
 DEFINES += -DTTNX_M4_NATIVE_TEST_UI
+# Test the EDL approach only in the disposable M4 hardware-lab NRO.
+DEFINES += -DTTNX_M3_ADAPTIVE_EDL_SEEK
 endif
 
 # Original TV-style player is separately opted in for visual verification.
