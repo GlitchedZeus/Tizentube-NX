@@ -113,6 +113,9 @@ endif
 DEFINES += -DTTNX_M4_NATIVE_TEST_UI
 # Test the EDL approach only in the disposable M4 hardware-lab NRO.
 DEFINES += -DTTNX_M3_ADAPTIVE_EDL_SEEK
+# The native-only adaptive HTTP-range A/V bridge is opt-in, NEVER
+# activated by standard builds or accepted M3 menu routes.
+DEFINES += -DTTNX_M4_DIRECT_AV_PROBE
 endif
 
 # Original TV-style player is separately opted in for visual verification.

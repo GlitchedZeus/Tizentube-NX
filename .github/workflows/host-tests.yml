@@ -167,6 +167,16 @@ jobs:
             -o /tmp/ttnx-direct-track-san
           ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
             /tmp/ttnx-direct-track-san
+      - name: Sanitized separate video/audio stream callbacks and random seeking
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror -O1 -g \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iinclude -Itests/stubs tests/direct_av_mpv_bridge_tests.cpp \
+            src/core/media_chunks.cpp src/core/playback.cpp \
+            -o /tmp/ttnx-direct-av-bridge-san
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/ttnx-direct-av-bridge-san
       - name: M4 native libmpv local-only probe isolation contract
         run: python3 -m unittest discover -s tests -p m4_local_player_contract_tests.py -v
       - name: Sanitized rolling local-playlist admission and hostile URI gate

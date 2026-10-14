@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <new>
+#include <algorithm>
 #include <string>
 #include <string_view>
 #include <utility>

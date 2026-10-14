@@ -288,6 +288,12 @@ if(TTNX_BUILD_TESTS)
     target_link_libraries(tizentube_nx_bounded_direct_track_tests PRIVATE tizentube_nx_core)
     add_test(NAME bounded_direct_track COMMAND tizentube_nx_bounded_direct_track_tests)
 
+    add_executable(tizentube_nx_direct_av_mpv_bridge_tests
+        tests/direct_av_mpv_bridge_tests.cpp)
+    target_include_directories(tizentube_nx_direct_av_mpv_bridge_tests PRIVATE tests/stubs)
+    target_link_libraries(tizentube_nx_direct_av_mpv_bridge_tests PRIVATE tizentube_nx_core)
+    add_test(NAME direct_av_mpv_bridge COMMAND tizentube_nx_direct_av_mpv_bridge_tests)
+
     add_executable(tizentube_nx_media_chunks_tests tests/media_chunks_tests.cpp)
     target_link_libraries(tizentube_nx_media_chunks_tests PRIVATE tizentube_nx_core)
     add_test(NAME media_chunks COMMAND tizentube_nx_media_chunks_tests)
