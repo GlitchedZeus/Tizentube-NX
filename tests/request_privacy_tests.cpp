@@ -98,6 +98,32 @@ int main() {
         }
     }
 
+    // M3 player metadata builder remains same-origin, guest-only and free
+    // of official client telemetry; actual playback/CDN is NOT enabled here.
+    const auto player = make_player_request(guest, "IzJ7R4EnYmI");
+    expect(player.has_value(), "normal-video player metadata request builds");
+    if (player) {
+        expect(player->method == ttnx::net::HttpMethod::Post &&
+               player->url ==
+               "https://www.youtube.com/youtubei/v1/player?prettyPrint=false&alt=json",
+               "player request stays on approved HTTPS Youtube guest origin");
+        expect(player->body.find("\"videoId\":\"IzJ7R4EnYmI\"") != std::string::npos,
+               "only supplied canonical video ID is requested");
+        expect(player->body.find("adSignalsInfo") == std::string::npos &&
+               player->body.find("playbackTracking") == std::string::npos &&
+               player->body.find("clickTrackingParams") == std::string::npos &&
+               player->body.find("autoplay") == std::string::npos &&
+               player->body.find("racyCheckOk") == std::string::npos &&
+               player->body.find("contentCheckOk") == std::string::npos,
+               "no ads, telemetry or automatic maturity bypass fields sent");
+    }
+    expect(!make_player_request(guest, "/shorts/IzJ7R4EnYmI"),
+           "Shorts URL cannot masquerade as normal player ID");
+    expect(!make_player_request(guest, "http://www.youtube.com/watch?v=IzJ7R4EnYmI"),
+           "arbitrary URLs cannot drive player endpoint");
+    expect(!make_player_request(guest, "untrusted"), "invalid media ID blocked");
+
+
     const auto continuation = make_search_request(guest, "must-not-send", "OPAQUE-CONTINUATION");
     expect(continuation.has_value(), "bounded continuation request builds");
     if (continuation) {

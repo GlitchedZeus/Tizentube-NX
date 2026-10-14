@@ -7,7 +7,9 @@
 #include <cstdint>
 #include <cstdlib>
 #include <functional>
+#include <future>
 #include <mutex>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -17,12 +19,35 @@
 
 #include "app_storage.hpp"
 #include "libnx_http_client.hpp"
+#ifdef TTNX_M3_INTEGRATED
+#include "m3_player_activity.hpp"
+#include "m3_diagnostics.hpp"
+#include "media_file_sink.hpp"
+#include "tizentube_nx/playback/guest_direct_extractor.hpp"
+#include "tizentube_nx/playback/progressive_prepare.hpp"
+#include "hls_cache_sink.hpp"
+#include "tizentube_nx/playback/hls_probe.hpp"
+#include "tizentube_nx/playback/hls_fallback.hpp"
+#include "tizentube_nx/playback/hls_segment.hpp"
+#include "tizentube_nx/playback/hls_cache.hpp"
+#include "tizentube_nx/playback/adaptive_media_budget.hpp"
+#if defined(TTNX_M4_NATIVE_TEST_UI) && defined(TTNX_M4_RING_STREAM_CB_PROBE)
+#include "m4_mpv_stream_cb_probe.hpp"
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+#include "m4_direct_av.hpp"
+#include "tizentube_nx/playback/direct_av_plan.hpp"
+#endif
+#include "tizentube_nx/core/content_filter.hpp"
+#endif
+#endif
 #include "tizentube_nx/core/home_model.hpp"
 #include "tizentube_nx/core/channel_model.hpp"
 #include "tizentube_nx/core/url.hpp"
 #include "tizentube_nx/core/search_model.hpp"
 #include "tizentube_nx/core/search_presentation.hpp"
 #include "tizentube_nx/ui/navigation.hpp"
+#include "tizentube_nx/ui/library_pager.hpp"
+#include "tizentube_nx/library/local_library.hpp"
 #include "tizentube_nx/youtube/guest_api.hpp"
 #include "tizentube_nx/youtube/guest_home.hpp"
 #include "tizentube_nx/youtube/guest_channel.hpp"
@@ -292,6 +317,9 @@ public:
         pump_home_result();
         pump_search_result();
         pump_channel_result();
+#ifdef TTNX_M3_INTEGRATED
+        pump_m3_video();
+#endif
         update_frame_rate();
     }
 
@@ -300,6 +328,48 @@ public:
         if (home_worker_.joinable()) home_worker_.join();
         if (search_worker_.joinable()) search_worker_.join();
         if (channel_worker_.joinable()) channel_worker_.join();
+#ifdef TTNX_M3_INTEGRATED
+        media_cancel_requested_.store(true);
+        if (media_worker_.joinable()) media_worker_.join();
+#if defined(TTNX_M4_NATIVE_TEST_UI) && defined(TTNX_M4_RING_STREAM_CB_PROBE)
+        // Shutdown may bypass pump_m3_video(). Never leave an unlaunched
+        // producer holding an app-owned temporary SD file or SSL client.
+        std::shared_ptr<ttnx::playback::RollingStreamEpoch> abandoned_ring;
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+        std::shared_ptr<ttnx::switch_app::NativeDirectAvSession> abandoned_direct;
+#endif
+        {
+            std::lock_guard<std::mutex> lock(media_mutex_);
+            abandoned_ring=std::move(pending_m4_epoch_);
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+            abandoned_direct=std::move(pending_m4_direct_);
+#endif
+        }
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+        if(abandoned_direct)abandoned_direct->cancel();
+#endif
+        if(abandoned_ring) {
+            abandoned_ring->stop_and_join();
+            (void)abandoned_ring->cleanup();
+        }
+#endif
+        // A PLUS-button/app exit from Search does not run the usual UI
+        // completion pump. Sweep the just-cancelled temporary media here,
+        // after the worker and both parallel transfer tasks have joined.
+        // Active libmpv explicitly blocks deletion via its playback lease;
+        // in that case the next boot performs the bounded recovery sweep.
+        const bool mp4_discarded=
+            ttnx::switch_app::SwitchMediaCacheSink::discard_session_media();
+        const bool hls_discarded=
+            ttnx::switch_app::SwitchHlsCacheSink::discard_session_media();
+        ttnx::switch_app::M3Diagnostics::record(
+            ttnx::switch_app::M3Stage::Cache,
+            mp4_discarded && hls_discarded
+                ?ttnx::switch_app::M3Event::Pass:ttnx::switch_app::M3Event::Fail,
+            7,mp4_discarded ? 1 : 0,hls_discarded ? 1 : 0);
+        media_busy_.store(false);
+        media_done_.store(false);
+#endif
         network_busy_.store(false);
         home_busy_.store(false);
         home_worker_done_.store(false);
@@ -318,7 +388,21 @@ private:
 
     ttnx::core::Settings settings_;
     bool storage_ready_;
+    ttnx::library::LocalLibrary library_{};
+    bool history_clear_armed_{false};
     std::string query_;
+
+    [[nodiscard]] std::string library_path()const {
+        return std::string(ttnx::kAppDirectory)+"/library.txt";
+    }
+    void refresh_library_metadata() {
+        ttnx::library::LocalLibrary loaded;
+        if(storage_ready_ && loaded.load(library_path()))
+            library_=std::move(loaded);
+    }
+    [[nodiscard]] bool persist_library_metadata() {
+        return storage_ready_ && library_.save(library_path());
+    }
 
     // main() owns this app-lifetime client. Workers only borrow it, so repeated
     // guest-test/Search presses never cycle socket/SSL service initialization.
@@ -336,6 +420,41 @@ private:
     std::string network_detail_{
         "No YouTube connection has been attempted. Networking starts only when you choose the test action."};
     std::optional<ttnx::youtube::GuestSession> guest_session_;
+#ifdef TTNX_M3_INTEGRATED
+    // Worker-only media service; never let a signed URL enter UI labels or logs.
+    std::thread media_worker_;
+    std::mutex media_mutex_;
+    std::atomic_bool media_busy_{false};
+    std::atomic_bool media_done_{false};
+    std::atomic_bool media_cancel_requested_{false};
+    bool pending_media_success_{false};
+    bool pending_media_hls_{false};
+    bool pending_media_adaptive_{false};
+#if defined(TTNX_M4_NATIVE_TEST_UI) && defined(TTNX_M4_RING_STREAM_CB_PROBE)
+    std::shared_ptr<ttnx::playback::RollingStreamEpoch> pending_m4_epoch_{};
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+    std::shared_ptr<ttnx::switch_app::NativeDirectAvSession> pending_m4_direct_{};
+#endif
+#endif
+    std::string pending_media_feedback_;
+    std::string media_feedback_{"Choose a normal video, then Play video (M3)."};
+    std::string active_m3_video_id_;
+    std::uint32_t active_m3_resume_seconds_{0};
+    std::atomic<int> media_step_{0}; // 0 resolver, 1 media URL accepted, 2 downloading
+    std::atomic<std::uint64_t> media_progress_bytes_{0};
+    std::atomic<std::uint64_t> media_progress_total_{0};
+    std::atomic_bool media_parallel_adaptive_{false};
+    std::atomic<std::uint64_t> media_audio_bytes_{0},media_audio_total_{0};
+    std::atomic<std::uint64_t> media_video_bytes_{0},media_video_total_{0};
+    std::atomic<unsigned> media_segments_done_{0};
+    std::atomic<unsigned> media_segments_total_{0};
+    std::atomic_bool media_external_aac_phase_{false};
+    std::atomic_bool media_buffer_ready_{false};
+    std::atomic<std::uint64_t> media_buffer_ms_{0};
+    std::chrono::steady_clock::time_point media_last_ui_update_ =
+        std::chrono::steady_clock::now();
+    brls::Label* m3_status_label_{nullptr};
+#endif
 
     // HomeModel is UI-thread-only. The explicit Home worker publishes normalized
     // HomePage data plus the captured generation and never touches Borealis Views.
@@ -414,6 +533,17 @@ private:
         brls::Button* button{nullptr};
         brls::Label* detail{nullptr};
         brls::Button* open_channel{nullptr};
+        brls::Button* watch_later{nullptr};
+        brls::Button* favorite_video{nullptr};
+        brls::Button* follow_channel{nullptr};
+#ifdef TTNX_M3_INTEGRATED
+        brls::Button* play_video{nullptr};
+#if defined(TTNX_M4_NATIVE_TEST_UI) && defined(TTNX_M4_RING_STREAM_CB_PROBE)
+        brls::Button* m4_test_video{nullptr};
+#endif
+        brls::Label* play_status{nullptr};
+        brls::Button* cancel_video{nullptr};
+#endif
     };
     std::vector<SearchDetailRow> search_detail_rows_;
 
@@ -480,6 +610,13 @@ private:
         } else {
             text += network_summary_;
         }
+#ifdef TTNX_M3_INTEGRATED
+        // The footer stays visible even when the selected Play button is
+        // hundreds of rows below the global status label.
+        if (!active_m3_video_id_.empty()) {
+            text += " | M3: " + bounded_ui_text(media_feedback_, 100);
+        }
+#endif
         if (settings_.show_fps && last_fps_ > 0) {
             text += " | " + std::to_string(last_fps_) + " FPS";
         }
@@ -801,6 +938,39 @@ private:
                 row.open_channel->setVisibility(
                     selected ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
             }
+            if (row.watch_later) {
+                row.watch_later->setVisibility(
+                    selected ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
+            }
+            if (row.favorite_video)
+                row.favorite_video->setVisibility(selected
+                    ?brls::Visibility::VISIBLE:brls::Visibility::GONE);
+            if (row.follow_channel)
+                row.follow_channel->setVisibility(selected
+                    ?brls::Visibility::VISIBLE:brls::Visibility::GONE);
+#ifdef TTNX_M3_INTEGRATED
+            if (row.play_video) {
+                row.play_video->setVisibility(
+                    selected ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
+            }
+#if defined(TTNX_M4_NATIVE_TEST_UI) && defined(TTNX_M4_RING_STREAM_CB_PROBE)
+            if (row.m4_test_video) {
+                row.m4_test_video->setVisibility(
+                    selected ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
+            }
+#endif
+            if (row.play_status) {
+                row.play_status->setVisibility(
+                    selected ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
+            }
+            if (row.cancel_video) {
+                const bool playing_this = media_busy_.load() &&
+                    row.identity == "video:" + active_m3_video_id_;
+                row.cancel_video->setVisibility(
+                    selected && playing_this
+                    ? brls::Visibility::VISIBLE : brls::Visibility::GONE);
+            }
+#endif
         }
     }
 
@@ -844,10 +1014,15 @@ private:
             return true;
         });
 
+        auto selection_text = ttnx::core::search_result_selection_display(result);
+#ifdef TTNX_M3_INTEGRATED
+        if (result.kind == ttnx::core::BrowseResultKind::Video) {
+            const auto stale = selection_text.find("\nPlayback is not enabled in this milestone.");
+            if (stale != std::string::npos) selection_text.erase(stale);
+        }
+#endif
         auto* detail_label = label(
-            search_results_box_,
-            ttnx::core::search_result_selection_display(result),
-            18);
+            search_results_box_, selection_text, 18);
         detail_label->setMarginBottom(14);
         detail_label->setVisibility(
             identity == search_model_.selected_identity()
@@ -865,7 +1040,109 @@ private:
                 return true;
             });
         }
-        search_detail_rows_.push_back({identity, select, detail_label, open_channel});
+        brls::Button* follow_channel = nullptr;
+        if(result.kind == ttnx::core::BrowseResultKind::Channel &&
+           ttnx::library::LocalLibrary::valid_channel_id(result.id)) {
+            const auto channel_id=result.id;
+            follow_channel=button(search_results_box_,"Follow on this Switch");
+            follow_channel->setVisibility(brls::Visibility::GONE);
+            follow_channel->registerClickAction([this,channel_id,follow_channel](brls::View*) {
+                refresh_library_metadata();
+                if(library_.follow_channel(channel_id) &&
+                   persist_library_metadata())
+                    follow_channel->setText("Following locally");
+                else follow_channel->setText("Cannot save local follow");
+                return true;
+            });
+        }
+        brls::Button* favorite_video = nullptr;
+        brls::Button* watch_later = nullptr;
+        if (result.kind == ttnx::core::BrowseResultKind::Video &&
+            ttnx::library::LocalLibrary::valid_id(result.id)) {
+            const auto video_id = result.id;
+            watch_later = button(search_results_box_, "Add to Watch Later (local)");
+            watch_later->setVisibility(brls::Visibility::GONE);
+            watch_later->registerClickAction([this, video_id, watch_later](brls::View*) {
+                refresh_library_metadata();
+                if(library_.add_watch_later(video_id) &&
+                   persist_library_metadata())
+                    watch_later->setText("Saved to Watch Later");
+                else watch_later->setText("Could not save: SD/library limit");
+                return true;
+            });
+            favorite_video=button(search_results_box_,"Add to Favorites (local)");
+            favorite_video->setVisibility(brls::Visibility::GONE);
+            favorite_video->registerClickAction([this,video_id,favorite_video](brls::View*) {
+                refresh_library_metadata();
+                if(library_.add_favorite(video_id) &&
+                   persist_library_metadata())
+                    favorite_video->setText("Saved to Favorites");
+                else favorite_video->setText("Could not save local favorite");
+                return true;
+            });
+        }
+#ifdef TTNX_M3_INTEGRATED
+        brls::Button* play_video = nullptr;
+#if defined(TTNX_M4_NATIVE_TEST_UI) && defined(TTNX_M4_RING_STREAM_CB_PROBE)
+        brls::Button* m4_test_video = nullptr;
+#endif
+        if (result.kind == ttnx::core::BrowseResultKind::Video &&
+            ttnx::core::is_valid_video_id(result.id)) {
+            // Keep the physically accepted M3 source/player available in
+            // both standard and M4 experimental hardware-test builds.
+            play_video = button(search_results_box_, "Play video (M3 experimental)");
+            play_video->setVisibility(brls::Visibility::GONE);
+            const auto video_id = result.id;
+            play_video->registerClickAction([this, video_id](brls::View*) {
+                start_m3_video(video_id);
+                return true;
+            });
+#if defined(TTNX_M4_NATIVE_TEST_UI) && defined(TTNX_M4_RING_STREAM_CB_PROBE)
+            if(!result.live && !result.upcoming) {
+                // M4 requires a current normalized, non-Shorts Search VOD.
+                // A library ID alone is never authority to open CDN media.
+                const ttnx::core::ContentItem verified{
+                    ttnx::core::ContentKind::Video,video_id,result.title,false,false};
+                m4_test_video=button(search_results_box_, "Play streaming (M4 hardware test)");
+                m4_test_video->setVisibility(brls::Visibility::GONE);
+                m4_test_video->registerClickAction([this,verified](brls::View*) {
+                    start_m4_native_video(verified);
+                    return true;
+                });
+            }
+#endif
+        }
+        brls::Label* play_status = nullptr;
+        if (play_video) {
+            play_status = label(search_results_box_, media_feedback_, 18);
+            play_status->setVisibility(brls::Visibility::GONE);
+        }
+        brls::Button* cancel_video = nullptr;
+        if (play_video) {
+            cancel_video = button(search_results_box_, "Cancel video download");
+            cancel_video->setVisibility(brls::Visibility::GONE);
+            cancel_video->registerClickAction([this](brls::View*) {
+                if (media_busy_.load()) {
+                    media_cancel_requested_.store(true);
+                    media_feedback_ = "M3: cancelling the current media request...";
+                    publish_m3_feedback_on_ui(active_m3_video_id_);
+                }
+                return true;
+            });
+        }
+        search_detail_rows_.push_back({
+            identity, select, detail_label, open_channel,
+            watch_later, favorite_video, follow_channel,
+            play_video,
+#if defined(TTNX_M4_NATIVE_TEST_UI) && defined(TTNX_M4_RING_STREAM_CB_PROBE)
+            m4_test_video,
+#endif
+            play_status, cancel_video});
+#else
+        search_detail_rows_.push_back({
+            identity, select, detail_label, open_channel,
+            watch_later, favorite_video, follow_channel});
+#endif
 
         const auto metadata = ttnx::core::search_result_metadata_display(result);
         if (!metadata.empty()) {
@@ -1332,6 +1609,674 @@ private:
         }
     }
 
+
+#ifdef TTNX_M3_INTEGRATED
+    // Do not silently retain a completed or partial prior video. The
+    // on-disk media folder is always throwaway, never watch history.
+    static bool discard_m3_session_media() noexcept {
+        const bool mp4=ttnx::switch_app::SwitchMediaCacheSink::discard_session_media();
+        const bool hls=ttnx::switch_app::SwitchHlsCacheSink::discard_session_media();
+        return mp4 && hls;
+    }
+    void publish_m3_feedback_on_ui(const std::string& video_id) {
+        // Global status is above Search results and offscreen when Play is
+        // focused. Put a diagnostic next to the actual selected video.
+        if (m3_status_label_) m3_status_label_->setText(media_feedback_);
+        for (auto& row : search_detail_rows_) {
+            if (row.play_status && row.identity == "video:" + video_id) {
+                row.play_status->setText(media_feedback_);
+            }
+        }
+        refresh_search_inline_details();
+        refresh_footer();
+    }
+
+#if defined(TTNX_M4_NATIVE_TEST_UI) && defined(TTNX_M4_RING_STREAM_CB_PROBE)
+    // Explicit hardware-lab build only. Normal M3 Search and Library playback
+    // never calls this function. Worker owns HTTPS setup and validates the
+    // HLS plan; UI receives only the shared, verified local SD epoch.
+    void start_m4_native_video(ttnx::core::ContentItem verified) {
+        if(media_busy_.load() || !guest_session_ || !guest_session_->usable() ||
+           verified.kind!=ttnx::core::ContentKind::Video ||
+           !ttnx::core::is_valid_video_id(verified.id) ||
+           ttnx::core::should_hide(verified)) {
+            media_feedback_="M4: verified normal guest video and idle network required.";
+            publish_m3_feedback_on_ui(verified.id);
+            return;
+        }
+        // A separate Search result, not a random 11-character video ID, is
+        // required to start the restricted native media/CDN experiment.
+        bool in_search=false;
+        for(const auto& result:search_model_.results()) {
+            if(result.kind==ttnx::core::BrowseResultKind::Video &&
+               result.id==verified.id && !result.live && !result.upcoming) {
+                in_search=true;break;
+            }
+        }
+        if(!in_search) {
+            media_feedback_="M4: only reviewed normal Search results may stream.";
+            publish_m3_feedback_on_ui(verified.id);
+            return;
+        }
+        if(media_worker_.joinable())media_worker_.join();
+        if(!discard_m3_session_media()) {
+            media_feedback_="M4: previous disposable media could not be cleared.";
+            publish_m3_feedback_on_ui(verified.id);
+            return;
+        }
+        active_m3_video_id_=verified.id;
+        active_m3_resume_seconds_=0; // never seek an unprimed live ring
+        (void)ttnx::switch_app::M3Diagnostics::begin_session();
+        media_cancel_requested_.store(false);
+        media_done_.store(false);
+        media_busy_.store(true);
+        media_step_.store(6);
+        media_feedback_="M4: locating verified H264/AAC VOD playlist...";
+        publish_m3_feedback_on_ui(verified.id);
+        const auto guest=*guest_session_;
+        try {
+            media_worker_=std::thread([this,verified=std::move(verified),guest] {
+                std::shared_ptr<ttnx::playback::RollingStreamEpoch> epoch;
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+                std::shared_ptr<ttnx::switch_app::NativeDirectAvSession> direct;
+#endif
+                std::string feedback="M4: approved muxed H264/AAC HLS unavailable.";
+                bool ready=false;
+                try {
+                    ttnx::switch_app::LibnxHlsPlaylistTransport manifests;
+                    if(manifests.ready() && !media_cancel_requested_.load()) {
+                        ttnx::playback::HlsSourceProbe probe(network_client_,manifests,guest);
+                        const auto plan=probe.inspect(verified.id,720,60);
+                        // Unlike M3's separate MP4/AAC fallback, this first
+                        // M4 transport accepts ONLY a muxed H264/AAC MPEG-TS
+                        // playlist. YouTube can legitimately lack that VOD
+                        // representation even when separate MP4 plays.
+                        ttnx::switch_app::M3Diagnostics::record(
+                            ttnx::switch_app::M3Stage::Hls,
+                            ttnx::switch_app::M3Event::Status,
+                            6,plan?1:0,static_cast<int>(probe.last_error()));
+                        if(!plan) {
+                            feedback=probe.last_error()==
+                                ttnx::playback::HlsProbeError::VariantUnavailable
+                                ?"M4: no muxed H264/AAC HLS; separate video/audio streaming is not implemented."
+                                :std::string("M4 source: ")+
+                                     ttnx::playback::describe_hls_probe_failure(
+                                         probe.last_error());
+                        }
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+                        // YouTube often supplies DASH-style separate H264 +
+                        // AAC instead of a muxed MPEG-TS VOD. Only a *missing
+                        // compatible HLS rendition* permits this strict
+                        // direct source fallback, never a bad or unsafe HLS.
+                        if(!plan && !media_cancel_requested_.load() &&
+                           probe.last_error()==
+                               ttnx::playback::HlsProbeError::VariantUnavailable) {
+                            media_step_.store(7);
+                            ttnx::playback::GuestDirectExtractor direct_source(
+                                network_client_,guest,true);
+                            const auto extracted=direct_source.resolve(verified.id);
+                            const auto admitted=extracted
+                                ?ttnx::playback::admit_direct_av_plan(*extracted,verified)
+                                :std::nullopt;
+                            ttnx::switch_app::M3Diagnostics::record(
+                                ttnx::switch_app::M3Stage::Direct,
+                                ttnx::switch_app::M3Event::Selected,
+                                7,extracted?1:0,admitted?1:0);
+                            if(admitted && !media_cancel_requested_.load()) {
+                                direct=ttnx::switch_app::NativeDirectAvSession::create(
+                                    *admitted);
+                                ready=static_cast<bool>(direct);
+                                feedback=ready
+                                    ?"M4: separate H264/AAC HTTP-range RAM streams ready."
+                                    :"M4: source MP4 prefix or approved HTTPS range rejected.";
+                            } else feedback="M4: no safe direct H264/AAC VOD pair available.";
+                        }
+#endif
+                        if(plan && !media_cancel_requested_.load()) {
+                            epoch=ttnx::switch_app::create_native_ring_epoch(*plan,verified);
+                            if(epoch && epoch->start()) {
+                                const auto deadline=std::chrono::steady_clock::now()+
+                                    std::chrono::seconds(35);
+                                while(!media_cancel_requested_.load() &&
+                                      std::chrono::steady_clock::now()<deadline) {
+                                    const auto state=epoch->snapshot();
+                                    if(epoch->ring_for_decoder()) {
+                                        ready=true;break;
+                                    }
+                                    if(state.phase==ttnx::playback::RollingStreamEpoch::Phase::Failed ||
+                                       state.phase==ttnx::playback::RollingStreamEpoch::Phase::StopRequested ||
+                                       state.phase==ttnx::playback::RollingStreamEpoch::Phase::Joined)
+                                        break;
+                                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                                }
+                                feedback=ready?"M4: verified H264/AAC prefix ready for native decoder.":
+                                    "M4: no verified playable prefix within bounded startup window.";
+                            } else feedback="M4: verified native stream could not start.";
+                        }
+                    }
+                } catch(...) {
+                    feedback="M4: native HLS source preparation failed.";
+                }
+                if(media_cancel_requested_.load()) {
+                    ready=false;
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+                    if(direct){direct->cancel();direct.reset();}
+#endif
+                    feedback="M4: cancelled before the player opened.";
+                }
+                if(!ready && epoch) {
+                    epoch->stop_and_join();
+                    (void)epoch->cleanup();
+                    epoch.reset();
+                }
+                {
+                    std::lock_guard<std::mutex> lock(media_mutex_);
+                    pending_media_success_=ready;
+                    pending_media_hls_=false;
+                    pending_media_adaptive_=false;
+                    pending_media_feedback_=std::move(feedback);
+                    pending_m4_epoch_=std::move(epoch);
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+                    pending_m4_direct_=std::move(direct);
+#endif
+                }
+                media_done_.store(true);
+            });
+        } catch(...) {
+            media_busy_.store(false);
+            media_feedback_="M4: unable to create native media preparation worker.";
+            publish_m3_feedback_on_ui(active_m3_video_id_);
+        }
+    }
+#endif
+
+    void start_m3_video(std::string normal_video_id,
+                        std::uint32_t resume_seconds=0) {
+        if (media_busy_.load() || !guest_session_ || !guest_session_->usable()) {
+            media_feedback_ = "Connect to guest YouTube first, or wait for current download.";
+            publish_m3_feedback_on_ui(normal_video_id);
+            return;
+        }
+        if (!ttnx::core::is_valid_video_id(normal_video_id)) {
+            media_feedback_ = "Invalid normal video ID (Shorts are forbidden).";
+            publish_m3_feedback_on_ui(normal_video_id);
+            return;
+        }
+        if (media_worker_.joinable()) media_worker_.join();
+        if(!discard_m3_session_media()) {
+            media_feedback_="M3: cannot remove prior temporary media from SD. "
+                            "Free the app cache before playing.";
+            publish_m3_feedback_on_ui(normal_video_id);
+            return;
+        }
+        active_m3_video_id_ = normal_video_id;
+        active_m3_resume_seconds_ = resume_seconds;
+        const bool diagnostic_recording=ttnx::switch_app::M3Diagnostics::begin_session();
+        (void)diagnostic_recording;
+        const auto guest = *guest_session_;
+        media_cancel_requested_.store(false);
+        media_done_.store(false);
+        media_busy_.store(true);
+        media_step_.store(0);
+        media_progress_bytes_.store(0);
+        media_progress_total_.store(0);
+        media_parallel_adaptive_.store(false);
+        media_audio_bytes_.store(0);
+        media_audio_total_.store(0);
+        media_video_bytes_.store(0);
+        media_video_total_.store(0);
+        media_segments_done_.store(0);
+        media_segments_total_.store(0);
+        media_external_aac_phase_.store(false);
+        media_buffer_ready_.store(false);
+        media_buffer_ms_.store(0);
+        media_feedback_ = "M3: locating approved guest HLS video/audio streams...";
+        publish_m3_feedback_on_ui(normal_video_id);
+
+        try {
+            media_worker_ = std::thread([this, normal_video_id, guest] {
+                std::string feedback="M3 HLS playback source unavailable.";
+                bool completed=false;
+                bool completed_hls=false;
+                bool completed_adaptive=false;
+                ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Session,ttnx::switch_app::M3Event::Ready,0,0,0);
+                try {
+                    ttnx::switch_app::LibnxHlsPlaylistTransport manifests;
+                    ttnx::switch_app::LibnxHlsSegmentTransport segments;
+                    ttnx::switch_app::LibnxMediaChunkTransport audio_transport;
+                    ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Source,ttnx::switch_app::M3Event::Begin,manifests.ready() ? 1 : 0,segments.ready() ? 1 : 0,audio_transport.ready() ? 1 : 0);
+                    if (!manifests.ready() || !segments.ready() ||
+                        !audio_transport.ready()) {
+                        feedback="M3: native HLS TLS service unavailable.";
+                    } else if(media_cancel_requested_.load()) {
+                        feedback="M3: video request cancelled.";
+                    } else {
+                        // M2 Search retains its accepted anonymous WEB guest
+                        // session. A separate reviewed player identity reuses
+                        // that visitor only for HLS source discovery.
+                        ttnx::playback::HlsSourceProbe probe(network_client_,manifests,guest);
+                        const auto source=probe.inspect(normal_video_id,720,30);
+                        ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Hls,ttnx::switch_app::M3Event::Status,source ? 1 : 0,static_cast<int>(probe.last_error()),0);
+                        if (!source) {
+                            feedback=ttnx::playback::describe_hls_probe_failure(probe.last_error());
+                            // Independent safe MP4 fallback: never bypass
+                            // YouTube guest playability, URL policy, Shorts,
+                            // DRM, H.264/AAC requirements or cache limits.
+                            if(ttnx::playback::permits_muxed_mp4_fallback(
+                                   probe.last_error()) &&
+                               !media_cancel_requested_.load()) {
+                                const std::string hls_reason=
+                                    ttnx::playback::describe_hls_probe_failure(
+                                        probe.last_error());
+                                ttnx::playback::GuestDirectExtractor extractor(
+                                    network_client_,guest,true);
+                                const auto resolved=extractor.resolve(normal_video_id);
+                                ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Direct,ttnx::switch_app::M3Event::Status,resolved ? 1 : 0,static_cast<int>(extractor.last_failure()),0);
+                                if(!resolved) {
+                                    feedback=hls_reason+" | Direct: "+
+                                        ttnx::playback::describe_direct_player_failure(
+                                            extractor.last_failure());
+                                } else {
+                                    ttnx::playback::QualityPolicy policy;
+                                    policy.max_height=720;policy.max_fps=30;
+                                    policy.permit_vp9=false;policy.prefer_adaptive=false;
+                                    auto muxed=*resolved;
+                                    muxed.audio.clear();
+                                    for(auto& fmt:muxed.video)
+                                        if(fmt.muxed_audio!=ttnx::playback::AudioCodec::Aac)
+                                            fmt.codec=ttnx::playback::VideoCodec::Unknown;
+                                    const auto single=ttnx::playback::select_streams(
+                                        muxed,policy);
+                                    policy.prefer_adaptive=true;
+                                    const auto paired=ttnx::playback::select_streams(
+                                        *resolved,policy);
+                                    const bool have_muxed=single.streams &&
+                                        !single.streams->adaptive &&
+                                        single.streams->video_codec==
+                                            ttnx::playback::VideoCodec::H264 &&
+                                        single.streams->audio_codec==
+                                            ttnx::playback::AudioCodec::Aac;
+                                    const bool have_pair=paired.streams &&
+                                        paired.streams->adaptive &&
+                                        paired.streams->video_codec==
+                                            ttnx::playback::VideoCodec::H264 &&
+                                        paired.streams->audio_codec==
+                                            ttnx::playback::AudioCodec::Aac;
+                                    ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Direct,ttnx::switch_app::M3Event::Selected,have_muxed ? 1 : 0,have_pair ? 1 : 0,static_cast<std::int64_t>(resolved->video.size())*1000+static_cast<std::int64_t>(resolved->audio.size()));
+                                    using Cache=ttnx::switch_app::SwitchMediaCacheSink;
+                                    ttnx::playback::AdaptiveMediaBudget pair_budget;
+                                    std::atomic_bool pair_too_large{false};
+                                    ttnx::playback::MediaChunkReader reader(audio_transport);
+                                    auto download=[&](const std::string& url,Cache& sink,
+                                                      int phase,
+                                                      ttnx::playback::MediaChunkReader& chunks,
+                                                      std::atomic_bool* sibling_failed=nullptr)->bool {
+                                        ttnx::playback::MediaDownloadJob job(chunks,sink);
+                                        ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Transfer,ttnx::switch_app::M3Event::Start,phase,0,0);
+                                        if(!job.start(url)){
+                                            if(sibling_failed)sibling_failed->store(true);
+                                            ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Cache,ttnx::switch_app::M3Event::Fail,phase,static_cast<int>(sink.last_storage_error()),sink.last_storage_errno());
+                                            ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Transfer,ttnx::switch_app::M3Event::Fail,phase,static_cast<int>(job.error()),0);
+                                            return false;
+                                        }
+                                        // start() does not know Content-Range
+                                        // total yet. It becomes known after
+                                        // the first bounded pump()/HTTP 206.
+                                        media_step_.store(phase);
+                                        bool budget_registered=false;
+                                        std::uint64_t last_reported_mib=0;
+                                        while(job.state()==
+                                              ttnx::playback::MediaDownloadState::Fetching &&
+                                              !media_cancel_requested_.load() &&
+                                              !(sibling_failed && sibling_failed->load())) {
+                                            (void)job.pump();
+                                            if((phase==4 || phase==5) &&
+                                               !budget_registered &&
+                                               job.total_bytes()!=0) {
+                                                budget_registered=true;
+                                                if(!pair_budget.admit(job.total_bytes())) {
+                                                    pair_too_large.store(true);
+                                                    if(sibling_failed)sibling_failed->store(true);
+                                                    ttnx::switch_app::M3Diagnostics::record(
+                                                        ttnx::switch_app::M3Stage::Cache,
+                                                        ttnx::switch_app::M3Event::Refused,
+                                                        phase,
+                                                        static_cast<std::int64_t>(job.total_bytes()),
+                                                        static_cast<std::int64_t>(pair_budget.reserved()));
+                                                    job.cancel();
+                                                    return false;
+                                                }
+                                            }
+                                            if(job.state()==ttnx::playback::MediaDownloadState::Error &&
+                                               sibling_failed)sibling_failed->store(true);
+                                            if(job.retry_delay_ms()) {
+                                                ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Transfer,ttnx::switch_app::M3Event::Retry,phase,job.last_http_status(),static_cast<int>(job.last_chunk_failure()));
+                                            }
+                                            const auto mib=job.bytes_received()/(4ULL*1024*1024);
+                                            if(mib>last_reported_mib) {
+                                                last_reported_mib=mib;
+                                                ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Transfer,ttnx::switch_app::M3Event::Progress,phase,static_cast<std::int64_t>(job.bytes_received()),static_cast<std::int64_t>(job.total_bytes()));
+                                            }
+                                            if(job.retry_delay_ms() &&
+                                               !media_cancel_requested_.load())
+                                                std::this_thread::sleep_for(
+                                                    std::chrono::milliseconds(
+                                                        job.retry_delay_ms()));
+                                            if(phase==4) {
+                                                media_audio_bytes_.store(job.bytes_received());
+                                                media_audio_total_.store(job.total_bytes());
+                                            } else if(phase==5) {
+                                                media_video_bytes_.store(job.bytes_received());
+                                                media_video_total_.store(job.total_bytes());
+                                            }
+                                            if(!media_parallel_adaptive_.load()) {
+                                                media_progress_bytes_.store(job.bytes_received());
+                                                media_progress_total_.store(job.total_bytes());
+                                            }
+                                        }
+                                        if(media_cancel_requested_.load() ||
+                                           (sibling_failed && sibling_failed->load() &&
+                                            job.state()==ttnx::playback::MediaDownloadState::Fetching)) {
+                                            job.cancel();
+                                            ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Transfer,ttnx::switch_app::M3Event::Cancel,phase,static_cast<std::int64_t>(job.bytes_received()),0);
+                                            return false;
+                                        }
+                                        if(phase==4) {
+                                            media_audio_bytes_.store(job.bytes_received());
+                                            media_audio_total_.store(job.total_bytes());
+                                        } else if(phase==5) {
+                                            media_video_bytes_.store(job.bytes_received());
+                                            media_video_total_.store(job.total_bytes());
+                                        }
+                                        ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Cache,job.state()==ttnx::playback::MediaDownloadState::Complete?ttnx::switch_app::M3Event::Pass:ttnx::switch_app::M3Event::Fail,phase,static_cast<int>(sink.last_storage_error()),sink.last_storage_errno());
+                                        ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Transfer,ttnx::switch_app::M3Event::End,phase,static_cast<int>(job.error())*1000+job.last_http_status(),static_cast<std::int64_t>(job.bytes_received()));
+                                        ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Transfer,ttnx::switch_app::M3Event::Status,phase,static_cast<int>(job.last_chunk_failure()),static_cast<std::int64_t>(job.total_bytes()));
+                                        ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Transfer,ttnx::switch_app::M3Event::Redirect,phase,job.redirect_hops_total(),0);
+                                        const bool good=job.state()==
+                                            ttnx::playback::MediaDownloadState::Complete;
+                                        if(!good && sibling_failed)sibling_failed->store(true);
+                                        return good;
+                                    };
+                                    if(have_muxed){
+                                        Cache movie;
+                                        completed=download(single.streams->video_url,
+                                                           movie,3,reader);
+                                        feedback=media_cancel_requested_.load()
+                                            ?"M3 download cancelled."
+                                            :completed?"M3: verified muxed MP4 ready."
+                                            :"M3 muxed MP4 signed range or SD error.";
+                                    } else if(have_pair){
+                                        Cache::invalidate_adaptive_pair();
+                                        Cache audio(Cache::Slot::AdaptiveAudio);
+                                        Cache video(Cache::Slot::AdaptiveVideo);
+                                        bool audio_ok=false,video_ok=false;
+                                        std::atomic_bool sibling_failed{false};
+                                        // Both media URLs came from the same approved
+                                        // guest response. Keep independent strict
+                                        // HTTPS transports/byte-range readers and
+                                        // distinct SD sinks, then join before commit.
+                                        // Two simultaneous downloads reduce startup
+                                        // on links where latency is the limiting factor.
+                                        ttnx::switch_app::LibnxMediaChunkTransport video_transport;
+                                        if(video_transport.ready()) {
+                                            ttnx::playback::MediaChunkReader video_reader(video_transport);
+                                            std::future<bool> video_result;
+                                            try {
+                                                media_parallel_adaptive_.store(true);
+                                                video_result=std::async(std::launch::async,[&] {
+                                                    return download(paired.streams->video_url,
+                                                                    video,5,video_reader,
+                                                                    &sibling_failed);
+                                                });
+                                            } catch (...) {
+                                                media_parallel_adaptive_.store(false);
+                                            }
+                                            if(video_result.valid()) {
+                                                audio_ok=download(paired.streams->audio_url,
+                                                                  audio,4,reader,
+                                                                  &sibling_failed);
+                                                video_ok=video_result.get();
+                                                media_parallel_adaptive_.store(false);
+                                            } else {
+                                                audio_ok=download(paired.streams->audio_url,
+                                                                  audio,4,reader);
+                                                if(audio_ok)video_ok=download(
+                                                    paired.streams->video_url,video,5,reader);
+                                            }
+                                        } else {
+                                            audio_ok=download(paired.streams->audio_url,
+                                                              audio,4,reader);
+                                            if(audio_ok)video_ok=download(
+                                                paired.streams->video_url,video,5,reader);
+                                        }
+                                        if(audio_ok && video_ok &&
+                                           Cache::publish_adaptive_pair()) {
+                                            ttnx::switch_app::M3Diagnostics::record(
+                                                ttnx::switch_app::M3Stage::Cache,
+                                                ttnx::switch_app::M3Event::Pass,1,0,0);
+                                            completed=true;
+                                            completed_adaptive=true;
+                                            feedback="M3: video MP4 + separate AAC verified.";
+                                        } else {
+                                            ttnx::switch_app::M3Diagnostics::record(
+                                                ttnx::switch_app::M3Stage::Cache,
+                                                ttnx::switch_app::M3Event::Fail,1,
+                                                audio_ok?1:0,video_ok?1:0);
+                                            feedback=media_cancel_requested_.load()
+                                                ?"M3 adaptive download cancelled."
+                                                :pair_too_large.load()?"M3: full download over 60MB SD limit; requires streaming."
+                                                :!audio_ok?"M3 adaptive AAC range download failed."
+                                                :"M3 adaptive video transfer/MP4 validation failed.";
+                                        }
+                                    } else feedback=hls_reason+
+                                        " | no safe muxed/separate H.264+AAC; "+
+                                        std::to_string(resolved->video.size())+
+                                        " video, "+
+                                        std::to_string(resolved->audio.size())+
+                                        " audio candidates.";
+                                }
+                            }
+                        } else if(media_cancel_requested_.load()) {
+                            feedback="M3: video request cancelled.";
+                        } else {
+                            ttnx::playback::HlsSegmentReader reader(segments);
+                            ttnx::playback::MediaChunkReader audio_reader(audio_transport);
+                            ttnx::switch_app::SwitchHlsCacheSink cache;
+                            ttnx::playback::HlsCacheJob job(reader,cache,&audio_reader);
+                            if(!job.start(*source)) {
+                                ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Cache,ttnx::switch_app::M3Event::Fail,static_cast<int>(job.error()),0,0);
+                                feedback=ttnx::playback::describe_hls_cache_failure(job.error());
+                            } else {
+                                media_step_.store(2);
+                                media_segments_total_.store(
+                                    static_cast<unsigned>(job.total_segments()));
+                                while(job.state()==ttnx::playback::HlsCacheState::Fetching &&
+                                      !media_cancel_requested_.load()) {
+                                    // Exactly one bounded HTTPS segment per
+                                    // loop: UI remains on the other thread.
+                                    (void)job.pump();
+                                    // Retry policy runs only on the media
+                                    // worker, never on the Borealis UI thread.
+                                    if(job.retry_delay_ms() &&
+                                       !media_cancel_requested_.load())
+                                        std::this_thread::sleep_for(
+                                            std::chrono::milliseconds(
+                                                job.retry_delay_ms()));
+                                    media_progress_bytes_.store(job.downloaded_bytes());
+                                    media_segments_done_.store(
+                                        static_cast<unsigned>(job.segments_completed()));
+                                    media_external_aac_phase_.store(
+                                        job.downloading_external_aac());
+                                    media_buffer_ready_.store(
+                                        job.startup_event_staged());
+                                    media_buffer_ms_.store(
+                                        job.startup_buffer_ms());
+                                }
+                                if(media_cancel_requested_.load()) {
+                                    job.cancel();
+                                    feedback="M3 HLS transfer cancelled.";
+                                } else if(job.state()==ttnx::playback::HlsCacheState::Ready) {
+                                    ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Cache,ttnx::switch_app::M3Event::Pass,2,static_cast<std::int64_t>(job.downloaded_bytes()),static_cast<std::int64_t>(job.segments_completed()));
+                                    completed=true;
+                                    completed_hls=true;
+                                    feedback="M3: complete HLS video/AAC locally verified.";
+                                } else {
+                                    ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Cache,ttnx::switch_app::M3Event::Fail,static_cast<int>(job.error()),static_cast<std::int64_t>(job.downloaded_bytes()),0);
+                                    feedback=ttnx::playback::describe_hls_cache_failure(job.error());
+                                }
+                            }
+                        }
+                    }
+                } catch (...) {
+                    ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Session,ttnx::switch_app::M3Event::Error,9,0,0);
+                    feedback="M3 HLS preparation failed (no ad web-player fallback).";
+                }
+                ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Session,ttnx::switch_app::M3Event::End,completed ? 1 : 0,completed_hls ? 1 : (completed_adaptive ? 3 : 2),media_step_.load());
+                {
+                    std::lock_guard<std::mutex> guard(media_mutex_);
+                    pending_media_success_=completed;
+                    pending_media_hls_=completed && completed_hls;
+                    pending_media_adaptive_=completed && completed_adaptive;
+                    pending_media_feedback_=std::move(feedback);
+                }
+                media_done_.store(true);
+            });
+        } catch (...) {
+            media_busy_.store(false);
+            media_feedback_ = "M3: unable to start video preparation thread.";
+            publish_m3_feedback_on_ui(normal_video_id);
+        }
+    }
+
+    void pump_m3_video() {
+        if (!media_done_.load()) {
+            if (!media_busy_.load()) return;
+            const auto now = std::chrono::steady_clock::now();
+            if (now - media_last_ui_update_ < std::chrono::milliseconds(700)) return;
+            media_last_ui_update_ = now;
+            if(media_parallel_adaptive_.load()) {
+                media_feedback_="M3 downloading AAC "+
+                    std::to_string(media_audio_bytes_.load()/1024)+" KiB";
+                if(media_audio_total_.load())media_feedback_+=" / "+
+                    std::to_string(media_audio_total_.load()/1024)+" KiB";
+                media_feedback_+=" + H.264 "+
+                    std::to_string(media_video_bytes_.load()/1024)+" KiB";
+                if(media_video_total_.load())media_feedback_+=" / "+
+                    std::to_string(media_video_total_.load()/1024)+" KiB";
+                publish_m3_feedback_on_ui(active_m3_video_id_);
+            } else if(media_step_.load()==3 || media_step_.load()==4 ||
+               media_step_.load()==5) {
+                const auto phase=media_step_.load();
+                const auto current=media_progress_bytes_.load();
+                const auto total=media_progress_total_.load();
+                media_feedback_=phase==3?"M3 muxed MP4: ":
+                                phase==4?"M3 separate AAC: ":
+                                         "M3 adaptive H.264 video: ";
+                media_feedback_+=
+                    std::to_string(current/1024)+" KiB cached";
+                if(total)media_feedback_+=" / "+std::to_string(total/1024)+" KiB";
+                publish_m3_feedback_on_ui(active_m3_video_id_);
+#if defined(TTNX_M4_NATIVE_TEST_UI) && defined(TTNX_M4_RING_STREAM_CB_PROBE)
+            } else if(media_step_.load()==6) {
+                media_feedback_="M4: preparing first verified SD segment (no full-video cache)";
+                publish_m3_feedback_on_ui(active_m3_video_id_);
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+            } else if(media_step_.load()==7) {
+                media_feedback_="M4: verifying short H264/AAC prefixes (512 KiB RAM total)";
+                publish_m3_feedback_on_ui(active_m3_video_id_);
+#endif
+#endif
+            } else if (media_step_.load() == 2) {
+                const auto current = media_progress_bytes_.load();
+                const auto total = media_progress_total_.load();
+                const auto done=media_segments_done_.load();
+                const auto count=media_segments_total_.load();
+                media_feedback_ = media_external_aac_phase_.load()
+                    ? "M3 caching verified external AAC"
+                    : "M3 HLS media segments: " + std::to_string(done) +
+                      "/" + std::to_string(count);
+                if(media_buffer_ready_.load()) {
+                    media_feedback_ += " | " +
+                        std::to_string(media_buffer_ms_.load()/1000) +
+                        "s video buffered (finishing cache)";
+                }
+                media_feedback_ += " | " + std::to_string(current / 1024) +
+                                   " KiB downloaded";
+                if (total) media_feedback_ += " / " + std::to_string(total / 1024) + " KiB";
+                publish_m3_feedback_on_ui(active_m3_video_id_);
+            }
+            return;
+        }
+        if (media_worker_.joinable()) media_worker_.join();
+        bool success = false;
+#if defined(TTNX_M4_NATIVE_TEST_UI) && defined(TTNX_M4_RING_STREAM_CB_PROBE)
+        std::shared_ptr<ttnx::playback::RollingStreamEpoch> pending_ring;
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+        std::shared_ptr<ttnx::switch_app::NativeDirectAvSession> pending_direct;
+#endif
+#endif
+        {
+            std::lock_guard<std::mutex> guard(media_mutex_);
+            success = pending_media_success_;
+            media_feedback_ = std::move(pending_media_feedback_);
+#if defined(TTNX_M4_NATIVE_TEST_UI) && defined(TTNX_M4_RING_STREAM_CB_PROBE)
+            pending_ring=std::move(pending_m4_epoch_);
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+            pending_direct=std::move(pending_m4_direct_);
+#endif
+#endif
+        }
+#if defined(TTNX_M4_NATIVE_TEST_UI) && defined(TTNX_M4_RING_STREAM_CB_PROBE)
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+        if(pending_direct && media_cancel_requested_.load()) {
+            pending_direct->cancel();pending_direct.reset();success=false;
+            media_feedback_="M4: direct RAM streams cancelled before handoff.";
+        }
+#endif
+        if(pending_ring && media_cancel_requested_.load()) {
+            pending_ring->stop_and_join();
+            (void)pending_ring->cleanup();
+            pending_ring.reset();success=false;
+            media_feedback_="M4: cancelled before decoder handoff.";
+        }
+#endif
+        media_busy_.store(false);
+        media_done_.store(false);
+        if(!success) {
+            // Failed/cancelled transfers never leave downloaded AAC or an
+            // incomplete video lingering until a future launch.
+            if(!discard_m3_session_media())
+                media_feedback_+=" [SD temporary-media cleanup failed]";
+        }
+        if(ttnx::switch_app::M3Diagnostics::available()) {
+            media_feedback_+=" [SD log: m3-playback.log]";
+        }
+        publish_m3_feedback_on_ui(active_m3_video_id_);
+#if defined(TTNX_M4_NATIVE_TEST_UI) && defined(TTNX_M4_RING_STREAM_CB_PROBE)
+        if(success && pending_ring) {
+            ttnx::switch_app::open_m4_native_ring_candidate(std::move(pending_ring));
+            return;
+        }
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+        if(success && pending_direct) {
+            ttnx::switch_app::open_m4_native_direct_candidate(
+                std::move(pending_direct),active_m3_video_id_);
+            return;
+        }
+#endif
+#endif
+        if(success && pending_media_hls_)
+            ttnx::switch_app::open_m3_completed_hls(
+                active_m3_video_id_,active_m3_resume_seconds_);
+        else if(success && pending_media_adaptive_)
+            ttnx::switch_app::open_m3_completed_adaptive(
+                active_m3_video_id_,active_m3_resume_seconds_);
+        else if(success)
+            ttnx::switch_app::open_m3_completed_media(
+                active_m3_video_id_,active_m3_resume_seconds_);
+    }
+#endif
+
     void start_search() {
         if (search_busy_.load()) return;
         if (home_busy_.load() || channel_busy_.load() || network_busy_.load()) {
@@ -1574,6 +2519,127 @@ private:
         }
     }
 
+    enum class LocalListKind { WatchLater, Favorite, History, Following };
+    struct LocalPageEntry { std::string id; std::uint32_t resume{0}; };
+
+    // Native Borealis page recycling: at most 20 row buttons per section,
+    // independently of a thousand-entry on-disk Library. No Google API,
+    // thumbnail cache, video file or second renderer is involved.
+    void add_local_list(brls::Box* parent,LocalListKind kind,
+                        const std::string& heading,brls::Label* feedback) {
+        label(parent,heading,24);
+        auto entries=std::make_shared<std::vector<LocalPageEntry>>();
+        switch(kind) {
+        case LocalListKind::WatchLater:
+            for(const auto& id:library_.watch_later())
+                entries->push_back({id,0});
+            break;
+        case LocalListKind::Favorite:
+            for(const auto& id:library_.favorites())
+                entries->push_back({id,0});
+            break;
+        case LocalListKind::History:
+            for(const auto& e:library_.history())
+                entries->push_back({e.video_id,e.resume_seconds});
+            break;
+        case LocalListKind::Following:
+            for(const auto& id:library_.followed_channels())
+                entries->push_back({id,0});
+            break;
+        }
+        if(entries->empty()) {
+            label(parent,kind==LocalListKind::Following
+                ?"Follow a channel from Search to see it here."
+                :"Nothing saved yet. Select an eligible video in Search.",17);
+            return;
+        }
+        auto pager=std::make_shared<ttnx::ui::LibraryPager>(entries->size());
+        auto* rows=new brls::Box(brls::Axis::COLUMN);
+        parent->addView(rows);
+        auto* pager_actions=new brls::Box(brls::Axis::ROW);
+        pager_actions->setHeight(56);
+        parent->addView(pager_actions);
+        auto* previous=button(pager_actions,"First page");
+        auto* next=button(pager_actions,"Next 20");
+        previous->setGrow(1.0f);
+        next->setGrow(1.0f);
+        auto* paging_status=label(parent,"",17);
+        auto render=[this,entries,pager,kind,feedback,rows,
+                     previous,next,paging_status]() {
+            while(!rows->getChildren().empty())
+                rows->removeView(rows->getChildren().back());
+            const auto [first,last]=pager->range();
+            for(std::size_t index=first;index<last;++index) {
+                const auto item=(*entries)[index];
+                const auto text=kind==LocalListKind::Following
+                    ?"Channel: "+item.id
+                    :kind==LocalListKind::History
+                    ?item.id+" | "+std::to_string(item.resume)+"s"
+                    :"Video: "+item.id;
+                auto* row=button(rows,text);
+                auto removed=std::make_shared<bool>(false);
+                row->registerClickAction(
+                    [this,item,kind,feedback,removed](brls::View*) {
+                    if(*removed) return true;
+                    if(kind==LocalListKind::Following) {
+                        open_channel_page(item.id,"Followed channel");
+                        return true;
+                    }
+#ifdef TTNX_M3_INTEGRATED
+                    if(!guest_session_ || !guest_session_->usable())
+                        feedback->setText("Connect to guest YouTube first.");
+                    else start_m3_video(item.id,
+                        kind==LocalListKind::History?item.resume:0);
+#else
+                    feedback->setText("Playback requires integrated player.");
+#endif
+                    return true;
+                });
+                row->registerAction("Remove locally",brls::BUTTON_Y,
+                    [this,item,kind,feedback,row,removed](brls::View*) {
+                    if(*removed)return true;
+                    refresh_library_metadata();
+                    auto original=library_;
+                    bool changed=false;
+                    switch(kind) {
+                    case LocalListKind::WatchLater:
+                        changed=library_.remove_watch_later(item.id);break;
+                    case LocalListKind::Favorite:
+                        changed=library_.remove_favorite(item.id);break;
+                    case LocalListKind::History:
+                        changed=library_.erase_history(item.id);break;
+                    case LocalListKind::Following:
+                        changed=library_.unfollow_channel(item.id);break;
+                    }
+                    if(changed && persist_library_metadata()) {
+                        *removed=true;
+                        row->setText("Removed locally: "+item.id);
+                        feedback->setText("Removed from the Switch Library.");
+                    } else {
+                        library_=std::move(original);
+                        feedback->setText("Local removal was not saved.");
+                    }
+                    return true;
+                });
+            }
+            previous->setText(pager->has_previous()
+                ?"Previous 20":"First page");
+            next->setText(pager->has_next()?"Next 20":"Last page");
+            paging_status->setText("Page "+std::to_string(pager->page()+1)+
+                " / "+std::to_string(pager->pages())+
+                "  |  Y Remove locally");
+        };
+        previous->registerClickAction([pager,render](brls::View*) {
+            if(pager->previous())render();
+            return true;
+        });
+        next->registerClickAction([pager,render](brls::View*) {
+            if(pager->next())render();
+            return true;
+        });
+        render();
+    }
+
     brls::View* create_page(ttnx::ui::RootSection section) {
         using ttnx::ui::RootSection;
         // Startup recovery build: use the same plain ScrollingFrame ownership
@@ -1589,6 +2655,9 @@ private:
         home_detail_rows_.clear();
         search_query_label_ = nullptr;
         search_status_label_ = nullptr;
+#ifdef TTNX_M3_INTEGRATED
+        m3_status_label_ = nullptr;
+#endif
         search_action_button_ = nullptr;
         search_load_more_button_ = nullptr;
         search_results_box_ = nullptr;
@@ -1673,6 +2742,9 @@ private:
             });
 
             search_status_label_ = label(content, "", 20);
+#ifdef TTNX_M3_INTEGRATED
+            m3_status_label_ = label(content, media_feedback_, 18);
+#endif
             label(content,
                   "Press A on any result to toggle its normalized ID and clean canonical URL. Channel results also reveal an explicit Open channel action.",
                   18);
@@ -1692,20 +2764,60 @@ private:
             ttnx::record_boot_event("boot-11-search-created");
             break;
         }
-        case RootSection::Subscriptions:
-            label(content, "Subscriptions", 34);
-            label(content, "Keep up with the channels you follow.", 26);
-            label(content, "YouTube sign-in is not available in this preview.");
-            label(content, "Your subscriptions will appear here once local profile support is ready.");
+        case RootSection::Subscriptions: {
+            refresh_library_metadata();
+            label(content,"Following",34);
+            label(content,"Locally followed channels; no Google login.",20);
+            auto* status=label(content,storage_ready_
+                ?"A Open channel   Y Unfollow"
+                :"SD unavailable: followed channels read-only",17);
+            add_local_list(content,LocalListKind::Following,
+                           "Followed channels",status);
             break;
-        case RootSection::Library:
-            label(content, "Library", 34);
-            label(content, "A place for your playlists and watched videos.", 26);
-            label(content, "YouTube sign-in is not available in this preview.");
-            label(content, "There is no watch history or saved video data yet.");
+        }
+        case RootSection::Library: {
+            refresh_library_metadata();
+            label(content,"Library",34);
+            label(content,"History, Watch Later and Favorites stay on this Switch.",20);
+            auto* status=label(content,storage_ready_
+                ?"A Play   Y Remove locally"
+                :"SD unavailable: Library is read-only",17);
+            add_local_list(content,LocalListKind::History,"Recent playback",status);
+            add_local_list(content,LocalListKind::WatchLater,"Watch Later",status);
+            add_local_list(content,LocalListKind::Favorite,"Favorites",status);
             break;
+        }
         case RootSection::Settings: {
+            refresh_library_metadata();
+            history_clear_armed_=false;
             label(content, "Settings", 34);
+            label(content, "History & data", 23);
+            auto* history_toggle=button(content,
+                library_.history_enabled()?"Pause watch history":"Resume watch history");
+            history_toggle->registerClickAction([this,history_toggle](brls::View*) {
+                library_.set_history_enabled(!library_.history_enabled());
+                if(persist_library_metadata())
+                    history_toggle->setText(library_.history_enabled()
+                        ?"Pause watch history":"Resume watch history");
+                else history_toggle->setText("Unable to save watch history setting");
+                return true;
+            });
+            auto* clear_history=button(content,"Clear watch history (two presses)");
+            clear_history->registerClickAction([this,clear_history](brls::View*) {
+                if(!history_clear_armed_) {
+                    history_clear_armed_=true;
+                    clear_history->setText("Confirm: clear local watch history");
+                    return true;
+                }
+                history_clear_armed_=false;
+                auto copy=library_;
+                library_.clear_history();
+                if(!persist_library_metadata()) {
+                    library_=std::move(copy);
+                    clear_history->setText("Unable to clear history on SD");
+                } else clear_history->setText("Watch history cleared");
+                return true;
+            });
             label(content, "Appearance follows your Switch system theme.");
             auto* fps = button(content,
                 settings_.show_fps ? "Show frame rate: On" : "Show frame rate: Off");
@@ -1793,6 +2905,15 @@ int main(int, char**) {
     ttnx::record_boot_event("boot-00-main");
     const bool storage_ready = ttnx::initialize_storage();
     ttnx::record_boot_event("boot-01-storage");
+#ifdef TTNX_M3_INTEGRATED
+    // An app crash or Switch power loss may bypass player destructors.
+    // Next successful launch removes *only* known media files, never user
+    // settings, numeric diagnostics, downloads from other applications.
+    if(storage_ready) {
+        (void)ttnx::switch_app::SwitchMediaCacheSink::discard_session_media();
+        (void)ttnx::switch_app::SwitchHlsCacheSink::discard_session_media();
+    }
+#endif
     const auto settings = ttnx::load_settings();
 
     brls::Logger::setLogLevel(brls::LogLevel::ERROR);
@@ -1833,6 +2954,9 @@ int main(int, char**) {
         }
         handle_touch(shell);
         shell->tick();
+#ifdef TTNX_M3_INTEGRATED
+        ttnx::switch_app::tick_m3_player();
+#endif
     }
 
     // Do not let a request worker survive application shutdown. The client is

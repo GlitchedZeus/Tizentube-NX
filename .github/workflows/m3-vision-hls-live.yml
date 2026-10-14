@@ -1,0 +1,65 @@
+name: M3 VisionOS HLS LIVE proof (no NRO)
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'tools/vision_hls_live_probe.py'
+      - 'tests/vision_hls_live_probe_tests.py'
+      - '.github/workflows/m3-vision-hls-live.yml'
+  pull_request:
+    paths:
+      - 'tools/vision_hls_live_probe.py'
+      - 'tests/vision_hls_live_probe_tests.py'
+      - '.github/workflows/m3-vision-hls-live.yml'
+concurrency:
+  group: \${{ github.workflow }}-\${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  source-and-segment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Offline privacy/source/URL contracts
+        run: python -m unittest discover -s tests -p vision_hls_live_probe_tests.py -v
+      - name: Field diagnostics for actual normal videos failing on Switch
+        run: |
+          python -m unittest discover -s tests -p m3_public_playlist_diagnostic_tests.py -v
+          python tools/m3_public_playlist_diagnostic.py \
+            --video-id=-CuQnpJ4sPg \
+            --video-id=YJABBgpaNts \
+            --video-id=0NktpcjsK58
+      - name: Install real decoder tools for bounded A/V proof
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg libmpv2
+      - name: Build exact native TS/MP4 parsers for live media verification
+        run: |
+          c++ -std=c++20 -O2 -Wall -Wextra -Werror             -Iinclude tools/m3_native_media_check.cpp             src/core/ts_streams.cpp             -o "$RUNNER_TEMP/m3-native-media-check"
+      - name: Build actual Switch cache publisher for live media
+        run: |
+          c++ -std=c++20 -O2 -Wall -Wextra -Werror \
+            -DTTNX_M3_MEDIA_PLANE -DTTNX_M3_CACHE_HOST_TEST \
+            -Iswitch/source -Iinclude \
+            tools/m3_live_cache_publish.cpp switch/source/hls_cache_sink.cpp \
+            -o "$RUNNER_TEMP/m3-live-cache-publish"
+      - name: Real public VisionOS player, HLS master and CDN segment sample
+        env:
+          TTNX_M3_NATIVE_MEDIA_CHECK: ${{ runner.temp }}/m3-native-media-check
+          TTNX_M3_LIVE_CACHE_PUBLISH: ${{ runner.temp }}/m3-live-cache-publish
+        run: |
+          python tools/vision_hls_live_probe.py \
+            --video-id 2kD9v7Q3vec \
+            --video-id 7E7lY-jUybc \
+            --video-id dQw4w9WgXcQ \
+            --decode-real-av
+      - name: No media artifact or user-facing experimental NRO
+        if: always()
+        run: |
+          echo "LIVE CI checks bounded native parsers, libmpv and FFmpeg; no media exported."
+          echo "A GitHub runner 4xx is NOT proof of a Switch bug."
+          echo "Never print or upload visitorData, tokenized CDN URLs, cookies, source JSON."
+          echo "Do not upload any NRO from this reference workflow."

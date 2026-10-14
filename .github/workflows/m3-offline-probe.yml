@@ -1,0 +1,112 @@
+name: M3 offline playback probe (isolated)
+
+# Preserve the newest build on this branch instead of burning CI workers on
+# dozens of obsolete intermediary commits from a long development tranche.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'switch/m3_probe/**'
+      - 'Makefile.switch'
+      - '.github/workflows/m3-offline-probe.yml'
+  push:
+    paths:
+      - 'switch/m3_probe/**'
+      - 'Makefile.switch'
+      - '.github/workflows/m3-offline-probe.yml'
+
+jobs:
+  isolated-mpv-probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Build isolated offline MPV proof with devkitA64
+        run: |
+          docker run --rm \
+            -v "$PWD:/work" -w /work \
+            devkitpro/devkita64@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282 \
+            bash -ec '
+              export PKG_CONFIG_LIBDIR="$DEVKITPRO/portlibs/switch/lib/pkgconfig"
+              echo "Inspecting preinstalled media toolchain (no devkitPro mirror sync)"
+              dkp-pacman -Q switch-libmpv switch-ffmpeg switch-libplacebo || true
+              if ! pkg-config --exists mpv; then
+                echo "No preinstalled mpv.pc; using known upstream release archives"
+                BASE=https://github.com/xfangfang/wiliwili/releases/download/v0.1.0
+                curl --fail --location --retry 3 --silent --show-error \
+                  "$BASE/switch-ffmpeg-7.1-1-any.pkg.tar.zst" \
+                  -o /tmp/switch-ffmpeg.pkg.tar.zst
+                curl --fail --location --retry 3 --silent --show-error \
+                  "$BASE/switch-libmpv-0.36.0-3-any.pkg.tar.zst" \
+                  -o /tmp/switch-libmpv.pkg.tar.zst
+                dkp-pacman -U --noconfirm --needed \
+                  /tmp/switch-ffmpeg.pkg.tar.zst /tmp/switch-libmpv.pkg.tar.zst
+              fi
+              pkg-config --modversion mpv
+              make -f Makefile.switch TTNX_M3_OFFLINE_PROBE=1 -j2
+            '
+      - name: Generate deterministic-format synthetic MP4 fixture
+        run: |
+          if ! command -v ffmpeg >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y ffmpeg
+          fi
+          ffmpeg -hide_banner -loglevel error -y \
+            -f lavfi -i 'testsrc2=size=1280x720:rate=30' \
+            -f lavfi -i 'sine=frequency=440:sample_rate=48000' \
+            -t 30 -c:v libx264 -preset veryfast -crf 34 \
+            -pix_fmt yuv420p -af 'volume=10dB' -c:a aac -b:a 96k \
+            -movflags +faststart m3-test.mp4
+          test -s m3-test.mp4
+          ffprobe -v error -show_entries format=duration \
+            -of default=noprint_wrappers=1 m3-test.mp4
+          ffprobe -v error -select_streams v:0 \
+            -show_entries stream=codec_name,width,height,pix_fmt \
+            -of default=noprint_wrappers=1 m3-test.mp4
+          # Default lavfi sine is only 1/8-scale; a real Switch hardware
+          # tester confirmed the original AAC fixture was unusually quiet.
+          # Fail if future fixtures are still too quiet or approach clipping.
+          ffmpeg -hide_banner -nostats -i m3-test.mp4 -vn \
+            -af volumedetect -f null - 2> /tmp/m3-audio-level.txt
+          cat /tmp/m3-audio-level.txt | grep -E 'mean_volume|max_volume'
+          python3 - <<'PY'
+          import re
+          log = open('/tmp/m3-audio-level.txt').read()
+          match = re.search(r'max_volume:\s*(-?[0-9.]+) dB', log)
+          if not match:
+              raise SystemExit('Audio peak could not be measured')
+          peak = float(match.group(1))
+          if not (-10 <= peak <= -1):
+              raise SystemExit(f'Audio peak outside -10 to -1 dBFS: {peak}')
+          PY
+          sha256sum m3-test.mp4
+      - name: Upload synthetic H264/AAC test fixture
+        uses: actions/upload-artifact@v4
+        with:
+          name: tizentube-nx-m3-SYNTHETIC-test-video
+          path: m3-test.mp4
+          if-no-files-found: error
+      - name: Verify probe is distinct from production NRO
+        run: |
+          test -s tizentube_nx_m3_probe.nro
+          test ! -e tizentube_nx.nro
+          file tizentube_nx_m3_probe.nro
+          sha256sum tizentube_nx_m3_probe.nro
+      - name: Upload experimental M3 offline player
+        uses: actions/upload-artifact@v4
+        with:
+          name: tizentube-nx-m3-OFFLINE-EXPERIMENT
+          path: tizentube_nx_m3_probe.nro
+          if-no-files-found: error
+      - name: Upload exact probe debug symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: tizentube-nx-m3-OFFLINE-symbols
+          path: |
+            tizentube_nx_m3_probe.elf
+            build-switch/tizentube_nx_m3_probe.map
+          if-no-files-found: error

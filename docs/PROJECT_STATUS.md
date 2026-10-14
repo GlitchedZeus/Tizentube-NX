@@ -210,44 +210,29 @@ The previously host-tested M2 Search protections remain intact:
 
 No unsafe generic parser fallback was added for live Search.
 
-## V1 profile/account direction
+## V1 Library and no-Google-account direction
 
-V1 remains **local-first TizenTube profiles**.
+**Confirmed October 12, 2026:** TizenTube NX has no Google/YouTube
+profiles, login, OAuth linking or private-account synchronization in v1
+**or planned post-v1 versions**. The previously documented future device-code
+Google OAuth feature was withdrawn.
 
-Users should be able to create a TizenTube profile directly on Switch and build local follows/subscriptions, playlists, Watch Later, favorites/likes, history/resume and settings without Google authentication.
+The app should provide a local, metadata-only Library without requiring
+any profile setup: watch history, Continue Watching/resume positions, local
+followed channels, Watch Later, favorites and user-created playlists.
+Optional search history is local and clearable. Do not retain video/audio,
+thumbnails, raw server responses or private YouTube account data.
 
-V1 must not request or store Google OAuth authorization. It must never collect Google passwords, passkeys, 2FA recovery codes, authenticated browser/YouTube cookies or exported cookie files.
+Keep the app as small as practical. The initial proposed Library metadata
+limit is 2,000,000 decimal bytes inside the existing 8,388,608-byte
+persistent-state allowance. The **entire app** (NRO/assets, persistent
+settings/diagnostics/Library, and current disposable streaming media cache)
+remains within 100,000,000 decimal SD bytes. See
+`docs/PROFILES_AND_IMPORT.md` and `docs/M4_SD_STREAMING_REQUIREMENTS.md`.
 
-No profile/account implementation is part of the current M2 Search slice.
-
-## Post-v1 optional YouTube OAuth linking
-
-The post-v1 account direction has been refined.
-
-TizenTube NX may optionally link a real YouTube account using Google's official limited-input/device-code OAuth flow. The Switch should display a QR code plus a human-readable fallback code/instruction, while the phone opens Google's real sign-in and consent UI.
-
-The design goal is that TizenTube NX never receives the Google password, passkey, 2FA recovery material or browser cookies.
-
-The first linked-account implementation should:
-
-- use the narrowest practical YouTube authorization;
-- strongly prefer read-only access;
-- initially sync one way: `YouTube -> TizenTube profile`;
-- keep short-lived access tokens in memory where practical;
-- optionally retain refresh authorization only when the user chooses `Keep me connected`;
-- perform a dedicated secure-storage review before persistent authorization ships;
-- never store persistent authorization as obvious plaintext on the SD card;
-- fully redact tokens/authorization headers from logs, UI, exports, backups and crash diagnostics;
-- preserve the local profile if authorization expires, is revoked or is lost;
-- show `Reconnect YouTube` rather than destroying imported/local data;
-- provide a distinct `Unlink YouTube` action that removes local authorization without deleting the TizenTube profile;
-- keep local TizenTube actions local unless a future write-capable feature receives a separate security review and explicit consent.
-
-A public/no-auth profile or playlist importer may remain as an optional fallback for users who do not want OAuth linking.
-
-See `docs/PROFILES_AND_IMPORT.md` and `docs/OAUTH_ACCOUNT_LINKING.md`.
-
-This OAuth work is post-v1 documentation only and must not widen the current M2 allowlist or enter the current implementation.
+This is an accepted **product direction**, not an implemented Library
+feature. Existing M2 guest Search work remains preserved; no new
+account-related network hosts should be added.
 
 ## Feature-reference policy
 

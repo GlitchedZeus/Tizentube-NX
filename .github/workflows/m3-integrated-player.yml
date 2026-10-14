@@ -1,0 +1,231 @@
+name: M3 integrated Search-to-video candidate
+# Keep only the newest automatic build per PR/ref. Explicitly dispatched
+# hardware-candidate builds are never cancelled by a subsequent push.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+on:
+  pull_request:
+    paths:
+      - 'switch/source/**'
+      - 'src/core/**'
+      - 'include/tizentube_nx/playback/**'
+      - 'include/tizentube_nx/youtube/guest_api.hpp'
+      - 'Makefile.switch'
+      - '.github/workflows/m3-integrated-player.yml'
+  push:
+    paths:
+      - 'switch/source/**'
+      - 'src/core/**'
+      - 'include/tizentube_nx/playback/**'
+      - 'Makefile.switch'
+      - '.github/workflows/m3-integrated-player.yml'
+  workflow_dispatch:
+    inputs:
+      publish_hardware_candidate:
+        description: 'Only after independent LIVE CDN and native readiness evidence'
+        required: false
+        default: false
+        type: boolean
+jobs:
+  build-integrated:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # For PR events, checkout the real feature HEAD instead of GitHub's
+          # synthetic merge ref. This ensures the downloadable NRO exactly
+          # matches the commit tested and identified by its filename.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          submodules: recursive
+      - name: Build experimental integrated player with pinned devkitA64
+        run: |
+          docker run --rm \
+            -v "$PWD:/work" -w /work \
+            devkitpro/devkita64@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282 \
+            bash -ec '
+              export PKG_CONFIG_LIBDIR="$DEVKITPRO/portlibs/switch/lib/pkgconfig"
+              if ! pkg-config --exists mpv; then
+                BASE=https://github.com/xfangfang/wiliwili/releases/download/v0.1.0
+                curl --fail --location --retry 3 --silent --show-error \
+                  "$BASE/switch-ffmpeg-7.1-1-any.pkg.tar.zst" \
+                  -o /tmp/switch-ffmpeg.pkg.tar.zst
+                curl --fail --location --retry 3 --silent --show-error \
+                  "$BASE/switch-libmpv-0.36.0-3-any.pkg.tar.zst" \
+                  -o /tmp/switch-libmpv.pkg.tar.zst
+                dkp-pacman -U --noconfirm --needed \
+                  /tmp/switch-ffmpeg.pkg.tar.zst /tmp/switch-libmpv.pkg.tar.zst
+              fi
+              make -f Makefile.switch TTNX_M3_INTEGRATED=1 -j2
+              # This separate NRO is NOT packaged/uploaded. Compile the
+              # exact existing M3 render path with the opt-in local HLS route
+              # to detect native mpv/libnx/asset integration errors.
+              make -f Makefile.switch TTNX_M3_INTEGRATED=1 \
+                TTNX_M4_ROLLING_STREAM=1 TTNX_M4_PLAYER_PROBE=1 \
+                TARGET=tizentube_nx_m4_local_probe \
+                BUILD=build-m4-player -j2
+              # Header ABI integration for actual Switch portlib libmpv.
+              # This NRO is NOT uploaded, launched, or called hardware-ready.
+              make -f Makefile.switch TTNX_M3_INTEGRATED=1 \
+                TTNX_M4_ROLLING_STREAM=1 TTNX_M4_RING_STREAM_CB_PROBE=1 \
+                TARGET=tizentube_nx_m4_stream_cb_abi \
+                BUILD=build-m4-stream-cb -j2
+              # Explicit hardware-lab candidate exercises REAL Search ->
+              # HLS plan -> first verified TS prefix -> isolated mpv callback.
+              # No production menu changes and NO uploaded M4 NRO yet.
+              make -f Makefile.switch TTNX_M3_INTEGRATED=1 \
+                TTNX_M4_ROLLING_STREAM=1 TTNX_M4_RING_STREAM_CB_PROBE=1 \
+                TTNX_M4_NATIVE_TEST_UI=1 \
+                TARGET=tizentube_nx_m4_native_test \
+                BUILD=build-m4-native-test -j2
+              # Independent UI integration candidate. It never replaces the
+              # last hardware-accepted visible-video NRO or uploaded artifact.
+              make -f Makefile.switch TTNX_M3_INTEGRATED=1 \
+                TTNX_M4_TV_PLAYER_UI=1 \
+                TARGET=tizentube_nx_m4_tv_preview \
+                BUILD=build-m4-tv -j2
+            '
+      - name: Verify separate NRO and no default-output overwrite
+        run: |
+          test -s tizentube_nx_m3_integrated.nro
+          test -s tizentube_nx_m3_integrated.elf
+          test ! -e tizentube_nx.nro
+          # Hard fail if the packaged executable leaves no room for the
+          # intended 24 MiB ring buffer + 8 MiB app state inside 100 MB.
+          # This is a packaging gate; runtime rolling-media enforcement is
+          # staged separately and is NOT claimed as completed here.
+          NRO_BYTES="$(stat -c %s tizentube_nx_m3_integrated.nro)"
+          MAX_NRO_BYTES=66445568
+          echo "NRO bytes: $NRO_BYTES (budget: $MAX_NRO_BYTES)"
+          test "$NRO_BYTES" -le "$MAX_NRO_BYTES"
+          file tizentube_nx_m3_integrated.nro
+          sha256sum tizentube_nx_m3_integrated.nro
+      - name: Verify opt-in local HLS libmpv probe without uploading it
+        run: |
+          test -s tizentube_nx_m4_local_probe.nro
+          test -s tizentube_nx_m4_local_probe.elf
+          test -s build-m4-player/m3_player_activity.o
+          test -s build-m4-player/rolling_hls_sink.o
+          test -s build-m4-player/rolling_hls_feed.o
+          test -s build-m4-player/rolling_playback_owner.o
+          sha256sum tizentube_nx_m4_local_probe.nro
+          echo "Local HLS probe compiled; NOT hardware-accepted or released."
+      - name: Check pinned libmpv stream callback ABI probe
+        run: |
+          test -s tizentube_nx_m4_stream_cb_abi.nro
+          test -s build-m4-stream-cb/m4_mpv_stream_cb_probe.o
+          test -s build-m4-stream-cb/m3_player_activity.o
+          test -s build-m4-stream-cb/rolling_hls_feed.o
+          test "$(stat -c %s tizentube_nx_m4_stream_cb_abi.nro)" -le 66445568
+          sha256sum tizentube_nx_m4_stream_cb_abi.nro
+          echo "Callback ABI compiled. This does NOT prove on-device playback."
+
+      - name: Check experimental native Search-to-stream build isolation
+        run: |
+          test -s tizentube_nx_m4_native_test.nro
+          test -s build-m4-native-test/main.o
+          test -s build-m4-native-test/m3_player_activity.o
+          test -s build-m4-native-test/m4_mpv_stream_cb_probe.o
+          test "$(stat -c %s tizentube_nx_m4_native_test.nro)" -le 66445568
+          test ! -e tizentube_nx.nro
+          sha256sum tizentube_nx_m4_native_test.nro
+          echo "M4 hardware-lab route COMPILED only; hardware acceptance remains blocked."
+      # This is the ONE new streaming candidate for physical testing, not
+      # a public release or evidence that a 10-minute video works. The M3
+      # fallback continues to be built independently and stays selectable
+      # from the same experimental Search result.
+      - name: Prepare exact-head M4 hardware-lab instructions
+        if: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'feature/m3-playback-foundation-20261011') || (github.event_name == 'push' && github.ref == 'refs/heads/feature/m3-playback-foundation-20261011') || (github.event_name == 'workflow_dispatch' && inputs.publish_hardware_candidate) }}
+        run: |
+          CHECKOUT_SHA="$(git rev-parse HEAD)"
+          # PR workflows use a synthetic GITHUB_SHA merge commit. The NRO
+          # was built from the explicitly checked-out *real* feature head.
+          test "$CHECKOUT_SHA" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          sha256sum tizentube_nx_m4_native_test.nro > M4-SHA256SUMS.txt
+          printf 'TizenTube NX M4 native streaming hardware lab\nExact checked-out source HEAD: %s\nGitHub Actions run: %s\n' "$CHECKOUT_SHA" "$GITHUB_RUN_ID" > M4-HARDWARE-TEST.txt
+          cat >> M4-HARDWARE-TEST.txt <<'EOF'
+
+          DEVELOPMENT / UNACCEPTED: Test on a disposable Switch homebrew
+          install only. Do not overwrite the previously accepted M3 NRO.
+          This NRO deliberately has both M3 and M4 Play buttons.
+
+          1. Guest connect -> Search -> choose a normal video (never Shorts).
+          2. Confirm M3 video works first for picture, stereo AAC and controls.
+          3. Return; choose Play streaming (M4 hardware test) on the same
+             eligible normal video. Note if muxed HLS is unavailable.
+          4. If video opens, test visible frames, audible AAC, video loading,
+             pause/resume, Stop, B, 10+ minutes and the 24-MiB rollover.
+          5. Check SD app media files disappear after Stop/exit, including
+             an interrupted or failed stream. No lasting watched-video cache.
+          6. Capture only numeric/short diagnostics. Never share signed
+             CDN URLs, cookies, session identifiers or complete raw logs.
+          7. Track exact native performance, RAM, sleep/wake and docked mode.
+          Real streaming and no-ads acceptance remain separate hardware gates.
+          EOF
+      - name: Upload one exact-head M4 experimental Switch NRO
+        if: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'feature/m3-playback-foundation-20261011') || (github.event_name == 'push' && github.ref == 'refs/heads/feature/m3-playback-foundation-20261011') || (github.event_name == 'workflow_dispatch' && inputs.publish_hardware_candidate) }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: TizenTube-NX-M4-Hardware-Lab-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            tizentube_nx_m4_native_test.nro
+            M4-SHA256SUMS.txt
+            M4-HARDWARE-TEST.txt
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Check unshipped TV-player candidate and keep installed size bounded
+        run: |
+          test -s tizentube_nx_m4_tv_preview.nro
+          test -s build-m4-tv/m3_player_activity.o
+          test ! -e tizentube_nx.nro
+          test "$(stat -c %s tizentube_nx_m4_tv_preview.nro)" -le 66445568
+          sha256sum tizentube_nx_m4_tv_preview.nro
+          echo "TV UI candidate compiled; NOT hardware-accepted or uploaded."
+
+      # One exact-head NRO artifact, not a public release or an automatic
+      # merge. The user requested a candidate following each MAJOR session.
+      # Automatic push builds use this branch's exact HEAD (not PR merge refs).
+      - name: Package exact-head hardware candidate and test instructions
+        if: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'feature/m3-playback-foundation-20261011') || (github.event_name == 'push' && github.ref == 'refs/heads/feature/m3-playback-foundation-20261011') || (github.event_name == 'workflow_dispatch' && inputs.publish_hardware_candidate) }}
+        run: |
+          sha256sum tizentube_nx_m3_integrated.nro > M3-SHA256SUMS.txt
+          SOURCE_SHA="$(git rev-parse HEAD)"
+          printf 'TizenTube NX M3 integrated experimental hardware candidate\nExact app HEAD: %s\nWorkflow run: %s\n\n' "$SOURCE_SHA" "$GITHUB_RUN_ID" > M3-HARDWARE-TEST.txt
+          cat >> M3-HARDWARE-TEST.txt <<'EOF'
+          WARNING: Live YouTube video playback has only been proven in CI
+          using real public HLS and AAC with host libmpv, not Switch hardware.
+          This is the ONLY proposed NRO for this development round.
+
+          1. Boot and verify the previously accepted M2 Guest/Search UI.
+          2. Find a normal non-Shorts public YouTube video.
+             Verified guest CI reference: dQw4w9WgXcQ.
+          3. Select Play video (M3). Confirm native download progress
+             and final local HLS+AAC video presentation.
+          4. Check picture, audible stereo, pause/resume, +/-10 sec seeks,
+             Stop, Replay, B returning to Search, and sleep/wake.
+          5. Try one longer non-Shorts video, noting startup delay,
+             playback stability and video/audio synchronization.
+          6. If blocked, provide the category shown by the app;
+             avoid sending signed Googlevideo URLs, cookies or tokens.
+          7. Confirm zero Shorts, ads or ad-bearing web player fallback.
+          The NRO is for experimental hardware validation only.
+          EOF
+      - name: Upload one integrated M3 NRO for the completed work session
+        if: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'feature/m3-playback-foundation-20261011') || (github.event_name == 'push' && github.ref == 'refs/heads/feature/m3-playback-foundation-20261011') || (github.event_name == 'workflow_dispatch' && inputs.publish_hardware_candidate) }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: TizenTube-NX-M3-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            tizentube_nx_m3_integrated.nro
+            M3-SHA256SUMS.txt
+            M3-HARDWARE-TEST.txt
+          retention-days: 14
+          if-no-files-found: error
+      - name: Upload candidate symbols
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_hardware_candidate }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: tizentube-nx-m3-REAL-VIDEO-symbols
+          path: tizentube_nx_m3_integrated.elf
+          if-no-files-found: error

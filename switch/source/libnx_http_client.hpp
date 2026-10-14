@@ -2,7 +2,17 @@
 
 #include "tizentube_nx/net/http.hpp"
 #include "tizentube_nx/net/service_init.hpp"
+#ifdef TTNX_M3_MEDIA_PLANE
+#include "tizentube_nx/playback/media_chunks.hpp"
+#include "tizentube_nx/playback/ump_transfer.hpp"
+#include "tizentube_nx/playback/hls_manifest.hpp"
+#ifdef TTNX_M4_ROLLING_STREAM
+#include "tizentube_nx/playback/hls_segment.hpp"
+#endif
 
+#endif
+
+#include <atomic>
 #include <string>
 
 namespace ttnx::switch_app {
@@ -48,5 +58,67 @@ private:
     bool ready_{false};
     std::string initialization_error_;
 };
+
+
+#ifdef TTNX_M3_MEDIA_PLANE
+// Distinct, experimental M3-only HTTP byte-range transport. Never enabled in
+// the accepted M2 NRO, and never passed to guest Search/Home/Channel requests.
+// Repeats a strict video-CDN host check immediately before DNS; no redirects.
+class LibnxMediaChunkTransport final : public playback::MediaChunkTransport {
+public:
+    LibnxMediaChunkTransport() = default;
+    net::HttpResult perform(const net::HttpRequest& request) override;
+    [[nodiscard]] bool ready() const noexcept { return services_.ready(); }
+private:
+    LibnxHttpClient services_; // owns/borrows socket + Horizon SSL lifetimes
+};
+
+// Opt-in only. This POST transport repeats the same Googlevideo pre-DNS
+// allowlist and rejects any request other than a fixed two-byte UMP body
+// and a bounded one-MiB media range. Never routed into M2 guest browsing.
+class LibnxUmpChunkTransport final : public net::HttpClient {
+public:
+    LibnxUmpChunkTransport() = default;
+    net::HttpResult perform(const net::HttpRequest& request) override;
+    [[nodiscard]] bool ready() const noexcept { return services_.ready(); }
+private:
+    LibnxHttpClient services_;
+};
+// Experimental playlist-only media HTTPS adapter. No redirects, no segment
+// transfer, no web-player browser fallback and no enabled default-NRO access.
+class LibnxHlsPlaylistTransport final : public net::HttpClient {
+public:
+    LibnxHlsPlaylistTransport() = default;
+    net::HttpResult perform(const net::HttpRequest& request) override;
+    [[nodiscard]] bool ready() const noexcept { return services_.ready(); }
+private:
+    LibnxHttpClient services_;
+};
+
+// Segment bytes require a DIFFERENT fixed MIME/size gate from text playlists.
+// No user-supplied cookies, redirects, cross-origin requests or media GET in M2.
+class LibnxHlsSegmentTransport final : public net::HttpClient
+#ifdef TTNX_M4_ROLLING_STREAM
+    , public playback::HlsSegmentStreamTransport
+#endif
+{
+public:
+    LibnxHlsSegmentTransport() = default;
+    net::HttpResult perform(const net::HttpRequest& request) override;
+#ifdef TTNX_M4_ROLLING_STREAM
+    [[nodiscard]] playback::HlsStreamResult stream_segment(
+        std::string_view url,const playback::HlsMediaAdmission& admit,
+        const playback::HlsMediaChunk& emit) override;
+    void request_cancel() noexcept {cancelled_.store(true,std::memory_order_release);}
+    void reset_cancel() noexcept {cancelled_.store(false,std::memory_order_release);}
+#endif
+    [[nodiscard]] bool ready() const noexcept { return services_.ready(); }
+private:
+#ifdef TTNX_M4_ROLLING_STREAM
+    std::atomic<bool> cancelled_{false};
+#endif
+    LibnxHttpClient services_;
+};
+#endif
 
 }  // namespace ttnx::switch_app

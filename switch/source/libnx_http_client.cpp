@@ -1,7 +1,16 @@
 #include "libnx_http_client.hpp"
 
 #include "tizentube_nx/net/http1.hpp"
+#include "tizentube_nx/net/http1_framing.hpp"
 #include "tizentube_nx/net/outbound_policy.hpp"
+#ifdef TTNX_M3_MEDIA_PLANE
+#include "tizentube_nx/playback/playback.hpp"
+#include "tizentube_nx/playback/hls_manifest.hpp"
+#include "tizentube_nx/playback/source_routes.hpp"
+#ifdef TTNX_M4_ROLLING_STREAM
+#include "tizentube_nx/net/http1_media_stream.hpp"
+#endif
+#endif
 
 #include <switch.h>
 
@@ -140,11 +149,18 @@ int connect_one_with_timeout(const addrinfo& address, long timeout_ms) {
     return fd;
 }
 
-int tcp_connect_allowed_host(std::string_view host, long timeout_ms) {
-    // SECOND SAFETY GATE: this helper is the only place that calls getaddrinfo().
-    // Keep the allowlist check directly adjacent to DNS so future refactors
-    // cannot accidentally resolve an unapproved/Nintendo endpoint.
-    if (!net::is_allowed_outbound_host(host)) return -1;
+int tcp_connect_allowed_host(std::string_view host, long timeout_ms,
+                             bool media_plane = false) {
+    // SECOND SAFETY GATE: browser traffic is still exactly www.youtube.com.
+    // The opt-in media variant uses only approved signed video-CDN hosts.
+    if (media_plane) {
+#ifdef TTNX_M3_MEDIA_PLANE
+        const std::string proof_url = "https://" + std::string(host) + "/videoplayback";
+        if (!playback::is_reviewable_googlevideo_https_url(proof_url)) return -1;
+#else
+        return -1;
+#endif
+    } else if (!net::is_allowed_outbound_host(host)) return -1;
 
     addrinfo hints{};
     hints.ai_family = AF_INET;
@@ -191,7 +207,8 @@ bool write_all(SslConnection& connection, std::string_view data, std::string& er
     return true;
 }
 
-bool read_all(SslConnection& connection, std::string& raw, std::string& error) {
+bool read_all(SslConnection& connection, std::string& raw, std::string& error,
+              std::size_t cap=kMaxRawResponseBytes) {
     char buffer[32 * 1024];
     while (true) {
         u32 received = 0;
@@ -202,19 +219,33 @@ bool read_all(SslConnection& connection, std::string& raw, std::string& error) {
             return false;
         }
         if (received == 0) return true;
-        if (raw.size() > kMaxRawResponseBytes ||
-            received > kMaxRawResponseBytes - raw.size()) {
+        if (raw.size() > cap ||
+            received > cap - raw.size()) {
             error = "HTTPS response exceeded the bounded raw-response limit.";
             return false;
         }
         raw.append(buffer, received);
+        const auto frame=net::inspect_http1_frame(raw,cap);
+        if(frame.kind==net::HttpFrameKind::Rejected) {
+            error="HTTPS response framing was invalid or exceeded bounds.";
+            return false;
+        }
+        if(frame.kind==net::HttpFrameKind::FixedLength) {
+            if(raw.size()>frame.total) {
+                error="HTTPS response exceeded declared Content-Length.";
+                return false;
+            }
+            if(raw.size()==frame.total)return true;
+        }
     }
 }
 
 net::HttpResult perform_single_request(
     const net::HttpRequest& request,
     const net::HttpsUrl& parsed_url,
-    long timeout_ms) {
+    long timeout_ms,
+    bool media_plane = false,
+    std::size_t response_cap=kMaxRawResponseBytes) {
     net::HttpResult result;
 
     const auto wire_request = net::build_http1_request(request, parsed_url);
@@ -230,7 +261,7 @@ net::HttpResult perform_single_request(
     }
 
     TlsConnection tls;
-    tls.raw_fd = tcp_connect_allowed_host(parsed_url.host, timeout_ms);
+    tls.raw_fd = tcp_connect_allowed_host(parsed_url.host, timeout_ms, media_plane);
     if (tls.raw_fd < 0) {
         result.failure_stage = net::HttpFailureStage::Tcp;
         result.error = "TCP connection to the approved YouTube host failed.";
@@ -331,7 +362,7 @@ net::HttpResult perform_single_request(
 
     std::string raw_response;
     raw_response.reserve(64 * 1024);
-    if (!read_all(tls.connection, raw_response, result.error)) {
+    if (!read_all(tls.connection, raw_response, result.error, response_cap)) {
         result.failure_stage = net::HttpFailureStage::Tls;
         return result;
     }
@@ -352,6 +383,172 @@ net::HttpResult perform_single_request(
     }
     return result;
 }
+
+
+#if defined(TTNX_M3_MEDIA_PLANE) && defined(TTNX_M4_ROLLING_STREAM)
+// Media-only opt-in direct Horizon SSL read to app-owned SD chunks.
+// Keep the accepted perform_single_request() byte-for-byte unchanged.
+net::HttpResult perform_single_streamed_media_request(
+    const net::HttpRequest& request,const net::HttpsUrl& parsed_url,
+    long timeout_ms,const playback::HlsMediaAdmission& admit,
+    const playback::HlsMediaChunk& emit) {
+    net::HttpResult result;
+    const auto wire_request = net::build_http1_request(request, parsed_url);
+    if (!wire_request) {
+        result.failure_stage = net::HttpFailureStage::Http;
+        result.error = "Could not serialize the bounded HTTP/1.1 request.";
+        return result;
+    }
+    if (wire_request->size() > kMaxRequestBytes) {
+        result.failure_stage = net::HttpFailureStage::Http;
+        result.error = "HTTP request exceeds the bounded request limit.";
+        return result;
+    }
+
+    TlsConnection tls;
+    // This is exclusively the approved signed-media stream. The legacy
+    // perform_single_request() path has its own media_plane selector; no
+    // such parameter exists in this helper. A false/default gate would
+    // reject the CDN, and an undeclared name breaks native devkitA64 builds.
+    // Always recheck the explicit media-host allowlist before DNS.
+    tls.raw_fd = tcp_connect_allowed_host(parsed_url.host, timeout_ms, true);
+    if (tls.raw_fd < 0) {
+        result.failure_stage = net::HttpFailureStage::Tcp;
+        result.error = "TCP connection to the approved YouTube host failed.";
+        return result;
+    }
+
+    u32 tls_versions = SslVersion_TlsV12;
+    if (hosversionAtLeast(11, 0, 0)) tls_versions |= SslVersion_TlsV13;
+
+    Result rc = sslCreateContext(&tls.context, tls_versions);
+    if (R_FAILED(rc)) {
+        result.failure_stage = net::HttpFailureStage::Tls;
+        result.error = result_error("sslCreateContext", rc);
+        return result;
+    }
+    tls.have_context = true;
+
+    rc = sslContextCreateConnection(&tls.context, &tls.connection);
+    if (R_FAILED(rc)) {
+        result.failure_stage = net::HttpFailureStage::Tls;
+        result.error = result_error("sslContextCreateConnection", rc);
+        return result;
+    }
+    tls.have_connection = true;
+
+    // Explicitly require peer-chain, hostname and certificate-date validation.
+    // HostName verification also requires SetHostName, which supplies SNI.
+    rc = sslConnectionSetVerifyOption(
+        &tls.connection,
+        SslVerifyOption_PeerCa | SslVerifyOption_HostName | SslVerifyOption_DateCheck);
+    if (R_FAILED(rc)) {
+        result.failure_stage = net::HttpFailureStage::Tls;
+        result.error = result_error("sslConnectionSetVerifyOption", rc);
+        return result;
+    }
+
+    rc = sslConnectionSetHostName(
+        &tls.connection,
+        parsed_url.host.c_str(),
+        static_cast<u32>(parsed_url.host.size()));
+    if (R_FAILED(rc)) {
+        result.failure_stage = net::HttpFailureStage::Tls;
+        result.error = result_error("sslConnectionSetHostName", rc);
+        return result;
+    }
+
+    errno = 0;
+    const int handed_off_fd = socketSslConnectionSetSocketDescriptor(
+        &tls.connection, tls.raw_fd);
+    // libnx's wrapper consumes the input descriptor. The returned descriptor,
+    // when present, is the descriptor we must close before the SSL connection.
+    tls.raw_fd = -1;
+    if (handed_off_fd < 0 && errno != ENOENT) {
+        result.failure_stage = net::HttpFailureStage::Tls;
+        result.error = "socketSslConnectionSetSocketDescriptor failed.";
+        return result;
+    }
+    if (handed_off_fd >= 0) tls.ssl_fd = handed_off_fd;
+
+    rc = sslConnectionSetIoMode(&tls.connection, SslIoMode_Blocking);
+    if (R_FAILED(rc)) {
+        result.failure_stage = net::HttpFailureStage::Tls;
+        result.error = result_error("sslConnectionSetIoMode", rc);
+        return result;
+    }
+
+    // On HOS 16+, tighten the SSL service's own I/O timeout in addition to the
+    // BSD socket timeouts.
+    if (hosversionAtLeast(16, 0, 0)) {
+        rc = sslConnectionSetIoTimeout(
+            &tls.connection,
+            static_cast<u32>(std::min<long>(timeout_ms, std::numeric_limits<u32>::max())));
+        if (R_FAILED(rc)) {
+            result.failure_stage = net::HttpFailureStage::Tls;
+            result.error = result_error("sslConnectionSetIoTimeout", rc);
+            return result;
+        }
+    }
+
+    u32 certificate_bytes = 0;
+    u32 certificate_count = 0;
+    rc = sslConnectionDoHandshake(
+        &tls.connection,
+        &certificate_bytes,
+        &certificate_count,
+        nullptr,
+        0);
+    if (R_FAILED(rc)) {
+        result.failure_stage = net::HttpFailureStage::Tls;
+        result.error = result_error("sslConnectionDoHandshake", rc);
+        return result;
+    }
+
+    if (!write_all(tls.connection, *wire_request, result.error)) {
+        result.failure_stage = net::HttpFailureStage::Tls;
+        return result;
+    }
+
+
+    net::Http1MediaStream parser(admit);
+    char receive[net::Http1MediaStream::kReceiveChunk];
+    for(;;) {
+        u32 received=0;
+        const Result rc=sslConnectionRead(
+            &tls.connection,receive,static_cast<u32>(sizeof(receive)),&received);
+        if(R_FAILED(rc)) {
+            result.failure_stage=net::HttpFailureStage::Tls;
+            result.error="M4 media SSL receive failure.";
+            return result;
+        }
+        if(received==0) {
+            if(!parser.finish()) {
+                result.failure_stage=net::HttpFailureStage::Http;
+                result.error="M4 media stream truncated or incomplete.";
+                return result;
+            }
+            result.ok=true;result.response.status_code=200;
+            return result;
+        }
+        if(!parser.feed(std::string_view(receive,received),emit)) {
+            result.failure_stage=net::HttpFailureStage::Http;
+            result.error="M4 media HTTP framing, size or SD emission refused.";
+            return result;
+        }
+        if(parser.state()==net::Http1MediaStream::State::Body &&
+           parser.received()==parser.expected()) {
+            if(!parser.finish()) {
+                result.failure_stage=net::HttpFailureStage::Http;
+                result.error="M4 media stream finish refused.";
+                return result;
+            }
+            result.ok=true;result.response.status_code=200;
+            return result; // Content-Length complete; no need to wait for EOF.
+        }
+    }
+}
+#endif
 
 std::optional<std::string> redirect_url(
     const net::HttpResponse& response,
@@ -527,5 +724,253 @@ net::HttpResult LibnxHttpClient::perform(const net::HttpRequest& request) {
     result.error = "Unexpected redirect state.";
     return result;
 }
+
+
+#ifdef TTNX_M3_MEDIA_PLANE
+net::HttpResult LibnxMediaChunkTransport::perform(const net::HttpRequest& request) {
+    net::HttpResult result;
+    // Dedicated M3 media-only transport. No arbitrary headers, credentials,
+    // redirects, manifests, or browser data; only strict bounded GET ranges.
+    if (!services_.ready()) {
+        result.failure_stage = net::HttpFailureStage::Tls;
+        result.error = "M3 media SSL/socket services unavailable.";
+        return result;
+    }
+    if (request.method != net::HttpMethod::Get || !request.body.empty() ||
+        request.headers.size() != 3 ||
+        request.headers[0].name != "Range" ||
+        !request.headers[0].value.starts_with("bytes=") ||
+        request.headers[1].name != "Accept-Encoding" ||
+        request.headers[1].value != "identity" ||
+        request.headers[2].name != "Accept" ||
+        request.headers[2].value != "application/octet-stream" ||
+        !playback::is_reviewable_googlevideo_https_url(request.url)) {
+        result.failure_stage = net::HttpFailureStage::Policy;
+        result.error = "M3 media request rejected before network access.";
+        return result;
+    }
+    const auto parsed = net::parse_https_url(request.url);
+    if (!parsed || parsed->port != 443 ||
+        !playback::is_reviewable_googlevideo_https_url(
+            "https://" + parsed->host + parsed->target)) {
+        result.failure_stage = net::HttpFailureStage::Policy;
+        result.error = "M3 media host rejected by strict URL parser.";
+        return result;
+    }
+    // Each call is a single TLS request and repeats pre-DNS media host
+    // checks, hostname/CA verification and response size caps. Never auto-
+    // follow Location here: MediaChunkReader decides whether the next
+    // approved request is permissible and preserves the original Range.
+    return perform_single_request(request, *parsed,
+                                  normalized_timeout(request.timeout_ms),
+                                  true);
+}
+
+net::HttpResult LibnxUmpChunkTransport::perform(const net::HttpRequest& request) {
+    net::HttpResult result;
+    auto reject = [&](const char* message) {
+        result.ok = false;
+        result.failure_stage = net::HttpFailureStage::Policy;
+        result.error = message; // constant text: never include signed URLs
+        return result;
+    };
+    if (!services_.ready()) return reject("Experimental UMP transport offline.");
+    if (request.method != net::HttpMethod::Post ||
+        request.body.size() != 2 ||
+        static_cast<unsigned char>(request.body[0]) != 0x78 ||
+        request.body[1] != '\0' ||
+        request.headers.size() != 3 ||
+        request.headers[0].name != "Content-Type" ||
+        request.headers[0].value != "application/x-protobuf" ||
+        request.headers[1].name != "Accept-Encoding" ||
+        request.headers[1].value != "identity" ||
+        request.headers[2].name != "Accept" ||
+        request.headers[2].value != "application/octet-stream" ||
+        !playback::is_reviewable_googlevideo_https_url(request.url))
+        return reject("UMP request shape or source rejected before DNS.");
+
+    // Confirm the original bounded media range and protocol parameters,
+    // rather than letting arbitrary callers send POSTs through this socket.
+    auto read_param = [&](std::string_view name) -> std::optional<std::string> {
+        const auto q = request.url.find('?');
+        if (q == std::string::npos) return std::nullopt;
+        std::string_view params(request.url.data()+q+1,
+                                request.url.size()-q-1);
+        std::optional<std::string> value;
+        while (!params.empty()) {
+            const auto amp = params.find('&');
+            const auto item = params.substr(0,amp);
+            const auto eq = item.find('=');
+            if (eq != std::string_view::npos && item.substr(0,eq)==name) {
+                if (value) return std::nullopt; // duplicate parameter
+                value=std::string(item.substr(eq+1));
+            }
+            if (amp == std::string_view::npos) break;
+            params.remove_prefix(amp+1);
+        }
+        return value;
+    };
+    const auto range=read_param("range");
+    if (read_param("ump")!=std::optional<std::string>{"1"} ||
+        read_param("srfvp")!=std::optional<std::string>{"1"} ||
+        read_param("alr")!=std::optional<std::string>{"yes"} ||
+        !read_param("rn") || !range)
+        return reject("UMP required protocol markers missing or duplicated.");
+    const auto dash=range->find('-');
+    if (dash==std::string::npos || dash==0 || dash+1>=range->size())
+        return reject("UMP byte range malformed.");
+    auto parse_u64=[](std::string_view digits,std::uint64_t& n) {
+        if (digits.empty() || digits.size()>20) return false;
+        n=0;
+        for(const unsigned char c:digits) {
+            if(c<'0'||c>'9')return false;
+            const auto d=static_cast<unsigned>(c-'0');
+            if(n>(UINT64_MAX-d)/10)return false;
+            n=n*10+d;
+        }
+        return true;
+    };
+    std::uint64_t begin=0,end=0,sequence=0;
+    if (!parse_u64(std::string_view(*range).substr(0,dash),begin) ||
+        !parse_u64(std::string_view(*range).substr(dash+1),end) ||
+        !parse_u64(*read_param("rn"),sequence) ||
+        end<begin || end-begin>=1024*1024 ||
+        end>=512ULL*1024*1024 || sequence==0 || sequence>4096)
+        return reject("UMP range exceeds reviewed byte and resource limits.");
+
+    const auto parsed=net::parse_https_url(request.url);
+    if (!parsed || parsed->port!=443 ||
+        !playback::is_reviewable_googlevideo_https_url(
+            "https://"+parsed->host+parsed->target))
+        return reject("UMP target rejected by strict HTTPS parser.");
+    result=perform_single_request(request,*parsed,
+                                  normalized_timeout(request.timeout_ms),true);
+    // UMP POST requires HTTP 200; never follow Location (or SABR redirects).
+    // A separate checked UMP wrapper parses MEDIA, redirect and protection.
+    if (result.response.status_code >=300 && result.response.status_code<400)
+        return reject("UMP redirected; this transport never follows redirects.");
+    if (result.response.body.size()>1024*1024+128*1024)
+        return reject("UMP envelope exceeds maximum bounded response size.");
+    return result;
+}
+
+net::HttpResult LibnxHlsPlaylistTransport::perform(const net::HttpRequest& request) {
+    net::HttpResult result;
+    const auto reject = [&](const char* message) {
+        result.ok = false;
+        result.failure_stage = net::HttpFailureStage::Policy;
+        result.error = message;
+        return result;
+    };
+    if (!services_.ready())return reject("M3 native HLS socket/TLS unavailable.");
+    // No authorization/cookies, arbitrary method, request body, caller-chosen
+    // headers or redirects. This does not grant libmpv direct network access.
+    if (request.method!=net::HttpMethod::Get ||
+        !request.body.empty() ||
+        request.headers.size()!=2 ||
+        request.headers[0].name!="Accept" ||
+        request.headers[0].value!="application/vnd.apple.mpegurl" ||
+        request.headers[1].name!="Accept-Encoding" ||
+        request.headers[1].value!="identity" ||
+        !(playback::is_reviewable_hls_manifest_url(request.url) ||
+          playback::is_reviewable_hls_child_url(request.url)))
+        return reject("M3 HLS path or request headers not reviewed.");
+    const auto parsed=net::parse_https_url(request.url);
+    if(!parsed || parsed->port!=443 ||
+       !(playback::is_reviewable_hls_manifest_url(
+             "https://"+parsed->host+parsed->target) ||
+         playback::is_reviewable_hls_child_url(
+             "https://"+parsed->host+parsed->target)))
+        return reject("M3 HLS host rejected by strict HTTPS parser.");
+    // Media-plane host check repeats right at tcp_connect_allowed_host,
+    // before getaddrinfo(). Limit the RAW socket read to 1 MiB + 64 KiB
+    // headers, not the browsing client's 17 MiB limit.
+    result=perform_single_request(request,*parsed,
+                                  normalized_timeout(request.timeout_ms),
+                                  true,1024*1024+64*1024);
+    if(result.response.status_code>=300 &&
+       result.response.status_code<400)
+        return reject("M3 HLS server redirect refused.");
+    if(result.response.body.size()>1024*1024)
+        return reject("M3 HLS playlist exceeded 1 MiB.");
+    return result;
+}
+
+net::HttpResult LibnxHlsSegmentTransport::perform(const net::HttpRequest& request) {
+    net::HttpResult result;
+    const auto reject = [&](const char* message) {
+        result.ok=false;
+        result.failure_stage=net::HttpFailureStage::Policy;
+        result.error=message;
+        return result;
+    };
+    if(!services_.ready())return reject("M3 HLS segment SSL not initialized.");
+    if(request.method!=net::HttpMethod::Get || !request.body.empty() ||
+       request.headers.size()!=2 ||
+       request.headers[0].name!="Accept" ||
+       request.headers[0].value!="application/octet-stream" ||
+       request.headers[1].name!="Accept-Encoding" ||
+       request.headers[1].value!="identity" ||
+       !playback::is_reviewable_hls_child_url(request.url))
+        return reject("M3 HLS segment request rejected before DNS.");
+
+    const auto parsed=net::parse_https_url(request.url);
+    if(!parsed || parsed->port!=443 ||
+       !playback::is_reviewable_hls_child_url(
+           "https://"+parsed->host+parsed->target))
+        return reject("M3 HLS segment HTTPS destination rejected.");
+    // Media-host allowlist rechecked immediately before getaddrinfo.
+    // 16MiB segment cap + 64KiB envelope/header overhead prevents
+    // malicious peer memory exhaustion.
+    result=perform_single_request(request,*parsed,
+                                  normalized_timeout(request.timeout_ms),
+                                  true,16*1024*1024+64*1024);
+    if(result.response.status_code>=300 &&
+       result.response.status_code<400)
+        return reject("M3 HLS segment redirected unexpectedly.");
+    if(result.response.body.size()>16*1024*1024)
+        return reject("M3 HLS segment exceeded bounded body.");
+    return result;
+}
+
+#ifdef TTNX_M4_ROLLING_STREAM
+playback::HlsStreamResult LibnxHlsSegmentTransport::stream_segment(
+    std::string_view url,const playback::HlsMediaAdmission& admit,
+    const playback::HlsMediaChunk& emit) {
+    // Run only from the M4 worker thread; never the Borealis render tick.
+    // Strict signed-CDN allowlist at call site AND pre-DNS in the helper.
+    if(!services_.ready() || !admit || !emit ||
+       cancelled_.load(std::memory_order_acquire) ||
+       !playback::is_reviewable_hls_child_url(url))return {};
+    const auto parsed=net::parse_https_url(url);
+    if(!parsed || parsed->port!=443 ||
+       !playback::is_reviewable_hls_child_url(
+           "https://"+parsed->host+parsed->target))return {};
+    net::HttpRequest request;
+    request.method=net::HttpMethod::Get;
+    request.url=std::string(url);
+    request.timeout_ms=20000;
+    request.headers={{"Accept","application/octet-stream"},
+                     {"Accept-Encoding","identity"}};
+    std::size_t byte_count=0;
+    const auto result=perform_single_streamed_media_request(
+        request,*parsed,normalized_timeout(request.timeout_ms),
+        [&](std::size_t length) {
+            return !cancelled_.load(std::memory_order_acquire) &&
+                   admit(length);
+        },[&](std::string_view bytes) {
+            if(cancelled_.load(std::memory_order_acquire) ||
+               bytes.size()>32*1024 || !emit(bytes))return false;
+            byte_count+=bytes.size();
+            return true;
+        });
+    if(cancelled_.load(std::memory_order_acquire) ||
+       !result.ok || result.response.status_code!=200 ||
+       byte_count<376 || byte_count>16*1024*1024)return {};
+    return {true,byte_count};
+}
+#endif // M4 streaming adapter
+
+#endif
 
 }  // namespace ttnx::switch_app

@@ -1,0 +1,68 @@
+name: M3 experimental media transport compile
+# Keep only the newest automatic build per PR/ref. Explicitly dispatched
+# hardware-candidate builds are never cancelled by a subsequent push.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+on:
+  pull_request:
+    paths:
+      - 'switch/source/libnx_http_client.*'
+      - 'include/tizentube_nx/net/http1_media_stream.hpp'
+      - 'include/tizentube_nx/playback/**'
+      - 'src/core/hls_segment.cpp'
+      - 'src/core/media_*.cpp'
+      - 'Makefile.switch'
+      - 'switch/source/rolling_hls_*'
+      - '.github/workflows/m3-media-transport-build.yml'
+  push:
+    paths:
+      - 'switch/source/libnx_http_client.*'
+      - 'include/tizentube_nx/net/http1_media_stream.hpp'
+      - 'include/tizentube_nx/playback/**'
+      - 'src/core/hls_segment.cpp'
+      - 'src/core/media_*.cpp'
+      - 'Makefile.switch'
+      - 'switch/source/rolling_hls_*'
+      - '.github/workflows/m3-media-transport-build.yml'
+  workflow_dispatch:
+jobs:
+  compile-media-transport:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Compile opt-in native media socket code without enabling playback
+        run: >-
+          docker run --rm
+          -v "$PWD:/work" -w /work
+          devkitpro/devkita64@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282
+          make -f Makefile.switch TTNX_M3_MEDIA_EXPERIMENT=1 BUILD=build-m3-media -j2
+      - name: Verify isolated compile output
+        run: |
+          test -s tizentube_nx.nro
+          test -s tizentube_nx.elf
+          sha256sum tizentube_nx.nro
+      - name: Compile opt-in M4 rolling transport on native devkitA64
+        run: >-
+          docker run --rm
+          -v "$PWD:/work" -w /work
+          devkitpro/devkita64@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282
+          make -f Makefile.switch TTNX_M3_MEDIA_EXPERIMENT=1
+          TTNX_M4_ROLLING_STREAM=1 BUILD=build-m4-rolling -j2
+      - name: Verify opt-in M4 Switch object compilation
+        run: |
+          test -s tizentube_nx.nro
+          test -s tizentube_nx.elf
+          test -s build-m4-rolling/rolling_hls_feed.o
+          test -s build-m4-rolling/rolling_hls_sink.o
+          test -s build-m4-rolling/rolling_hls_worker.o
+          test -s build-m4-rolling/rolling_playback_owner.o
+          test -s build-m4-rolling/libnx_http_client.o
+          test -s build-m4-rolling/hls_segment.o
+          sha256sum tizentube_nx.nro
+      - name: Clarify acceptance boundary
+        run: |
+          echo "This is only a native media transport compile gate."
+          echo "Not a YouTube playback candidate. No NRO uploaded from this lane."

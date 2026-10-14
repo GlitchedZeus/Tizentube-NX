@@ -1,4 +1,5 @@
 #include "tizentube_nx/youtube/guest_api.hpp"
+#include "tizentube_nx/core/url.hpp"
 
 #include <string>
 #include <string_view>
@@ -180,6 +181,60 @@ std::optional<net::HttpRequest> make_home_request(
     const GuestSession& session,
     std::string_view continuation) {
     return make_browse_request(session, kHomeBrowseId, continuation);
+}
+
+std::optional<net::HttpRequest> make_player_request(
+    const GuestSession& session, std::string_view normal_video_id) {
+    if (!bounded_guest_session(session) ||
+        !ttnx::core::is_valid_video_id(normal_video_id)) return std::nullopt;
+    // This asks for normalized *metadata*, not a YouTube HTML web player.
+    // Nothing here requests user-linked/account features, ad signals, autoplay,
+    // telemetry, signature deciphering, or shortcuts around content checks.
+    return innertube_post(session, "player",
+                          json_string_field("videoId", normal_video_id));
+}
+
+
+std::optional<net::HttpRequest> make_m3_visionos_player_request(
+    const GuestSession& web_guest, std::string_view normal_video_id) {
+    if (!bounded_guest_session(web_guest) ||
+        !ttnx::core::is_valid_video_id(normal_video_id)) return std::nullopt;
+
+    // Candidate guest client identity observed in native Switch playback
+    // research. This is not an official stable public API or a guarantee of
+    // response compatibility. Only a source-metadata request; no login,
+    // serviceIntegrityDimensions, cookie import, autoplay or ad signaling.
+    constexpr std::string_view kVersion = "1.02";
+    constexpr std::string_view kVisionUserAgent =
+        "com.google.ios.youtube/1.02 "
+        "(RealityDevice17,1; U; CPU visionOS 26_5 like Mac OS X)";
+    net::HttpRequest request;
+    request.method = net::HttpMethod::Post;
+    request.url = std::string(kInnertubeBase) + "v1/player?prettyPrint=false";
+    request.timeout_ms = 15000;
+    request.headers = {
+        {"Accept", "application/json"},
+        {"Content-Type", "application/json"},
+        {"User-Agent", std::string(kVisionUserAgent)},
+        {"X-Youtube-Client-Name", "101"},
+        {"X-Youtube-Client-Version", std::string(kVersion)},
+        {"X-Goog-Visitor-Id", web_guest.visitor_data},
+        {"Origin", std::string(kYouTubeOrigin)},
+        {"Referer", std::string(kYouTubeOrigin) + "/"},
+    };
+    request.body =
+        "{\"context\":{\"client\":{"
+        "\"clientName\":\"VISIONOS\","
+        "\"clientVersion\":\"" + std::string(kVersion) + "\","
+        "\"deviceMake\":\"Apple\","
+        "\"deviceModel\":\"RealityDevice17,1\","
+        "\"osName\":\"visionOS\","
+        "\"osVersion\":\"26.5.23O471\","
+        "\"hl\":\"" + json_escape(web_guest.language) + "\","
+        "\"gl\":\"" + json_escape(web_guest.region) + "\","
+        "\"visitorData\":\"" + json_escape(web_guest.visitor_data) + "\""
+        "}},\"videoId\":\"" + std::string(normal_video_id) + "\"}";
+    return request;
 }
 
 }  // namespace ttnx::youtube

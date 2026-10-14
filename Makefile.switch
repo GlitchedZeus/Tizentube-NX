@@ -49,6 +49,22 @@ APP_TITLE	:=	TizenTube NX
 APP_AUTHOR	:=	GlitchedZeus
 APP_VERSION	:=	0.1.0
 
+# An explicitly opt-in *separate* offline playback laboratory binary.
+# No playback/mpv dependencies are linked into the accepted M2 NRO unless
+# TTNX_M3_OFFLINE_PROBE=1 is set at build time. Never auto-enable this.
+ifeq ($(TTNX_M3_INTEGRATED),1)
+TARGET      := tizentube_nx_m3_integrated
+APP_TITLE   := TizenTube NX M3 Integrated
+TTNX_M3_MEDIA_EXPERIMENT := 1
+endif
+
+ifeq ($(TTNX_M3_OFFLINE_PROBE),1)
+TARGET      := tizentube_nx_m3_probe
+SOURCES     := switch/m3_probe
+APP_TITLE   := TizenTube NX M3 Offline Probe
+endif
+
+
 ROMFS				:=	resources
 BOREALIS_PATH		:=	third_party/borealis
 
@@ -58,6 +74,72 @@ OUT_SHADERS	:=	shaders
 #---------------------------------------------------------------------------------
 # options for code generation
 #---------------------------------------------------------------------------------
+# Separate experimental native media HTTPS socket lane. Off in the accepted
+# browsing NRO and off in the isolated offline MP4 probe.
+ifeq ($(TTNX_M3_MEDIA_EXPERIMENT),1)
+DEFINES += -DTTNX_M3_MEDIA_PLANE
+endif
+ifeq ($(TTNX_M3_INTEGRATED),1)
+DEFINES += -DTTNX_M3_INTEGRATED
+endif
+# Opt-in M4 native media worker; no production playback change.
+ifeq ($(TTNX_M4_ROLLING_STREAM),1)
+DEFINES += -DTTNX_M4_ROLLING_STREAM
+endif
+# Imported Switch-NewPipe concept, original M4 SD ring + mpv stream_cb ABI
+# candidate. Compile-time ONLY and never used in the accepted M3 NRO.
+ifeq ($(TTNX_M4_RING_STREAM_CB_PROBE),1)
+ifneq ($(TTNX_M3_INTEGRATED),1)
+$(error TTNX_M4_RING_STREAM_CB_PROBE requires TTNX_M3_INTEGRATED=1)
+endif
+ifneq ($(TTNX_M4_ROLLING_STREAM),1)
+$(error TTNX_M4_RING_STREAM_CB_PROBE requires TTNX_M4_ROLLING_STREAM=1)
+endif
+DEFINES += -DTTNX_M4_RING_STREAM_CB_PROBE
+endif
+
+# Test-only M4 normal-Search -> verified HLS -> rolling libmpv route.
+# The accepted M3 binary and normal app have NO additional Play surface.
+ifeq ($(TTNX_M4_NATIVE_TEST_UI),1)
+ifneq ($(TTNX_M3_INTEGRATED),1)
+$(error TTNX_M4_NATIVE_TEST_UI requires TTNX_M3_INTEGRATED=1)
+endif
+ifneq ($(TTNX_M4_ROLLING_STREAM),1)
+$(error TTNX_M4_NATIVE_TEST_UI requires TTNX_M4_ROLLING_STREAM=1)
+endif
+ifneq ($(TTNX_M4_RING_STREAM_CB_PROBE),1)
+$(error TTNX_M4_NATIVE_TEST_UI requires TTNX_M4_RING_STREAM_CB_PROBE=1)
+endif
+DEFINES += -DTTNX_M4_NATIVE_TEST_UI
+# Test the EDL approach only in the disposable M4 hardware-lab NRO.
+DEFINES += -DTTNX_M3_ADAPTIVE_EDL_SEEK
+# The native-only adaptive HTTP-range A/V bridge is opt-in, NEVER
+# activated by standard builds or accepted M3 menu routes.
+DEFINES += -DTTNX_M4_DIRECT_AV_PROBE
+endif
+
+# Original TV-style player is separately opted in for visual verification.
+# The default, physically accepted M3 picture and controls stay unchanged.
+ifeq ($(TTNX_M4_TV_PLAYER_UI),1)
+ifneq ($(TTNX_M3_INTEGRATED),1)
+$(error TTNX_M4_TV_PLAYER_UI requires TTNX_M3_INTEGRATED=1)
+endif
+DEFINES += -DTTNX_M4_TV_PLAYER_UI
+endif
+
+# Compile-time only native libmpv rolling-HLS probe. It intentionally has
+# no main-menu entry and must never replace the M3 accepted NRO by default.
+ifeq ($(TTNX_M4_PLAYER_PROBE),1)
+ifneq ($(TTNX_M4_ROLLING_STREAM),1)
+$(error TTNX_M4_PLAYER_PROBE requires TTNX_M4_ROLLING_STREAM=1)
+endif
+ifneq ($(TTNX_M3_INTEGRATED),1)
+$(error TTNX_M4_PLAYER_PROBE requires TTNX_M3_INTEGRATED=1)
+endif
+DEFINES += -DTTNX_M4_PLAYER_PROBE
+endif
+
+
 ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 
 CFLAGS	:=	-g -Wall -O2 -ffunction-sections \
@@ -74,6 +156,28 @@ LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*
 # switch-curl is deliberately excluded from the NRO because the current port has
 # a known certificate-info hard-crash path (tracked by project issue #7).
 LIBS	:= -lnx
+
+ifneq ($(filter 1,$(TTNX_M3_OFFLINE_PROBE) $(TTNX_M3_INTEGRATED)),)
+# Both M3 player targets use the exact same pinned libmpv software renderer
+# API proven by the user's Nintendo Switch hardware test. The normal NRO
+# never links mpv, preserving its accepted size and networking behavior.
+MPV_STATIC_LIBS := $(shell PKG_CONFIG_LIBDIR=$(PORTLIBS)/lib/pkgconfig pkg-config --static --libs mpv 2>/dev/null)
+ifeq ($(strip $(MPV_STATIC_LIBS)),)
+$(error M3 player requires switch-libmpv; use isolated experimental CI)
+endif
+LIBS := $(MPV_STATIC_LIBS) -lnx
+endif
+
+ifeq ($(TTNX_M3_OFFLINE_PROBE),1)
+# Static devkitPro mpv dependencies are resolved by the package's .pc file.
+# A missing switch-libmpv package is a hard link failure, not a fallback to
+# the regular NRO. The probe is local-file-only and performs no HTTP requests.
+MPV_STATIC_LIBS := $(shell PKG_CONFIG_LIBDIR=$(PORTLIBS)/lib/pkgconfig pkg-config --static --libs mpv 2>/dev/null)
+ifeq ($(strip $(MPV_STATIC_LIBS)),)
+$(error M3 probe requires switch-libmpv and pkg-config; use the opt-in CI workflow)
+endif
+LIBS := $(MPV_STATIC_LIBS) -lnx
+endif
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing
@@ -110,7 +214,12 @@ CPPFILES := $(filter-out curl_http_client.cpp,$(CPPFILES))
 # content height, which desynchronizes the viewport when Search appends rows.
 # stable_scrolling_frame.cpp backports an absolute-pixel implementation while
 # preserving the pinned Borealis public API.
+# The accepted M2 app supplies its own absolute-pixel scrolling frame.
+# The separate offline probe has no replacement, so compile pinned Borealis's
+# stock scrolling_frame.cpp instead of removing all its vtable definitions.
+ifneq ($(TTNX_M3_OFFLINE_PROBE),1)
 CPPFILES := $(filter-out scrolling_frame.cpp,$(CPPFILES))
+endif
 SFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
 GLSLFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.glsl)))
 BINFILES	:=	$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.*)))

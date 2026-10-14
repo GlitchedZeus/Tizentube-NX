@@ -74,6 +74,25 @@ NewPipe is a useful reference for building an independent, privacy-conscious You
 
 Use it as a technical/product research reference where applicable, while keeping TizenTube NX controller-first and native to Switch.
 
+## Google-free local Library and small installation
+
+No Google/YouTube profile login or post-v1 account linking belongs in
+TizenTube NX. Browsing and playback need no sign-in. Watch history,
+resume positions, Watch Later, favorites, local followed channels and
+playlists belong in a compact **on-device Library**. These are local
+bookmarks, not mutations of the user's Google/YouTube account.
+
+Keep metadata small and bounded; do not download watched videos, save
+thumbnail image files as Library records or accumulate raw API responses.
+Retain the approximately 25 MB disposable SD-backed media working cache
+for incremental streaming, and enforce the 100,000,000-byte total SD cap
+for the NRO, assets, app settings/Library and media cache combined. Avoid
+large RAM buffers to leave room for the user's Switch sysmodules.
+
+Local display customization may be considered, but users should not
+have to create a profile merely to keep watch history. The discarded
+Google OAuth/device-linking plan is not in the roadmap.
+
 ## Shorts remain a hard rejection
 
 Shorts/reels are not a configurable preference. They do not belong in TizenTube NX.

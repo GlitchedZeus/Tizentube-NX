@@ -46,9 +46,9 @@ Do not reuse a server-provided tracking URL. Do not append `si`, `feature`, `utm
 
 ### Account UX
 
-V1 is local-first and must not require a Google/YouTube account. Optional official device-code OAuth linking is post-v1 work only.
+Google/YouTube accounts, OAuth linking, private-account sync and credential imports are **out of scope in every planned release**, not just v1. The app opens without any sign-in and builds a small local watch history, playback resume, Watch Later, favorites, followed channels and playlists.
 
-Cookie-file import, password collection, browser-session cookie import, or equivalent credential scraping is not an acceptable primary account UX.
+The Library stores only bounded local metadata (proposed 2,000,000 bytes total within the persistent-state budget). A small disposable SD video/audio working cache is separate and is deleted after playback. No browser-session cookies, passwords, exported cookies, Google tokens or private account APIs may be required or accepted.
 
 ### Useful YouTube, not feature parity
 

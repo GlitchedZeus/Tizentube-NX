@@ -1,0 +1,411 @@
+// TizenTube NX M3 *isolated* offline playback probe.
+// NEVER link this unit into the accepted M2 application NRO.
+// Only a fixed local MP4 is permitted; no HTTP client or media URL entry exists.
+#include <borealis.hpp>
+#include <switch.h>
+#include <mpv/client.h>
+#include <mpv/render.h>
+
+#include <algorithm>
+#include <array>
+#include <cstdio>
+#include <cstring>
+#include <cstdlib>
+#include <functional>
+#include <string>
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+
+namespace {
+
+constexpr const char* kFixture = "sdmc:/switch/TizenTube-NX/m3-test.mp4";
+constexpr int kRenderWidth = 640;
+constexpr int kRenderHeight = 360;
+
+class OfflineMpv {
+public:
+    OfflineMpv() : pixels_(kRenderWidth * kRenderHeight * 4, 0) {}
+    ~OfflineMpv() { shutdown(); }
+
+    bool init() {
+        // Do not report a half-initialized mpv handle as a ready renderer.
+        if (handle_) return render_ != nullptr;
+        handle_ = mpv_create();
+        if (!handle_) {
+            message_ = "INIT ERROR: mpv_create returned null";
+            return false;
+        }
+        // A hard-coded SD fixture is the ONLY accepted source. No config,
+        // scripts, ytdl hooks, IPC, playlists or arbitrary network streams.
+        // A failure to apply a mandatory safety option is fatal, not an
+        // invitation to run mpv with a permissive default configuration.
+        auto require_option = [this](const char* name, const char* value) {
+            const int rc = mpv_set_option_string(handle_, name, value);
+            if (rc >= 0) return true;
+            // The upstream Switch mpv build may compile out its Lua/JS script
+            // subsystem entirely, removing these two script-only options.
+            // In that case there is nothing to auto-load or invoke, and the
+            // absence is *not* a reason to disable offline media decoding.
+            // Never tolerate errors from config, demuxer protocol isolation,
+            // player input, video output, or any other essential option.
+            if (rc == MPV_ERROR_OPTION_NOT_FOUND &&
+                (std::strcmp(name, "load-scripts") == 0 ||
+                 std::strcmp(name, "ytdl") == 0)) {
+                optional_script_features_missing_ = true;
+                return true;
+            }
+            message_ = std::string("INIT ERROR option ") + name + ": " +
+                       mpv_error_string(rc) + " [" + std::to_string(rc) + "]";
+            return false;
+        };
+        if (!require_option("config", "no") ||
+            !require_option("load-scripts", "no") ||
+            !require_option("ytdl", "no") ||
+            !require_option("input-default-bindings", "no") ||
+            // mpv parses comma as a KEY/VALUE list separator for this option.
+            // An unescaped "file,pipe" is parsed as an invalid second key,
+            // and fails at runtime with MPV_ERROR_OPTION_ERROR (-7).
+            // A local MP4 needs only the file protocol, not pipe or network.
+            // Keep this mandatory: never drop offline transport isolation.
+            !require_option("demuxer-lavf-o", "protocol_whitelist=file") ||
+            !require_option("vo", "libmpv") ||
+            !require_option("hwdec", "auto") ||
+            !require_option("audio-channels", "stereo")) {
+            shutdown();
+            return false;
+        }
+        const int init_rc = mpv_initialize(handle_);
+        if (init_rc < 0) {
+            message_ = std::string("INIT ERROR mpv_initialize: ") +
+                       mpv_error_string(init_rc) + " [" +
+                       std::to_string(init_rc) + "]";
+            shutdown();
+            return false;
+        }
+        mpv_render_param api[] = {
+            {MPV_RENDER_PARAM_API_TYPE, const_cast<char*>(MPV_RENDER_API_TYPE_SW)},
+            {MPV_RENDER_PARAM_INVALID, nullptr},
+        };
+        const int render_rc = mpv_render_context_create(&render_, handle_, api);
+        if (render_rc < 0) {
+            message_ = std::string("INIT ERROR software renderer: ") +
+                       mpv_error_string(render_rc) + " [" +
+                       std::to_string(render_rc) + "]";
+            shutdown();
+            return false;
+        }
+        message_ = optional_script_features_missing_
+            ? "Ready (script features absent in this mpv build). Press A."
+            : "Ready. Copy an H.264/AAC MP4 to SD, then press A.";
+        return true;
+    }
+
+    bool start() {
+        // Preserve the precise startup failure in the on-screen diagnostics.
+        // A is also a safe retry button after an SD/mount/service problem.
+        if (!render_ && !init()) return false;
+        if (!handle_ || !render_) return false;
+        FILE* file = std::fopen(kFixture, "rb");
+        if (!file) {
+            message_ = "No m3-test.mp4 in /switch/TizenTube-NX/";
+            return false;
+        }
+        // A deliberately small experimental media decoder must not accept
+        // arbitrarily huge inputs. Check the SD fixture before handing it
+        // to FFmpeg (the decoder does its own format validation afterwards).
+        constexpr long kMaxFixtureBytes = 256L * 1024L * 1024L;
+        const bool sized = std::fseek(file, 0, SEEK_END) == 0;
+        const long bytes = sized ? std::ftell(file) : -1;
+        std::fclose(file);
+        if (bytes < 1024 || bytes > kMaxFixtureBytes) {
+            message_ = "Offline MP4 fixture missing data or exceeds 256 MiB.";
+            return false;
+        }
+        // Keep every action constrained to this known local file. The user
+        // cannot supply an arbitrary URL, playlist or media host.
+        const char* command[] = {"loadfile", kFixture, "replace", nullptr};
+        have_frame_ = false;
+        new_frame_ = false;
+        if (mpv_command(handle_, command) < 0) {
+            message_ = "Local playback command failed";
+            return false;
+        }
+        message_ = "Local file requested; check image and sound.";
+        return true;
+    }
+
+    void toggle_pause() {
+        if (!handle_) return;
+        const char* command[] = {"cycle", "pause", nullptr};
+        mpv_command(handle_, command);
+    }
+
+    void seek(int seconds) {
+        if (!handle_) return;
+        const auto offset = std::to_string(seconds);
+        const char* command[] = {"seek", offset.c_str(), "relative", nullptr};
+        mpv_command(handle_, command);
+    }
+
+    void stop() {
+        if (!handle_) return;
+        const char* command[] = {"stop", nullptr};
+        mpv_command(handle_, command);
+        have_frame_ = false;
+        new_frame_ = false;
+        message_ = "Stopped.";
+    }
+
+
+    void pump_events() {
+        if (!handle_) return;
+        // mpv has its own threads; no event callback ever touches Borealis.
+        // Poll only on the main UI thread, bound work per frame.
+        for (unsigned i = 0; i < 32; ++i) {
+            const mpv_event* event = mpv_wait_event(handle_, 0);
+            if (!event || event->event_id == MPV_EVENT_NONE) break;
+            if (event->event_id == MPV_EVENT_FILE_LOADED) {
+                message_ = "Local MP4 loaded. Inspect moving video/audio.";
+            } else if (event->event_id == MPV_EVENT_PLAYBACK_RESTART) {
+                message_ = "Playback active. Decoder status shown below.";
+            } else if (event->event_id == MPV_EVENT_END_FILE) {
+                auto* end = static_cast<const mpv_event_end_file*>(event->data);
+                message_ = (end && end->reason == MPV_END_FILE_REASON_ERROR)
+                    ? "Local file decoding failed (see exact build debug symbols)."
+                    : "Playback reached end/stopped.";
+            }
+        }
+    }
+
+    const std::string& message() const { return message_; }
+
+    std::string stats() const {
+        if (!render_) return "Decoder: offline (read INIT ERROR above)";
+        const char* hw = mpv_get_property_string(handle_, "hwdec-current");
+        std::string decoder = hw ? hw : "unknown";
+        if (hw) mpv_free(const_cast<char*>(hw));
+        double seconds = 0.0;
+        const bool has_time = mpv_get_property(handle_, "time-pos",
+                                               MPV_FORMAT_DOUBLE, &seconds) >= 0;
+        const char* video = mpv_get_property_string(handle_, "video-codec");
+        const char* audio = mpv_get_property_string(handle_, "audio-codec");
+        const std::string video_name = video ? video : "--";
+        const std::string audio_name = audio ? audio : "--";
+        if (video) mpv_free(const_cast<char*>(video));
+        if (audio) mpv_free(const_cast<char*>(audio));
+        return "Decoder: " + decoder +
+               "  |  Video: " + video_name +
+               "  |  Audio: " + audio_name +
+               "  |  time: " +
+               (has_time ? std::to_string(static_cast<int>(seconds)) + "s" : "--") +
+               "  |  rendered frames: " + std::to_string(frame_count_);
+    }
+
+    // The pinned Borealis video context has no public Deko3D framebuffer
+    // accessors. This intentionally tests mpv's software render API first;
+    // it does NOT prove hardware decoder usage or 1080p performance.
+    const std::vector<unsigned char>& render() {
+        if (!render_) return pixels_;
+        new_frame_ = false;
+        const auto flags = mpv_render_context_update(render_);
+        if (flags & MPV_RENDER_UPDATE_FRAME) {
+            int size[2]{kRenderWidth, kRenderHeight};
+            std::size_t stride = static_cast<std::size_t>(kRenderWidth) * 4;
+            mpv_render_param params[] = {
+                {MPV_RENDER_PARAM_SW_SIZE, size},
+                {MPV_RENDER_PARAM_SW_FORMAT, const_cast<char*>("rgb0")},
+                {MPV_RENDER_PARAM_SW_STRIDE, &stride},
+                {MPV_RENDER_PARAM_SW_POINTER, pixels_.data()},
+                {MPV_RENDER_PARAM_INVALID, nullptr},
+            };
+            const int frame_rc = mpv_render_context_render(render_, params);
+            if (frame_rc >= 0) {
+                // libmpv's guaranteed "rgb0" format leaves byte 3 undefined.
+                // NanoVG's RGBA upload requires fully opaque alpha.
+                for (std::size_t i = 3; i < pixels_.size(); i += 4)
+                    pixels_[i] = 255;
+                have_frame_ = true;
+                new_frame_ = true;
+                ++frame_count_;
+                mpv_render_context_report_swap(render_);
+            } else if (!render_error_seen_) {
+                message_ = std::string("RENDER ERROR: ") + mpv_error_string(frame_rc) +
+                           " [" + std::to_string(frame_rc) + "]";
+                render_error_seen_ = true;
+            }
+        }
+        return pixels_;
+    }
+    bool has_frame() const { return have_frame_; }
+    bool new_frame() const { return new_frame_; }
+
+private:
+    void shutdown() {
+        if (render_) { mpv_render_context_free(render_); render_ = nullptr; }
+        if (handle_) { mpv_terminate_destroy(handle_); handle_ = nullptr; }
+    }
+    mpv_handle* handle_{nullptr};
+    mpv_render_context* render_{nullptr};
+    std::vector<unsigned char> pixels_;
+    std::string message_{"Initializing offline libmpv..."};
+    bool have_frame_{false};
+    bool new_frame_{false};
+    std::uint64_t frame_count_{0};
+    bool render_error_seen_{false};
+    bool optional_script_features_missing_{false};
+};
+
+class ProbeVideo : public brls::View {
+public:
+    explicit ProbeVideo(OfflineMpv& player) : player_(player) {
+        setHeight(294);
+    }
+
+    // The one-image allocation is released with this dedicated NRO process.
+    // Never touch a global NanoVG context during uncertain app teardown.
+
+    void draw(NVGcontext* vg, float x, float y, float width, float height,
+              brls::Style, brls::FrameContext*) override {
+        const auto& rgba = player_.render();
+        if (image_ < 0) {
+            image_ = nvgCreateImageRGBA(vg, kRenderWidth, kRenderHeight, 0,
+                                        rgba.data());
+        } else if (player_.new_frame()) {
+            nvgUpdateImage(vg, image_, rgba.data());
+        }
+        nvgBeginPath(vg);
+        nvgRoundedRect(vg, x, y, width, height, 8);
+        nvgFillColor(vg, nvgRGB(8, 14, 20));
+        nvgFill(vg);
+        if (image_ < 0 || !player_.has_frame()) return;
+        const float scale = std::min(width / kRenderWidth, height / kRenderHeight);
+        const float render_w = scale * kRenderWidth;
+        const float render_h = scale * kRenderHeight;
+        const float render_x = x + (width - render_w) * 0.5f;
+        const float render_y = y + (height - render_h) * 0.5f;
+        nvgBeginPath(vg);
+        nvgRect(vg, render_x, render_y, render_w, render_h);
+        nvgFillPaint(vg, nvgImagePattern(vg, render_x, render_y, render_w,
+                                         render_h, 0, image_, 1.0f));
+        nvgFill(vg);
+    }
+private:
+    OfflineMpv& player_;
+    int image_{-1};
+};
+
+brls::Label* add_label(brls::Box* root, const std::string& s, float font = 19) {
+    auto* label = new brls::Label();
+    label->setText(s);
+    label->setFontSize(font);
+    label->setMarginBottom(5);
+    root->addView(label);
+    return label;
+}
+
+brls::Button* add_button(brls::Box* root, const std::string& name,
+                          std::function<bool(brls::View*)> action) {
+    auto* button = new brls::Button();
+    button->setText(name);
+    button->setHeight(52);
+    button->setGrow(1.0f);
+    button->setMarginRight(8);
+    button->setMarginBottom(5);
+    button->registerClickAction(std::move(action));
+    root->addView(button);
+    return button;
+}
+
+class ProbeActivity final : public brls::Activity {
+public:
+    explicit ProbeActivity(OfflineMpv& player) : player_(player) {}
+
+    brls::View* createContentView() override {
+        // A fixed two-row control pad replaces the tall ScrollingFrame that
+        // trapped hardware focus below the visible 720p viewport.
+        auto* root = new brls::Box(brls::Axis::COLUMN);
+        root->setPadding(12, 20, 12, 20);
+        add_label(root, "TizenTube NX  |  M3 OFFLINE VIDEO TEST", 24);
+        add_label(root, "LOCAL MP4 ONLY  -  NO YOUTUBE / NO NETWORK", 15);
+        root->addView(new ProbeVideo(player_));
+        status_ = add_label(root, player_.message(), 17);
+        decoder_ = add_label(root, player_.stats(), 15);
+
+        auto* first = new brls::Box(brls::Axis::ROW);
+        first->setHeight(56);
+        root->addView(first);
+        add_button(first, "A - Load / Retry", [this](brls::View*) {
+            player_.start();
+            update_labels();
+            return true;
+        });
+        add_button(first, "Pause / Resume", [this](brls::View*) {
+            player_.toggle_pause();
+            update_labels();
+            return true;
+        });
+        add_button(first, "Stop (X)", [this](brls::View*) {
+            player_.stop();
+            update_labels();
+            return true;
+        });
+
+        auto* second = new brls::Box(brls::Axis::ROW);
+        second->setHeight(56);
+        root->addView(second);
+        add_button(second, "Seek -10s (L)", [this](brls::View*) {
+            player_.seek(-10);
+            update_labels();
+            return true;
+        });
+        add_button(second, "Seek +10s (R)", [this](brls::View*) {
+            player_.seek(10);
+            update_labels();
+            return true;
+        });
+
+        root->registerAction("Pause", brls::BUTTON_Y, [this](brls::View*) {
+            player_.toggle_pause(); update_labels(); return true;
+        });
+        root->registerAction("Seek -10s", brls::BUTTON_LB, [this](brls::View*) {
+            player_.seek(-10); update_labels(); return true;
+        });
+        root->registerAction("Seek +10s", brls::BUTTON_RB, [this](brls::View*) {
+            player_.seek(10); update_labels(); return true;
+        });
+        root->registerAction("Stop", brls::BUTTON_X, [this](brls::View*) {
+            player_.stop(); update_labels(); return true;
+        });
+        return root;
+    }
+
+    void tick() {
+        player_.pump_events();
+        if ((++frames_ % 45) == 0) update_labels();
+    }
+private:
+    void update_labels() {
+        if (status_) status_->setText(player_.message());
+        if (decoder_) decoder_->setText(player_.stats());
+    }
+    OfflineMpv& player_;
+    brls::Label* status_{nullptr};
+    brls::Label* decoder_{nullptr};
+    unsigned frames_{0};
+};
+
+} // namespace
+
+int main(int, char**) {
+    if (!brls::Application::init()) return EXIT_FAILURE;
+    brls::Application::createWindow("TizenTube NX M3 Offline Probe");
+    brls::Application::setGlobalQuit(true);
+    OfflineMpv player;
+    player.init();
+    auto* app = new ProbeActivity(player);
+    brls::Application::pushActivity(app);
+    while (brls::Application::mainLoop()) app->tick();
+    player.stop();
+    return EXIT_SUCCESS;
+}

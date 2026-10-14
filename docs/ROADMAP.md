@@ -148,6 +148,52 @@
 
 ## M3 — Playback + ad-free viewing
 
+### Isolated foundation PR #8 (offline H.264/AAC hardware checkpoint accepted; streaming NOT accepted)
+
+- [x] Provider-neutral extractor contract and typed resolved audio/video formats
+- [x] Safe structural Googlevideo URL validation independent of the M2 outbound allowlist
+- [x] H.264/AAC-first adaptive vs muxed source selection with explicit unsupported codec rejection
+- [x] Player backend contract and deterministic play/pause/resume/seek/stop state machine
+- [x] SponsorBlock normalized category modes, overlapping-segment handling and repeat suppression
+- [x] Local-only authenticated yt-dlp research resolver, with no arbitrary URL/credential input
+- [x] Host regression coverage for playback selection, URLs, state, SponsorBlock and resolver HTTP boundary
+- [x] Develop a distinct, opt-in libmpv offline-video NRO source and Makefile build mode
+- [x] Implement synthetic local MP4 video-frame preview, audio/control actions and decoder diagnostics
+- [x] Add separate devkitA64 mpv-package CI recipe and exact-artifact/debug-symbol upload workflow
+- [x] Publish synthetic fixture generation and reproducible real-Switch hardware test checklist
+- [x] Exact-head offline mpv-probe build and regular Switch/host tests passed at the physically tested `2acc3b7533d0e1ede0db0517b085ffd1179cb372`
+- [x] Physical Switch screenshot confirms moving 30-second synthetic H.264 picture and audible AAC, with mpv playback active at tested `2acc3b75`
+- [x] Hardware decoder report `nvtegra-copy` observed on Switch (this does NOT mean Deko3D video-frame presentation is implemented)
+- [x] Improve quiet synthetic sine fixture: +10 dB source-level boost, peak checked, video stream unchanged; no changes to working NRO
+- [x] Owner physically confirmed pause/resume, 10-second forward/backward seeking, Stop and reload/replay on the exact `2acc3b75` offline hardware candidate
+- [ ] Longer-form A/V synchronization, sleep/wake, dock/undock and stable-exit hardware verification
+- [ ] Replace experimental 640x360 software output with reviewed Deko3D/nvtegra renderer bridge
+- [ ] Connect project-owned backend to real Switch libmpv/FFmpeg/Deko3D/nvtegra renderer
+- [x] Physical offline SDR H.264/AAC video + audio playback from exact local SD fixture (quiet original tone separately tracked)
+- [ ] Test separate remote audio/video synchronization and seek on hardware
+### M3 integrated media source / transfer tranche — PR #8
+- [x] Native WEB guest `/youtubei/v1/player` request builder with reviewed same-origin session fields
+- [x] Bounded native direct-stream response parser: normal video ID, playability, H.264/AAC and cipher/DRM/unsafe host rejection
+- [x] Implement strict 206-only signed Googlevideo range reader with <=1 MiB chunks and redirect/content-range/type/length checks
+- [x] Implement cancellable multi-chunk progressive transfer with total-size consistency and atomic storage-sink contract
+- [x] Add opt-in native libnx/Horizon SSL media transport, repeat CDN host policy immediately before DNS and keep M2's allowlist unchanged
+- [x] Add fixed-location private SD media cache .part staging, flush/publish and cancellation cleanup
+- [x] Connect guest source, normal ID and Shorts firewall, muxed H.264/AAC selector and progressive cache coordinator
+- [x] Add offline regression tests for request privacy, player response, CDN hostile ranges, transfer failures and end-to-end preparation
+- [ ] Exact-head native media transport/host/standard NRO CI completes successfully for integrated tranche
+- [ ] Background Search-selected normal-video -> guest player -> media cache -> libmpv UI integration
+- [ ] Physical real YouTube H.264/AAC long-video acceptance on Switch without ads or Shorts
+- [ ] Native decipher/PO-token compatibility strategy and separate adaptive audio/video playback
+
+See `docs/M3_MEDIA_INTEGRATION_2026-10-11.md`. These are implemented/tested pipeline pieces, **not** a released or hardware-accepted YouTube playback feature.
+
+- [ ] Select and validate standalone-console extraction strategy without mandatory PC
+- [ ] Approve/implement actual media-network policy, redirects, HTTPS and range transport
+- [ ] Integrate real YouTube stream extraction end-to-end
+- [ ] Real Switch YouTube playback, ad-free verification and SponsorBlock integration
+
+See `docs/M3_PLAYBACK_FOUNDATION.md` and `docs/M3_HARDWARE_CHECKPOINT_2026-10-11.md`. M2's accepted NRO and `www.youtube.com:443` allowlist have **not** been changed into a playback client.
+
 Playback and the ad-free experience are one milestone. **A player that deliberately shows YouTube ads is not considered finished.** See `docs/PRODUCT_PHILOSOPHY.md`.
 
 ### Media playback
@@ -181,24 +227,23 @@ Playback and the ad-free experience are one milestone. **A player that deliberat
 - [ ] Cache/retry behavior that does not block basic player controls
 - [ ] Real-hardware SponsorBlock acceptance alongside playback acceptance
 
-## M4 — Local TizenTube profiles (v1)
+## M4 — Small, on-device Library and watch history (v1)
 
-- [ ] Create a local profile directly on Switch
-- [ ] Display name + avatar
-- [ ] Local channel follows/subscriptions
-- [ ] Local playlists
-- [ ] Local Watch Later
-- [ ] Local likes/favorites
-- [ ] Watch history + resume positions
-- [ ] Per-profile settings/preferences
-- [ ] Optional local search history
-- [ ] Multiple local TizenTube profiles
-- [ ] Optional Switch-user-to-TizenTube-profile mapping
-- [ ] Profile backup/export/import appropriate for local data
-- [ ] No Google/YouTube account authentication required for v1
-- [ ] Never accept/store Google passwords, browser cookies, exported cookie files or equivalent browser/account credentials
+- [ ] Watch history and playback resume positions, with no login/setup required
+- [ ] Continue Watching, completed-video handling and local history controls
+- [ ] Local channel follows/subscriptions (not synced or written to YouTube)
+- [ ] Local playlists and Watch Later
+- [ ] Local likes/favorites (not sent to YouTube)
+- [ ] Optional, separately clearable local search history
+- [ ] Small metadata-only records, deduplication and capped history length
+- [ ] Bound Library state to a proposed 2,000,000 bytes within app-wide persistent quota
+- [ ] Bounded and crash-safe writes, including temporary files/backups
+- [ ] History enable/disable, delete entry, clear history and recovery testing
+- [ ] No stored media, thumbnails, signed CDN links or raw YouTube responses
+- [ ] No Google sign-in, OAuth, YouTube account profiles, cookies or account sync in any release
+- [ ] Optional local-only display/profile customization AFTER basic Library works
 
-See `docs/PROFILES_AND_IMPORT.md` for the profile/security contract.
+See `docs/PROFILES_AND_IMPORT.md` for the Library/storage/security contract.
 
 ## M5 — Morphe-inspired enhancements and metadata
 
@@ -218,55 +263,25 @@ Morphe is a feature-discovery/research source for this milestone; TizenTube and 
 - [ ] Applet vs title-takeover testing
 - [ ] Release audit: playback does not knowingly fall back to YouTube-served ads
 - [ ] Release audit: no network path bypasses outbound policy
-- [ ] Release audit: v1 contains no Google OAuth/account linking implementation
+- [ ] Release audit: **no release** contains Google OAuth/account linking implementation
 - [ ] Release audit: no Google passwords/browser cookies/exported cookie files accepted anywhere
 - [ ] Release packaging
 
-## M7 — Post-v1 optional YouTube linking and migration
+## M7 — Optional small-library portability and polish (post-v1)
 
-Local TizenTube profiles remain canonical. Post-v1 linking is optional and must not be required to use the app.
+- [ ] Compact, versioned local metadata export/import with size and integrity limits
+- [ ] Restore on-device history, follows, Watch Later, favorites and playlists
+- [ ] Import conflicts/deduplication without a second database or hidden cache
+- [ ] Keep backup artifacts inside 100,000,000-byte combined SD ceiling
+- [ ] Optional user-supplied public playlist URLs, without account login
+- [ ] Never add Google OAuth, account profiles, private account sync or credentials
 
-### Official device OAuth linking
-
-- [ ] Switch displays QR code plus human-readable device-code fallback
-- [ ] Phone opens Google's official sign-in/consent UI
-- [ ] Never collect Google passwords, passkeys, 2FA recovery codes or browser cookies
-- [ ] Request the narrowest practical YouTube scope; prefer read-only access
-- [ ] Initial sync direction is `YouTube -> TizenTube profile`
-- [ ] Short-lived access token kept memory-only where practical
-- [ ] Optional `Keep me connected` mode using persistent refresh authorization
-- [ ] Dedicated secure-storage review before any refresh token is persisted
-- [ ] Never store persistent authorization as obvious plaintext on SD
-- [ ] `Reconnect YouTube` when authorization expires/revokes/invalidates
-- [ ] Local TizenTube profile continues working while disconnected
-- [ ] Clear `Unlink YouTube` action removes local authorization and attempts provider revocation when practical
-- [ ] Unlinking does not delete local profile data
-- [ ] Token/authorization values fully redacted from logs, UI, exports and crash diagnostics
-- [ ] All auth/API destinations reviewed through outbound policy before DNS
-
-### Library import/sync
-
-- [ ] Import/sync subscriptions where supported
-- [ ] Import/sync playlists where supported
-- [ ] Import/sync liked/favorite library data where supported
-- [ ] Import approved account/channel metadata needed for migration
-- [ ] Duplicate-safe merge into existing local profile
-- [ ] Preserve local-only follows/playlists/favorites/history
-- [ ] Explicit user control over what is imported/synced
-
-### Optional public/no-auth fallback
-
-- [ ] Public YouTube profile/channel metadata import
-- [ ] Public subscriptions import when the source profile exposes them
-- [ ] Public playlist import
-- [ ] User-supplied unlisted playlist import
-- [ ] Treat unlisted playlist URLs as secrets and redact them from diagnostics
-
-See `docs/PROFILES_AND_IMPORT.md` and `docs/OAUTH_ACCOUNT_LINKING.md` for the full post-v1 design.
+See `docs/PROFILES_AND_IMPORT.md` for the accepted local-only contract.
+The old `docs/OAUTH_ACCOUNT_LINKING.md` is archived/rejected, not future scope.
 
 ## Current gate
 
-**Guest bootstrap, startup recovery, the complete Search slice, inline detail, sidebar traversal, and explicit Search continuation are physically accepted through `428497c90be6e768c607e45c68171827d74f0faf`. The current M2 gate is the first explicit live guest Home page. Preserve the accepted Search implementation, exact `www.youtube.com:443` allowlist, hard Shorts/ad/promoted/shopping firewall, remote-thumbnail block, and post-v1 OAuth documentation-only boundary.**
+**Guest bootstrap, startup recovery, the complete Search slice, inline detail, sidebar traversal, and explicit Search continuation are physically accepted through `428497c90be6e768c607e45c68171827d74f0faf`. The current M2 gate is the first explicit live guest Home page. Preserve the accepted Search implementation, exact `www.youtube.com:443` allowlist, hard Shorts/ad/promoted/shopping firewall, remote-thumbnail block, and permanent no-Google-auth policy.**
 
 
 ## Current gate — Channel pages

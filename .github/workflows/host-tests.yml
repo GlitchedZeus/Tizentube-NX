@@ -1,5 +1,11 @@
 name: host-tests
 
+# Preserve the newest build on this branch instead of burning CI workers on
+# dozens of obsolete intermediary commits from a long development tranche.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
   pull_request:
@@ -9,9 +15,444 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Test optional extraction service (offline)
+        run: python3 -m unittest discover -s tests -p extractor_service_tests.py -v
+      - name: Offline live-source preflight safety checks (no network)
+        run: python3 -m unittest discover -s tests -p live_media_preflight_tests.py -v
+      - name: Offline VisionOS HLS live-proof safety contracts
+        run: python3 -m unittest discover -s tests -p vision_hls_live_probe_tests.py -v
+      - name: Install host FFmpeg codec tools for real demux verification
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg libmpv2
+          ffmpeg -version | head -n 1
+          ffprobe -version | head -n 1
+      - name: Decode synthetic local HLS video + separate AAC (FFmpeg)
+        run: python3 -m unittest discover -s tests -p local_av_demux_tests.py -v
+      - name: M3 integrated Switch video-loop ownership and frame-latch contract
+        run: python3 -m unittest discover -s tests -p m3_renderer_contract_tests.py -v
+      - name: M3 ephemeral playback cache and concurrent startup contracts
+        run: python3 -m unittest discover -s tests -p m3_ephemeral_cache_contract_tests.py -v
+      - name: Offline M3 hardware log triage and privacy regressions
+        run: python3 -m unittest discover -s tests -p m3_diagnostics_triage_tests.py -v
+      - name: Verify isolated M3 offline-probe security contract
+        run: python3 -m unittest discover -s tests -p m3_offline_probe_contract_tests.py -v
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
       - name: Build
         run: cmake --build build --parallel
       - name: Test
         run: ctest --test-dir build --output-on-failure
+      - name: Sanitized M4 streaming-accounting regressions
+        run: |
+          set -euo pipefail
+          for target in rolling_media_budget rolling_stream_coordinator; do
+            g++ -std=c++20 -Wall -Wextra -Werror -O1 -g \
+              -fsanitize=address,undefined -fno-omit-frame-pointer \
+              -Iinclude "tests/${target}_tests.cpp" \
+              -o "/tmp/ttnx-${target}-san"
+            "/tmp/ttnx-${target}-san"
+          done
+      - name: Sanitized M4 rolling SD and playlist tests
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -Wall -Wextra -Werror -O1 -g \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -DTTNX_M4_ROLLING_HOST_TEST=1 \
+            -Iinclude -Iswitch/source tests/rolling_hls_sink_tests.cpp \
+            switch/source/rolling_hls_sink.cpp src/core/ts_streams.cpp \
+            -o /tmp/ttnx-rolling-hls-san
+          /tmp/ttnx-rolling-hls-san
+      - name: Sanitized reviewed-HTTPS to rolling-HLS integration tests
+        run: |
+          set -euo pipefail
+          cmake -S . -B build-sanitized -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -O1 -g"
+          cmake --build build-sanitized --parallel 2 \
+            --target tizentube_nx_rolling_muxed_hls_tests
+          ASAN_OPTIONS=detect_leaks=1 ctest --test-dir build-sanitized \
+            -R '^rolling_muxed_hls$' --output-on-failure
+      - name: Sanitized M4 owned epoch EOF, blocked-reader and in-fetch Stop
+        run: |
+          set -euo pipefail
+          cmake --build build-sanitized --parallel 2 \
+            --target tizentube_nx_rolling_stream_epoch_tests \
+                     tizentube_nx_rolling_stream_epoch_prefetch_tests \
+                     tizentube_nx_rolling_stream_epoch_long_vod_tests
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            ctest --test-dir build-sanitized \
+              -R '^(rolling_stream_epoch|rolling_stream_epoch_prefetch|rolling_stream_epoch_long_vod)$' \
+              --output-on-failure
+      - name: M4 long-form re-prime decision gate (normal and ASan/UBSan)
+        run: |
+          set -euo pipefail
+          for mode in normal sanitized; do
+            flags="-O2"
+            if [ "$mode" = sanitized ]; then
+              flags="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer"
+            fi
+            g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror $flags \
+              -Iinclude tests/rolling_reprime_gate_tests.cpp \
+              -o "/tmp/ttnx-ring-reprime-$mode"
+            ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+              "/tmp/ttnx-ring-reprime-$mode"
+          done
+      - name: Verify M4 native ring re-prime/cleanup isolation contracts
+        run: python3 -m unittest discover -s tests -p m4_ring_reprime_contract_tests.py -v
+      - name: M4 decoder-source timestamp normalization (normal and ASan/UBSan)
+        run: |
+          set -euo pipefail
+          for mode in normal sanitized; do
+            flags="-O2"
+            if [ "$mode" = sanitized ]; then
+              flags="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer"
+            fi
+            g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror $flags \
+              -Iinclude tests/rolling_epoch_clock_tests.cpp \
+              -o "/tmp/ttnx-epoch-clock-$mode"
+            ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+              "/tmp/ttnx-epoch-clock-$mode"
+          done
+      - name: M4 libmpv read/cancel/close concurrency under ASan/UBSan
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror -O1 -g -pthread \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iinclude tests/rolling_ring_reader_concurrency_tests.cpp \
+            -o /tmp/ttnx-ring-reader-race-san
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/ttnx-ring-reader-race-san
+      - name: M4 native HTTPS cancellation and epoch reset under ASan/UBSan
+        run: |
+          set -euo pipefail
+          cmake --build build-sanitized --parallel 2 \
+            --target tizentube_nx_rolling_stream_cancel_propagation_tests
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            ctest --test-dir build-sanitized \
+              -R '^rolling_stream_cancel_propagation$' --output-on-failure
+      - name: Validate M4 test-only Search/worker/decoder handoff isolation
+        run: python3 -m unittest discover -s tests -p m4_native_search_route_contract_tests.py -v
+      - name: M4 source-linked native stream plan under ASan/UBSan
+        run: |
+          set -euo pipefail
+          cmake --build build-sanitized --parallel 2 \
+            --target tizentube_nx_native_ring_plan_tests
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            ctest --test-dir build-sanitized -R '^native_ring_plan$' --output-on-failure
+      - name: Decode real growing H264/AAC HLS and verify zero-video-cache shutdown
+        run: python3 -m unittest discover -s tests -p rolling_hls_live_decode_tests.py -v
+      - name: Sanitized real growing HLS A/V decode and cancel regressions
+        env:
+          TTNX_M4_LIVE_SANITIZE: "1"
+        run: python3 -m unittest discover -s tests -p rolling_hls_live_decode_tests.py -v
+      - name: Native hardware failure reason and seek/budget separation contracts
+        run: python3 -m unittest discover -s tests -p m4_hardware_feedback_contract_tests.py -v
+      - name: M4 native signed-CDN SSL compile and policy guard
+        run: python3 -m unittest discover -s tests -p m4_native_ssl_stream_contract_tests.py -v
+      - name: Player volume 130% policy under ASan and UBSan
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror -O1 -g \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iinclude tests/player_volume_tests.cpp -o /tmp/ttnx-volume-san
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/ttnx-volume-san
+      - name: Sanitized two-track bounded direct HTTP-range window
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror -O1 -g \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iinclude tests/bounded_direct_track_tests.cpp \
+            src/core/media_chunks.cpp src/core/playback.cpp src/core/outbound_policy.cpp \
+            src/core/url.cpp \
+            -o /tmp/ttnx-direct-track-san
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/ttnx-direct-track-san
+      - name: Sanitized separate video/audio stream callbacks and random seeking
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror -O1 -g \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iinclude -Itests/stubs tests/direct_av_mpv_bridge_tests.cpp \
+            src/core/media_chunks.cpp src/core/playback.cpp src/core/outbound_policy.cpp \
+            src/core/url.cpp \
+            -o /tmp/ttnx-direct-av-bridge-san
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/ttnx-direct-av-bridge-san
+      - name: Sanitized no-Shorts direct A/V source admission
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror -O1 -g \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iinclude tests/direct_av_plan_tests.cpp \
+            src/core/content_filter.cpp src/core/playback.cpp \
+            src/core/outbound_policy.cpp src/core/url.cpp \
+            -o /tmp/ttnx-direct-admission-san
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/ttnx-direct-admission-san
+      - name: Structural direct A/V native route and no-SD safety contracts
+        run: python3 -m unittest discover -s tests -p m4_direct_av_integration_contract_tests.py -v
+      - name: Sanitized 35-minute virtual VOD zero-SD two-track seek proof
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror -O1 -g \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -pthread -Iinclude tests/direct_av_long_vod_tests.cpp \
+            src/core/media_chunks.cpp src/core/playback.cpp \
+            src/core/outbound_policy.cpp src/core/url.cpp \
+            -o /tmp/ttnx-direct-long-vod-san
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/ttnx-direct-long-vod-san
+      - name: M4 native libmpv local-only probe isolation contract
+        run: python3 -m unittest discover -s tests -p m4_local_player_contract_tests.py -v
+      - name: Sanitized rolling local-playlist admission and hostile URI gate
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror -O1 -g \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iinclude tests/local_live_hls_gate_tests.cpp \
+            -o /tmp/ttnx-local-live-gate
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/ttnx-local-live-gate
+      - name: M4 worker stop/join/backpressure native lifecycle under ASan/UBSan
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -Wall -Wextra -Werror -O1 -g -pthread \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -DTTNX_M4_ROLLING_HOST_TEST=1 \
+            -Iinclude -Iswitch/source tests/rolling_hls_worker_tests.cpp \
+            switch/source/rolling_hls_worker.cpp \
+            -o /tmp/ttnx-rolling-worker-san
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/ttnx-rolling-worker-san
+      - name: Sanitized M4 player/producer lifetime and ownership gates
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -Wall -Wextra -Werror -O1 -g -pthread \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -DTTNX_M4_ROLLING_HOST_TEST=1 -Iinclude -Iswitch/source \
+            tests/rolling_playback_owner_tests.cpp \
+            switch/source/rolling_playback_owner.cpp \
+            switch/source/rolling_hls_worker.cpp \
+            -o /tmp/ttnx-rolling-owner-san
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/ttnx-rolling-owner-san
+      - name: Switch TV browse/player layout under ASan and UBSan
+        run: |
+          set -euo pipefail
+          for test in tv_layout tv_player_layout; do
+            g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror \
+              -O1 -g -fsanitize=address,undefined \
+              -fno-omit-frame-pointer -Iinclude \
+              "tests/${test}_tests.cpp" -o "/tmp/ttnx-${test}-san"
+            ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+              "/tmp/ttnx-${test}-san"
+          done
+      - name: Verify bounded on-device Library under ASan and UBSan
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror -O1 -g \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iinclude tests/local_library_tests.cpp \
+            -o /tmp/ttnx-local-library-san
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/ttnx-local-library-san
+      - name: Resume-to-playback gate under ASan and UBSan
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror -O1 -g \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iinclude tests/playback_resume_gate_tests.cpp \
+            -o /tmp/ttnx-playback-resume-san
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/ttnx-playback-resume-san
+      - name: TV player overlay controller model under ASan and UBSan
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror -O1 -g \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iinclude tests/tv_player_controls_tests.cpp \
+            -o /tmp/ttnx-tv-player-controls-san
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/ttnx-tv-player-controls-san
+      - name: Local History/Watch Later/Following 20-row pager sanitizer gate
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror -O1 -g \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Iinclude tests/library_pager_tests.cpp \
+            -o /tmp/ttnx-library-pager-san
+          ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+            /tmp/ttnx-library-pager-san
+      - name: M4 streaming TS validator normal and ASan/UBSan
+        run: |
+          set -euo pipefail
+          for mode in normal sanitized; do
+            flags="-O2"
+            if [ "$mode" = sanitized ]; then
+              flags="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer"
+            fi
+            g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror $flags \
+              -Iinclude tests/streaming_ts_validator_tests.cpp \
+              src/core/ts_streams.cpp -o "/tmp/ttnx-streaming-ts-${mode}"
+            ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+              "/tmp/ttnx-streaming-ts-${mode}"
+          done
+      - name: M4 HTTPS media parser fragmented streaming ASan/UBSan
+        run: |
+          set -euo pipefail
+          for mode in normal sanitized; do
+            flags="-O2"
+            if [ "$mode" = sanitized ]; then
+              flags="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer"
+            fi
+            g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror $flags \
+              -Iinclude tests/http1_media_stream_tests.cpp \
+              -o "/tmp/ttnx-http1-media-stream-${mode}"
+            ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+              "/tmp/ttnx-http1-media-stream-${mode}"
+          done
+      - name: Exact HLS cache quota and pre-body refusal ASan/UBSan
+        run: |
+          set -euo pipefail
+          for mode in normal sanitized; do
+            flags="-O2"
+            if [ "$mode" = sanitized ]; then
+              flags="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer"
+            fi
+            g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror $flags \
+              -Iinclude tests/physical_cache_admission_tests.cpp \
+              -o "/tmp/ttnx-physical-quota-${mode}"
+            ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+              "/tmp/ttnx-physical-quota-${mode}"
+          done
+      - name: Switch-NewPipe-inspired bounded SD stream and mpv bridge
+        run: |
+          set -euo pipefail
+          for source in rolling_file_stream rolling_mpv_stream_bridge; do
+            for mode in normal sanitized; do
+              flags="-O2"
+              if [ "$mode" = sanitized ]; then
+                flags="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer"
+              fi
+              g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror $flags \
+                -pthread -Iinclude -Itests/stubs \
+                "tests/${source}_tests.cpp" \
+                -o "/tmp/ttnx-${source}-${mode}"
+              ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+                "/tmp/ttnx-${source}-${mode}"
+            done
+          done
+      - name: Native HTTP-to-ring transactional H264/AAC path normal and ASan/UBSan
+        run: |
+          set -euo pipefail
+          for mode in normal sanitized; do
+            flags="-O2"
+            if [ "$mode" = sanitized ]; then
+              flags="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer"
+            fi
+            g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror $flags \
+              -pthread -Iinclude \
+              tests/verified_ring_hls_ingest_tests.cpp \
+              src/core/ts_streams.cpp \
+              -o "/tmp/ttnx-verified-ring-ingest-${mode}"
+            ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+              "/tmp/ttnx-verified-ring-ingest-${mode}"
+          done
+      - name: MPV concurrent read versus unverified SD segment commit
+        run: |
+          set -euo pipefail
+          for mode in normal sanitized; do
+            flags="-O2"
+            if [ "$mode" = sanitized ]; then
+              flags="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer"
+            fi
+            g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror $flags \
+              -pthread -Iinclude tests/rolling_ring_atomic_commit_tests.cpp \
+              -o "/tmp/ttnx-ring-atomic-${mode}"
+            ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+              "/tmp/ttnx-ring-atomic-${mode}"
+          done
+      - name: Real FFmpeg H264/AAC TS through the verified disposable SD ring
+        run: |
+          set -euo pipefail
+          ffmpeg -hide_banner -loglevel error -y \
+            -f lavfi -i 'testsrc2=size=320x180:rate=30' \
+            -f lavfi -i 'sine=frequency=440:sample_rate=48000' \
+            -t 2 -c:v libx264 -preset ultrafast -pix_fmt yuv420p \
+            -c:a aac -b:a 96k -f mpegts /tmp/ttnx-real-av.ts
+          ffprobe -v error -show_entries stream=codec_name \
+            -of csv=p=0 /tmp/ttnx-real-av.ts | grep -q h264
+          ffprobe -v error -show_entries stream=codec_name \
+            -of csv=p=0 /tmp/ttnx-real-av.ts | grep -q aac
+          for mode in normal sanitized; do
+            flags="-O2"
+            if [ "$mode" = sanitized ]; then
+              flags="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer"
+            fi
+            g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror $flags \
+              -pthread -Iinclude tests/real_media_ring_ingest_tests.cpp \
+              src/core/ts_streams.cpp -o "/tmp/ttnx-real-av-ring-${mode}"
+            ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+              "/tmp/ttnx-real-av-ring-${mode}" /tmp/ttnx-real-av.ts
+          done
+      - name: Owned M4 producer/decoder SD ring epoch and restart sanitizers
+        run: |
+          set -euo pipefail
+          for mode in normal sanitized; do
+            flags="-O2"
+            if [ "$mode" = sanitized ]; then
+              flags="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer"
+            fi
+            g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror $flags \
+              -pthread -Iinclude -Itests/stubs tests/rolling_stream_epoch_tests.cpp \
+              src/core/ts_streams.cpp -o "/tmp/ttnx-rolling-epoch-${mode}"
+            ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+              "/tmp/ttnx-rolling-epoch-${mode}"
+          done
+      - name: Orphan cleanup and real H264 AAC decoder-epoch tests under ASan UBSan
+        run: |
+          set -euo pipefail
+          ffmpeg -hide_banner -loglevel error -y \
+            -f lavfi -i 'testsrc2=size=320x180:rate=30' \
+            -f lavfi -i 'sine=frequency=440:sample_rate=48000' \
+            -t 2 -c:v libx264 -preset ultrafast -pix_fmt yuv420p \
+            -c:a aac -b:a 96k -f mpegts /tmp/ttnx-epoch-av.ts
+          for mode in normal sanitized; do
+            flags="-O2"
+            if [ "$mode" = sanitized ]; then
+              flags="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer"
+            fi
+            g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror $flags \
+              -pthread -Iinclude -Itests/stubs \
+              tests/rolling_stream_epoch_real_av_tests.cpp \
+              src/core/ts_streams.cpp -o "/tmp/ttnx-real-epoch-${mode}"
+            ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+              "/tmp/ttnx-real-epoch-${mode}" /tmp/ttnx-epoch-av.ts
+            g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror $flags \
+              -Iinclude tests/ring_orphan_cleanup_tests.cpp \
+              -o "/tmp/ttnx-orphan-clean-${mode}"
+            ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+              "/tmp/ttnx-orphan-clean-${mode}"
+          done
+      - name: Playback-gated M4 prefetch, epoch wakeup and decoder-safe restart
+        run: |
+          set -euo pipefail
+          for source in rolling_prefetch_window rolling_stream_epoch_prefetch; do
+            for mode in normal sanitized; do
+              flags="-O2"
+              if [ "$mode" = sanitized ]; then
+                flags="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer"
+              fi
+              extras=""
+              if [ "$source" = rolling_stream_epoch_prefetch ]; then
+                extras="src/core/ts_streams.cpp"
+              fi
+              g++ -std=c++20 -Wall -Wextra -Wpedantic -Werror $flags \
+                -pthread -Iinclude -Itests/stubs \
+                "tests/${source}_tests.cpp" $extras \
+                -o "/tmp/ttnx-${source}-${mode}"
+              ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 \
+                "/tmp/ttnx-${source}-${mode}"
+            done
+          done
