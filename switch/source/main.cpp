@@ -33,6 +33,10 @@
 #include "tizentube_nx/playback/adaptive_media_budget.hpp"
 #if defined(TTNX_M4_NATIVE_TEST_UI) && defined(TTNX_M4_RING_STREAM_CB_PROBE)
 #include "m4_mpv_stream_cb_probe.hpp"
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+#include "m4_direct_av.hpp"
+#include "tizentube_nx/playback/direct_av_plan.hpp"
+#endif
 #include "tizentube_nx/core/content_filter.hpp"
 #endif
 #endif
@@ -331,10 +335,19 @@ public:
         // Shutdown may bypass pump_m3_video(). Never leave an unlaunched
         // producer holding an app-owned temporary SD file or SSL client.
         std::shared_ptr<ttnx::playback::RollingStreamEpoch> abandoned_ring;
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+        std::shared_ptr<ttnx::switch_app::NativeDirectAvSession> abandoned_direct;
+#endif
         {
             std::lock_guard<std::mutex> lock(media_mutex_);
             abandoned_ring=std::move(pending_m4_epoch_);
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+            abandoned_direct=std::move(pending_m4_direct_);
+#endif
         }
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+        if(abandoned_direct)abandoned_direct->cancel();
+#endif
         if(abandoned_ring) {
             abandoned_ring->stop_and_join();
             (void)abandoned_ring->cleanup();
@@ -419,6 +432,9 @@ private:
     bool pending_media_adaptive_{false};
 #if defined(TTNX_M4_NATIVE_TEST_UI) && defined(TTNX_M4_RING_STREAM_CB_PROBE)
     std::shared_ptr<ttnx::playback::RollingStreamEpoch> pending_m4_epoch_{};
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+    std::shared_ptr<ttnx::switch_app::NativeDirectAvSession> pending_m4_direct_{};
+#endif
 #endif
     std::string pending_media_feedback_;
     std::string media_feedback_{"Choose a normal video, then Play video (M3)."};
@@ -1661,6 +1677,9 @@ private:
         try {
             media_worker_=std::thread([this,verified=std::move(verified),guest] {
                 std::shared_ptr<ttnx::playback::RollingStreamEpoch> epoch;
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+                std::shared_ptr<ttnx::switch_app::NativeDirectAvSession> direct;
+#endif
                 std::string feedback="M4: approved muxed H264/AAC HLS unavailable.";
                 bool ready=false;
                 try {
@@ -1684,6 +1703,35 @@ private:
                                      ttnx::playback::describe_hls_probe_failure(
                                          probe.last_error());
                         }
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+                        // YouTube often supplies DASH-style separate H264 +
+                        // AAC instead of a muxed MPEG-TS VOD. Only a *missing
+                        // compatible HLS rendition* permits this strict
+                        // direct source fallback, never a bad or unsafe HLS.
+                        if(!plan && !media_cancel_requested_.load() &&
+                           probe.last_error()==
+                               ttnx::playback::HlsProbeError::VariantUnavailable) {
+                            media_step_.store(7);
+                            ttnx::playback::GuestDirectExtractor direct_source(
+                                network_client_,guest,true);
+                            const auto extracted=direct_source.resolve(verified.id);
+                            const auto admitted=extracted
+                                ?ttnx::playback::admit_direct_av_plan(*extracted,verified)
+                                :std::nullopt;
+                            ttnx::switch_app::M3Diagnostics::record(
+                                ttnx::switch_app::M3Stage::Direct,
+                                ttnx::switch_app::M3Event::Selected,
+                                7,extracted?1:0,admitted?1:0);
+                            if(admitted && !media_cancel_requested_.load()) {
+                                direct=ttnx::switch_app::NativeDirectAvSession::create(
+                                    *admitted);
+                                ready=static_cast<bool>(direct);
+                                feedback=ready
+                                    ?"M4: separate H264/AAC HTTP-range RAM streams ready."
+                                    :"M4: source MP4 prefix or approved HTTPS range rejected.";
+                            } else feedback="M4: no safe direct H264/AAC VOD pair available.";
+                        }
+#endif
                         if(plan && !media_cancel_requested_.load()) {
                             epoch=ttnx::switch_app::create_native_ring_epoch(*plan,verified);
                             if(epoch && epoch->start()) {
@@ -1711,6 +1759,9 @@ private:
                 }
                 if(media_cancel_requested_.load()) {
                     ready=false;
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+                    if(direct){direct->cancel();direct.reset();}
+#endif
                     feedback="M4: cancelled before the player opened.";
                 }
                 if(!ready && epoch) {
@@ -1725,6 +1776,9 @@ private:
                     pending_media_adaptive_=false;
                     pending_media_feedback_=std::move(feedback);
                     pending_m4_epoch_=std::move(epoch);
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+                    pending_m4_direct_=std::move(direct);
+#endif
                 }
                 media_done_.store(true);
             });
@@ -2126,6 +2180,11 @@ private:
             } else if(media_step_.load()==6) {
                 media_feedback_="M4: preparing first verified SD segment (no full-video cache)";
                 publish_m3_feedback_on_ui(active_m3_video_id_);
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+            } else if(media_step_.load()==7) {
+                media_feedback_="M4: verifying short H264/AAC prefixes (512 KiB RAM total)";
+                publish_m3_feedback_on_ui(active_m3_video_id_);
+#endif
 #endif
             } else if (media_step_.load() == 2) {
                 const auto current = media_progress_bytes_.load();
@@ -2152,6 +2211,9 @@ private:
         bool success = false;
 #if defined(TTNX_M4_NATIVE_TEST_UI) && defined(TTNX_M4_RING_STREAM_CB_PROBE)
         std::shared_ptr<ttnx::playback::RollingStreamEpoch> pending_ring;
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+        std::shared_ptr<ttnx::switch_app::NativeDirectAvSession> pending_direct;
+#endif
 #endif
         {
             std::lock_guard<std::mutex> guard(media_mutex_);
@@ -2159,9 +2221,18 @@ private:
             media_feedback_ = std::move(pending_media_feedback_);
 #if defined(TTNX_M4_NATIVE_TEST_UI) && defined(TTNX_M4_RING_STREAM_CB_PROBE)
             pending_ring=std::move(pending_m4_epoch_);
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+            pending_direct=std::move(pending_m4_direct_);
+#endif
 #endif
         }
 #if defined(TTNX_M4_NATIVE_TEST_UI) && defined(TTNX_M4_RING_STREAM_CB_PROBE)
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+        if(pending_direct && media_cancel_requested_.load()) {
+            pending_direct->cancel();pending_direct.reset();success=false;
+            media_feedback_="M4: direct RAM streams cancelled before handoff.";
+        }
+#endif
         if(pending_ring && media_cancel_requested_.load()) {
             pending_ring->stop_and_join();
             (void)pending_ring->cleanup();
@@ -2186,6 +2257,13 @@ private:
             ttnx::switch_app::open_m4_native_ring_candidate(std::move(pending_ring));
             return;
         }
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+        if(success && pending_direct) {
+            ttnx::switch_app::open_m4_native_direct_candidate(
+                std::move(pending_direct),active_m3_video_id_);
+            return;
+        }
+#endif
 #endif
         if(success && pending_media_hls_)
             ttnx::switch_app::open_m3_completed_hls(
