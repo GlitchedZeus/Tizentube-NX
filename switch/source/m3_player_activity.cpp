@@ -425,10 +425,14 @@ public:
         }
         const auto arg=std::to_string(sec);
 #if defined(TTNX_M3_ADAPTIVE_EDL_SEEK)
-        // Exact, not mpv's keyframe-only default relative seek.
+        // Both locally combined M3 EDL and HTTPS-backed M4 EDL must seek
+        // exactly, avoiding the old lost-AAC-on-keyframe-skip behavior.
         const char* mode=use_adaptive_?"relative+exact":"relative";
 #else
         const char* mode="relative";
+#endif
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+        if(direct_session_)mode="relative+exact";
 #endif
         const char* cmd[]={"seek",arg.c_str(),mode,nullptr};
         const int result=mpv_command(handle_,cmd);
@@ -484,7 +488,11 @@ public:
         if(ring_epoch_)return false;
 #endif
         const auto text=std::to_string(seconds);
-        const char* cmd[]={"seek",text.c_str(),"absolute",nullptr};
+        const char* mode="absolute";
+#if defined(TTNX_M4_DIRECT_AV_PROBE)
+        if(direct_session_)mode="absolute+exact";
+#endif
+        const char* cmd[]={"seek",text.c_str(),mode,nullptr};
         const int result=mpv_command(handle_,cmd);
         M3Diagnostics::record(M3Stage::Player,M3Event::Seek,
                               static_cast<int>(seconds),result,1);

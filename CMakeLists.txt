@@ -291,7 +291,7 @@ if(TTNX_BUILD_TESTS)
     add_executable(tizentube_nx_direct_av_mpv_bridge_tests
         tests/direct_av_mpv_bridge_tests.cpp)
     target_include_directories(tizentube_nx_direct_av_mpv_bridge_tests PRIVATE tests/stubs)
-    target_link_libraries(tizentube_nx_direct_av_mpv_bridge_tests PRIVATE tizentube_nx_core)
+    target_link_libraries(tizentube_nx_direct_av_mpv_bridge_tests PRIVATE tizentube_nx_core Threads::Threads)
     add_test(NAME direct_av_mpv_bridge COMMAND tizentube_nx_direct_av_mpv_bridge_tests)
 
     add_executable(tizentube_nx_direct_av_long_vod_tests

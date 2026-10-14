@@ -52,6 +52,13 @@ class DirectVODIntegration(unittest.TestCase):
         self.assertIn("direct_session_->cancel()", PLAYER)
         self.assertIn("no SD media", PLAYER)
 
+    def test_exact_direct_av_seeks(self):
+        self.assertIn('if(direct_session_)mode="relative+exact";',PLAYER)
+        self.assertIn('if(direct_session_)mode="absolute+exact";',PLAYER)
+        self.assertIn("seek_generation.fetch_add(1",BRIDGE)
+        self.assertIn("compare_exchange_strong(expected",BRIDGE)
+        self.assertIn("std::lock_guard<std::mutex> read_lock",BRIDGE)
+
     def test_source_identity_and_no_shorts(self):
         self.assertIn("normal_search.kind!=core::ContentKind::Video", POLICY)
         self.assertIn("core::should_hide(normal_search)", POLICY)

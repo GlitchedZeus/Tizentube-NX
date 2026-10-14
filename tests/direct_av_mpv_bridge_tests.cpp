@@ -2,17 +2,26 @@
 #ifdef NDEBUG
 #undef NDEBUG
 #endif
+#include <atomic>
 #include <cassert>
+#include <chrono>
 #include <cstring>
 #include <string>
+#include <thread>
 using namespace ttnx;
 class Fake final:public playback::MediaChunkTransport {
 public:
     std::string file;
+    std::atomic<bool> block_once{false},entered{false},release{false};
     net::HttpResult perform(const net::HttpRequest& req)override {
         const auto value=req.headers[0].value;
         const auto dash=value.find('-');
         const auto first=std::stoull(value.substr(6,dash-6));
+        if(block_once.exchange(false,std::memory_order_acq_rel)) {
+            entered.store(true,std::memory_order_release);
+            while(!release.load(std::memory_order_acquire))
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
         const auto last=std::min<std::uint64_t>(
             std::stoull(value.substr(dash+1)),file.size()-1);
         net::HttpResult r;r.ok=true;r.response.status_code=206;
@@ -72,6 +81,29 @@ int main(){
     assert(audio_reopened.read_fn(audio_reopened.cookie,part,32)==32);
     assert(std::memcmp(part,audio.file.data()+150000,32)==0);
     audio_reopened.close_fn(audio_reopened.cookie);
+    // Race a slow HTTPS media read against an exact later seek. The reader
+    // must reject obsolete returned bytes and not advance the new cursor.
+    mpv_stream_cb_info raced{};
+    assert(playback::DirectAvMpvBridge::open(&bridge,videouri,&raced)==0);
+    assert(raced.seek_fn(raced.cookie,262144)==262144);
+    video.block_once.store(true);
+    std::atomic<std::int64_t> obsolete{0};
+    std::thread pending([&]{
+        char old_data[1024]{};
+        obsolete.store(raced.read_fn(raced.cookie,old_data,sizeof(old_data)),
+                       std::memory_order_release);
+    });
+    for(int i=0;i<5000 && !video.entered.load();++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    assert(video.entered.load());
+    assert(raced.seek_fn(raced.cookie,327680)==327680);
+    video.release.store(true);
+    pending.join();
+    assert(obsolete.load()<0);
+    char fresh[1024]{};
+    assert(raced.read_fn(raced.cookie,fresh,sizeof(fresh))==1024);
+    assert(std::memcmp(fresh,video.file.data()+327680,sizeof(fresh))==0);
+    raced.close_fn(raced.cookie);
     // A per-cookie cancellation does not poison independent video transport.
     assert(vinfo.seek_fn(vinfo.cookie,0)==0);
     assert(vinfo.read_fn(vinfo.cookie,part,8)==8);

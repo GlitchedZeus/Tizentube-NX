@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <algorithm>
 #include <string>
@@ -66,18 +67,38 @@ private:
     struct Cookie {
         std::shared_ptr<BoundedDirectTrack> track;
         std::atomic<std::uint64_t> pos{0};
+        std::atomic<std::uint64_t> seek_generation{0};
+        std::mutex read_mu,seek_mu;
         std::atomic<bool> cancelled{false};
     };
     static std::int64_t read(void* ptr,char* dest,std::uint64_t bytes) {
         if(!ptr || !dest || bytes==0)return MPV_ERROR_GENERIC;
         auto* c=static_cast<Cookie*>(ptr);
+        // libmpv may seek/cancel on a different callback thread while a
+        // CDN range request is blocked. Never return stale bytes nor advance
+        // the new cursor after an old read completes.
+        std::lock_guard<std::mutex> read_lock(c->read_mu);
         if(c->cancelled.load(std::memory_order_acquire))
             return MPV_ERROR_GENERIC;
-        auto n=c->track->read_at(c->pos.load(std::memory_order_acquire),
-                                dest,std::min<std::uint64_t>(
-                                    bytes,BoundedDirectTrack::kMaxRead));
-        if(n>0)c->pos.fetch_add(static_cast<std::uint64_t>(n),
-                              std::memory_order_acq_rel);
+        const auto generation=c->seek_generation.load(std::memory_order_acquire);
+        if(generation&1ULL)return MPV_ERROR_GENERIC;
+        const auto offset=c->pos.load(std::memory_order_acquire);
+        if(c->seek_generation.load(std::memory_order_acquire)!=generation)
+            return MPV_ERROR_GENERIC;
+        const auto n=c->track->read_at(offset,dest,
+            std::min<std::uint64_t>(bytes,BoundedDirectTrack::kMaxRead));
+        if(c->cancelled.load(std::memory_order_acquire) ||
+           c->seek_generation.load(std::memory_order_acquire)!=generation)
+            return MPV_ERROR_GENERIC;
+        if(n>0) {
+            auto expected=offset;
+            if(!c->pos.compare_exchange_strong(expected,
+                offset+static_cast<std::uint64_t>(n),
+                std::memory_order_acq_rel,std::memory_order_acquire))
+                return MPV_ERROR_GENERIC;
+            if(c->seek_generation.load(std::memory_order_acquire)!=generation)
+                return MPV_ERROR_GENERIC;
+        }
         return n<0?MPV_ERROR_GENERIC:n;
     }
     static std::int64_t seek(void* ptr,std::int64_t absolute) {
@@ -85,8 +106,13 @@ private:
         auto* c=static_cast<Cookie*>(ptr);
         if(c->cancelled.load(std::memory_order_acquire) ||
            absolute>c->track->size())return MPV_ERROR_UNSUPPORTED;
+        // A seek cannot wait for read_mu: its HTTPS read may take seconds.
+        // A seqlock-style generation invalidates that read immediately.
+        std::lock_guard<std::mutex> lock(c->seek_mu);
+        c->seek_generation.fetch_add(1,std::memory_order_acq_rel);
         c->pos.store(static_cast<std::uint64_t>(absolute),
                      std::memory_order_release);
+        c->seek_generation.fetch_add(1,std::memory_order_release);
         return absolute;
     }
     static std::int64_t size(void* ptr) {
