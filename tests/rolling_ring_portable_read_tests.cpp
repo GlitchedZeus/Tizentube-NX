@@ -15,7 +15,7 @@ int main() {
     fs::remove_all(root);
     fs::create_directory(root);
     const auto path=(root/"media.part").string();
-    auto ring=RollingFileStream::create(path,65536);
+    auto ring=RollingFileStream::create(path,131072);
     assert(ring);
     auto pattern=[](std::uint64_t pos) {
         return static_cast<char>((pos*37+9)%251);
@@ -55,7 +55,7 @@ int main() {
     // small, validated staging writes target the next logical media region.
     auto span=ring->open_reader(0);assert(span);
     assert(span->seek(2000)==2000);
-    assert(ring->begin_staged(4096));
+    assert(ring->begin_segment(4096));
     std::string staged(4096,'q');
     assert(ring->append_staged(std::string_view(staged.data(),2048))==
            RollingFileStream::Write::Written);
@@ -66,7 +66,7 @@ int main() {
     std::string peek(1024,'\0');
     assert(span->read(peek.data(),peek.size())==1024);
     assert(peek==bytes.substr(2000,peek.size()));
-    assert(ring->commit_staged());
+    assert(ring->commit_segment());
     span.reset();
     auto appended=ring->open_reader(65536);assert(appended);
     std::string published(4096,'\0');
