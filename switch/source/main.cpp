@@ -1865,25 +1865,34 @@ private:
                                             ttnx::switch_app::M3Diagnostics::record(ttnx::switch_app::M3Stage::Transfer,ttnx::switch_app::M3Event::Fail,phase,static_cast<int>(job.error()),0);
                                             return false;
                                         }
-                                        if((phase==4 || phase==5) &&
-                                           !pair_budget.admit(job.total_bytes())) {
-                                            pair_too_large.store(true);
-                                            if(sibling_failed)sibling_failed->store(true);
-                                            job.cancel();
-                                            ttnx::switch_app::M3Diagnostics::record(
-                                                ttnx::switch_app::M3Stage::Cache,
-                                                ttnx::switch_app::M3Event::Refused,
-                                                phase,static_cast<std::int64_t>(job.total_bytes()),
-                                                static_cast<std::int64_t>(pair_budget.reserved()));
-                                            return false;
-                                        }
+                                        // start() does not know Content-Range
+                                        // total yet. It becomes known after
+                                        // the first bounded pump()/HTTP 206.
                                         media_step_.store(phase);
+                                        bool budget_registered=false;
                                         std::uint64_t last_reported_mib=0;
                                         while(job.state()==
                                               ttnx::playback::MediaDownloadState::Fetching &&
                                               !media_cancel_requested_.load() &&
                                               !(sibling_failed && sibling_failed->load())) {
                                             (void)job.pump();
+                                            if((phase==4 || phase==5) &&
+                                               !budget_registered &&
+                                               job.total_bytes()!=0) {
+                                                budget_registered=true;
+                                                if(!pair_budget.admit(job.total_bytes())) {
+                                                    pair_too_large.store(true);
+                                                    if(sibling_failed)sibling_failed->store(true);
+                                                    ttnx::switch_app::M3Diagnostics::record(
+                                                        ttnx::switch_app::M3Stage::Cache,
+                                                        ttnx::switch_app::M3Event::Refused,
+                                                        phase,
+                                                        static_cast<std::int64_t>(job.total_bytes()),
+                                                        static_cast<std::int64_t>(pair_budget.reserved()));
+                                                    job.cancel();
+                                                    return false;
+                                                }
+                                            }
                                             if(job.state()==ttnx::playback::MediaDownloadState::Error &&
                                                sibling_failed)sibling_failed->store(true);
                                             if(job.retry_delay_ms()) {
