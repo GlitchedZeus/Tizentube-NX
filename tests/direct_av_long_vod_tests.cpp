@@ -63,14 +63,14 @@ int main() {
             const auto received=track.read_at(pos,buffer,sizeof(buffer));
             assert(received>0 && received<=32768);
             assert(buffer[0]==Virtual35MinuteMedia::at(pos));
-            assert(track.retained_bytes()<=playback::BoundedDirectTrack::kWindow);
+            assert(track.retained_bytes()<=2*playback::BoundedDirectTrack::kWindow);
         }
         assert(track.fetched_ranges()>=50);
     };
     std::thread one([&]{worker(v,video);});
     std::thread two([&]{worker(a,audio);});
     one.join();two.join();
-    assert(v.retained_bytes()+a.retained_bytes()<=2*playback::BoundedDirectTrack::kWindow);
+    assert(v.retained_bytes()+a.retained_bytes()<=4*playback::BoundedDirectTrack::kWindow);
     assert(video.calls.load()>50&&audio.calls.load()>50);
     v.cancel();a.cancel();
     char out[32]{};

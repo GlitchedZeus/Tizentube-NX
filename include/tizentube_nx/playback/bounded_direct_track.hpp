@@ -37,6 +37,8 @@ public:
         std::lock_guard<std::mutex> lock(mu_);
         std::fill(url_.begin(),url_.end(),'\0');url_.clear();
         std::fill(window_.begin(),window_.end(),'\0');window_.clear();
+        std::fill(previous_window_.begin(),previous_window_.end(),'\0');
+        previous_window_.clear();
     }
     // Run once on a background setup worker, not the Borealis UI thread.
     // Validates only a top-level MP4 'ftyp'; the codec and sample indexes
@@ -69,6 +71,14 @@ public:
         if(size_ && offset>=size_)return 0;
         if(window_.empty() || offset<window_first_ ||
            offset>=window_first_+window_.size()) {
+            // mpv may alternate the MP4 moov index and media data. Keep
+            // the immediately preceding 256-KiB window for A/B/A seeks.
+            // Both tracks combined still retain no more than 1 MiB.
+            if(!previous_window_.empty() && offset>=previous_first_ &&
+               offset-previous_first_<previous_window_.size()) {
+                window_.swap(previous_window_);
+                std::swap(window_first_,previous_first_);
+            } else {
             const std::uint64_t first=(offset/kWindow)*kWindow;
             const auto range=next_media_range(first,size_,kWindow);
             if(!range) {fault_=Fault::Http;return -1;}
@@ -86,9 +96,14 @@ public:
                 fault_=Fault::Http;return -1;
             }
             size_=bytes.resource_size;
+            // The verified old window is not overwritten if HTTP fails.
+            std::vector<char> replacement(bytes.bytes.begin(),bytes.bytes.end());
+            previous_window_.swap(window_);
+            previous_first_=window_first_;
+            window_.swap(replacement);
             window_first_=first;
-            window_.assign(bytes.bytes.begin(),bytes.bytes.end());
             ++ranges_fetched_;
+            }
         }
         const auto in_window=offset-window_first_;
         const auto n=std::min<std::uint64_t>({
@@ -109,7 +124,8 @@ public:
         std::lock_guard<std::mutex> lock(mu_);return ranges_fetched_;
     }
     [[nodiscard]] std::uint64_t retained_bytes()const noexcept {
-        std::lock_guard<std::mutex> lock(mu_);return window_.size();
+        std::lock_guard<std::mutex> lock(mu_);
+        return window_.size()+previous_window_.size();
     }
     void cancel()noexcept {cancelled_.store(true,std::memory_order_release);}
 private:
@@ -117,8 +133,8 @@ private:
     std::string url_; // ephemeral; never diagnostics or SD
     mutable std::mutex mu_;
     std::atomic<bool> cancelled_{false};
-    std::vector<char> window_;
-    std::uint64_t size_{0},window_first_{0},ranges_fetched_{0};
+    std::vector<char> window_,previous_window_;
+    std::uint64_t size_{0},window_first_{0},previous_first_{0},ranges_fetched_{0};
     Fault fault_{Fault::None};
 };
 } // namespace ttnx::playback

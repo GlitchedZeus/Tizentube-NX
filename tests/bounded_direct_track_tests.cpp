@@ -55,11 +55,14 @@ int main() {
     assert(fake.calls==1);
     assert(track.read_at(262144,block,32768)==32768);
     assert(fake.calls==2);
-    assert(track.retained_bytes()==262144);
-    assert(track.read_at(22,block,100)==100); // seek backward, bounded refetch
-    assert(fake.calls==3);
+    assert(track.retained_bytes()==524288);
+    assert(track.read_at(22,block,100)==100); // A/B/A cached
+    assert(fake.calls==2);
+    assert(track.read_at(262144,block,32)==32); // A/B/A/B cached
+    assert(fake.calls==2);
     assert(track.read_at(fake.source.size()-10,block,32)==10);
-    assert(fake.calls==4);
+    assert(fake.calls==3);
+    assert(track.retained_bytes()<=2*playback::BoundedDirectTrack::kWindow);
     assert(track.read_at(fake.source.size(),block,32)==0);
     assert(track.read_at(0,block,32769)==-1);
     track.cancel();
