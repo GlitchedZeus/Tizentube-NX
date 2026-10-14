@@ -1668,6 +1668,22 @@ private:
                     if(manifests.ready() && !media_cancel_requested_.load()) {
                         ttnx::playback::HlsSourceProbe probe(network_client_,manifests,guest);
                         const auto plan=probe.inspect(verified.id,720,60);
+                        // Unlike M3's separate MP4/AAC fallback, this first
+                        // M4 transport accepts ONLY a muxed H264/AAC MPEG-TS
+                        // playlist. YouTube can legitimately lack that VOD
+                        // representation even when separate MP4 plays.
+                        ttnx::switch_app::M3Diagnostics::record(
+                            ttnx::switch_app::M3Stage::Hls,
+                            ttnx::switch_app::M3Event::Status,
+                            6,plan?1:0,static_cast<int>(probe.last_error()));
+                        if(!plan) {
+                            feedback=probe.last_error()==
+                                ttnx::playback::HlsProbeError::VariantUnavailable
+                                ?"M4: no muxed H264/AAC HLS; separate video/audio streaming is not implemented."
+                                :std::string("M4 source: ")+
+                                     ttnx::playback::describe_hls_probe_failure(
+                                         probe.last_error());
+                        }
                         if(plan && !media_cancel_requested_.load()) {
                             epoch=ttnx::switch_app::create_native_ring_epoch(*plan,verified);
                             if(epoch && epoch->start()) {
