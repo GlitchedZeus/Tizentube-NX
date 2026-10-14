@@ -34,7 +34,7 @@ class NativeLocalPlayerContract(unittest.TestCase):
         self.assertIn('TTNX_M4_ROLLING_STREAM', self.make)
         self.assertIn('TTNX_M4_PLAYER_PROBE', self.ui_header)
         self.assertNotIn('open_m4_local_hls_probe', self.main)
-        self.assertIn('open_m3_completed_media()', self.main)
+        self.assertIn('open_m3_completed_media(', self.main)
 
     def test_accepted_hls_preserves_audio_and_fd_lease(self):
         self.assertIn('playback::HlsPlaybackLease ready_lease_', self.player)
