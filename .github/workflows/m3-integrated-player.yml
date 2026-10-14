@@ -137,8 +137,12 @@ jobs:
       - name: Prepare exact-head M4 hardware-lab instructions
         if: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'feature/m3-playback-foundation-20261011') || (github.event_name == 'push' && github.ref == 'refs/heads/feature/m3-playback-foundation-20261011') || (github.event_name == 'workflow_dispatch' && inputs.publish_hardware_candidate) }}
         run: |
+          CHECKOUT_SHA="$(git rev-parse HEAD)"
+          # PR workflows use a synthetic GITHUB_SHA merge commit. The NRO
+          # was built from the explicitly checked-out *real* feature head.
+          test "$CHECKOUT_SHA" = "${{ github.event.pull_request.head.sha || github.sha }}"
           sha256sum tizentube_nx_m4_native_test.nro > M4-SHA256SUMS.txt
-          printf 'TizenTube NX M4 native streaming hardware lab\nExact source HEAD: %s\nGitHub Actions run: %s\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" > M4-HARDWARE-TEST.txt
+          printf 'TizenTube NX M4 native streaming hardware lab\nExact checked-out source HEAD: %s\nGitHub Actions run: %s\n' "$CHECKOUT_SHA" "$GITHUB_RUN_ID" > M4-HARDWARE-TEST.txt
           cat >> M4-HARDWARE-TEST.txt <<'EOF'
 
           DEVELOPMENT / UNACCEPTED: Test on a disposable Switch homebrew

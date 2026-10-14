@@ -16,7 +16,7 @@ On the experimental native build only (`TTNX_M3_INTEGRATED=1`, `TTNX_M4_ROLLING_
 
 ## Hardware gates still open
 
-- Actual native `TTNX_M4_NATIVE_TEST_UI` devkitA64 compile and link.
+- Native `TTNX_M4_NATIVE_TEST_UI` devkitA64 compile/link **passed** on Actions run [38508943189](https://github.com/GlitchedZeus/Tizentube-NX/actions/runs/38508943189) (October 14, 2026). This is a build gate only, not evidence of Switch playback.
 - Launching a *normal*, non-Shorts Search result on a real Switch and reproducing **both visible moving picture and selected AAC audio**.
 - Sustained >10-minute playback, especially at the 24MiB-minus-reserve epoch boundary, without repeated buffering, lost frames, A/V drift, hangs or SD growth.
 - Verify 720p and 60fps only on genuinely supported sources; no synthetic FPS promises.
@@ -27,7 +27,7 @@ On the experimental native build only (`TTNX_M3_INTEGRATED=1`, `TTNX_M4_ROLLING_
 
 ## Build isolation
 
-The existing `.github/workflows/m3-integrated-player.yml` builds `tizentube_nx_m4_native_test.nro` under the four explicit flags, checks the native player/source objects and **does not upload or release the M4 test executable**. The separate accepted M3 NRO remains the hardware fallback. No MAIN merge or normal-menu enablement is implied by this build.
+The existing `.github/workflows/m3-integrated-player.yml` builds `tizentube_nx_m4_native_test.nro` under the four explicit flags, verifies the native objects, and **uploads an explicitly labeled, temporary M4 hardware-test artifact only when all native build steps pass**. It does not publish a release or replace the default NRO. The accepted M3 player remains available in the same test build and separately as the previously verified checkpoint. No MAIN merge or normal-menu enablement is implied. The artifact manifest must use the checked-out feature SHA, not GitHub's synthetic PR merge SHA.
 
 Normal host and sanitizer coverage is in `CMakeLists.txt` and `.github/workflows/host-tests.yml`. The key tests are `native_ring_plan`, `rolling_stream_epoch`, `rolling_stream_cancel_propagation`, `rolling_ring_reader_concurrency`, `rolling_epoch_clock`, `rolling_reprime_gate`, `rolling_stream_epoch_long_vod`, plus `m4_native_search_route_contract_tests.py`.
 

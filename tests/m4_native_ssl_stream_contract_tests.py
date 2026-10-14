@@ -31,13 +31,16 @@ class M4NativeSslStreamContract(unittest.TestCase):
 
     def test_no_unbounded_body_or_redirect_fallback(self):
         body=self.streaming_body()
+        # Ignore comment-only mentions of the forbidden whole-response path.
+        # Keep rejecting real executable calls to it.
+        executable=re.sub(r"(?m)^\s*//[^\n]*$", "", body)
         self.assertIn("net::Http1MediaStream parser(admit)",body)
         self.assertIn("parser.feed(",body)
         self.assertIn("parser.finish()",body)
         self.assertIn("net::Http1MediaStream::kReceiveChunk",body)
-        self.assertNotIn("perform_single_request(",body)
-        self.assertNotIn("perform(",body)
-        self.assertNotIn("redirect_url(",body)
+        self.assertNotIn("perform_single_request(",executable)
+        self.assertNotIn("perform(",executable)
+        self.assertNotIn("redirect_url(",executable)
         self.assertNotIn("std::vector<char>",body)
         self.assertNotIn("response.body.append",body)
 
@@ -46,7 +49,10 @@ class M4NativeSslStreamContract(unittest.TestCase):
         self.assertIn("is_reviewable_hls_child_url(url)",block)
         self.assertIn("parsed->port!=443",block)
         self.assertIn("perform_single_streamed_media_request(",block)
-        self.assertIn("if(bytes.size()>32*1024 || !emit(bytes))return false;",block)
+        # Cooperative Stop is a stronger requirement than the old size
+        # guard alone. Demand both cancellation and 32-KiB chunk bounds.
+        self.assertIn("cancelled_.load(std::memory_order_acquire) ||",block)
+        self.assertIn("bytes.size()>32*1024 || !emit(bytes))return false;",block)
         self.assertIn("byte_count>16*1024*1024",block)
         self.assertIn("TTNX_M4_ROLLING_STREAM=1",WORKFLOW)
         self.assertIn("build-m4-rolling/libnx_http_client.o",WORKFLOW)
