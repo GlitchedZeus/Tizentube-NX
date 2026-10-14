@@ -23,7 +23,7 @@ class M4RingReprimeContract(unittest.TestCase):
         event = PLAYER.split("if(e->event_id==MPV_EVENT_END_FILE)",1)[1].split(
             "if((requires_audio_gate())",1)[0]
         for item in ("MPV_END_FILE_REASON_EOF",
-                     "RingReprimeGate::Stage::Watching",
+                     "RollingReprimeGate::Stage::Watching",
                      "ring_verified_av_ && !audio_failure_latched_",
                      "snap.next_segment_index", "snap.epoch_origin_segment",
                      "stats.complete", "!stats.failed", "!stats.cancelled"):

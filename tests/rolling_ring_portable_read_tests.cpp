@@ -49,7 +49,31 @@ int main() {
     for(auto& t:workers)t.join();
     assert(ok);
     assert(ring->stats().readers==0);
-    auto tail=ring->open_reader(65536);assert(tail);
+
+    // The new portable producer write() path must not corrupt the shared FD
+    // cursor of a read cookie. Two concurrent readers keep seeking while
+    // small, validated staging writes target the next logical media region.
+    auto span=ring->open_reader(0);assert(span);
+    assert(span->seek(2000)==2000);
+    assert(ring->begin_staged(4096));
+    std::string staged(4096,'q');
+    assert(ring->append_staged(std::string_view(staged.data(),2048))==
+           RollingFileStream::Write::Written);
+    assert(ring->append_staged(std::string_view(staged.data()+2048,2048))==
+           RollingFileStream::Write::Written);
+    // Still unpublished: the active decoder cannot observe staged media.
+    assert(ring->stats().written_end==65536);
+    std::string peek(1024,'\0');
+    assert(span->read(peek.data(),peek.size())==1024);
+    assert(peek==bytes.substr(2000,peek.size()));
+    assert(ring->commit_staged());
+    span.reset();
+    auto appended=ring->open_reader(65536);assert(appended);
+    std::string published(4096,'\0');
+    assert(appended->read(published.data(),published.size())==4096);
+    assert(published==staged);
+    appended.reset();
+    auto tail=ring->open_reader(69632);assert(tail);
     ring->finish();
     char out{};
     assert(tail->read(&out,1)==0);

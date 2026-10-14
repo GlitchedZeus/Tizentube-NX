@@ -249,10 +249,19 @@ private:
         while(at<bytes.size()) {
             const auto slot=(absolute+at)%capacity_;
             const auto count=std::min<std::size_t>(bytes.size()-at,capacity_-slot);
+            // libnx/devkitA64 exports neither pwrite() nor pread().
+            // Both producer and decoder hold mu_ around offset changes and
+            // I/O, preserving independent logical read cursors on one FD.
+            // Seek once per contiguous ring span; partial writes continue
+            // from the descriptor's advanced offset without re-seeking.
+            for(;;) {
+                if(::lseek(fd_,static_cast<off_t>(slot),SEEK_SET)>=0)break;
+                if(errno==EINTR)continue;
+                failed_=true;cv_.notify_all();return false;
+            }
             std::size_t progress=0;
             while(progress<count) {
-                const auto n=::pwrite(fd_,bytes.data()+at+progress,count-progress,
-                                      static_cast<off_t>(slot+progress));
+                const auto n=::write(fd_,bytes.data()+at+progress,count-progress);
                 if(n<0 && errno==EINTR)continue;
                 if(n<=0) {failed_=true;cv_.notify_all();return false;}
                 progress+=static_cast<std::size_t>(n);
