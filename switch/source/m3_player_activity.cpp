@@ -12,6 +12,7 @@
 #include "media_file_sink.hpp"
 #include "hls_cache_sink.hpp"
 #include "tizentube_nx/playback/audio_gate.hpp"
+#include "tizentube_nx/playback/player_volume.hpp"
 #include "tizentube_nx/playback/hls_playback_lease.hpp"
 #if defined(TTNX_M3_ADAPTIVE_EDL_SEEK)
 #include "tizentube_nx/playback/local_adaptive_edl.hpp"
@@ -123,6 +124,12 @@ public:
             !required("audio-channels","stereo")) {
             close();return false;
         }
+        // Up to 150% optional software output gain. Never block the known
+        // good playback path if pinned Switch libmpv omits this option.
+        const int volume_max_rc=mpv_set_option_string(
+            handle_,"volume-max","150");
+        M3Diagnostics::record(M3Stage::Player,M3Event::Status,
+                              40,150,volume_max_rc);
         if(use_adaptive_) {
             const bool pair_ready=SwitchMediaCacheSink::adaptive_pair_valid();
             M3Diagnostics::record(M3Stage::Cache,M3Event::Status,3,pair_ready ? 1 : 0,0);
@@ -204,6 +211,9 @@ public:
         mpv_render_context_set_update_callback(
             renderer_,&CachedMpv::notify_render_update,this);
         M3Diagnostics::record(M3Stage::Render,M3Event::Ready,1,kWidth,kHeight);
+        // Runtime property is set only after mpv_initialize. A decoder
+        // re-prime re-creates mpv but retains the user's session volume.
+        (void)apply_volume();
         status_=use_live_hls_?"Ready: reviewed local rolling HLS probe":
                               "Ready: local verified cache";
         return true;
@@ -341,6 +351,18 @@ public:
             use_hls_?"Opening fully cached HLS + AAC playlists...":
             use_adaptive_?"Opening video MP4 plus verified AAC file...":
                           "Loading completed local MP4...";
+        return true;
+    }
+    [[nodiscard]] int volume_percent()const noexcept {
+        return volume_applied_ ? volume_.percent() : 100;
+    }
+    [[nodiscard]] bool change_volume(int delta) {
+        const auto before=volume_.percent();
+        if(!volume_.adjust(delta))return false;
+        if(handle_ && !apply_volume()) {
+            (void)volume_.set(before);
+            return false;
+        }
         return true;
     }
     void pause() {
@@ -769,9 +791,20 @@ public:
             if(s.waiting_for_playback)str+=" wait";
         }
 #endif
+        str+=" | Vol "+std::to_string(volume_percent())+"%";
         return str;
     }
 private:
+    [[nodiscard]] bool apply_volume() {
+        if(!handle_)return false;
+        double level=static_cast<double>(volume_.percent());
+        const int result=mpv_set_property(
+            handle_,"volume",MPV_FORMAT_DOUBLE,&level);
+        volume_applied_=result>=0;
+        M3Diagnostics::record(M3Stage::Player,M3Event::Status,
+                              41,volume_.percent(),result);
+        return volume_applied_;
+    }
     static void notify_render_update(void* context) noexcept {
         if(context)static_cast<CachedMpv*>(context)->
             render_notifications_.fetch_add(1,std::memory_order_release);
@@ -785,6 +818,7 @@ private:
             mpv_render_context_free(renderer_);renderer_=nullptr;
         }
         if(handle_){mpv_terminate_destroy(handle_);handle_=nullptr;}
+        volume_applied_=false;
         // Release ONLY after libmpv has closed every file descriptor.
         ready_lease_.release();
 #if defined(TTNX_M4_RING_STREAM_CB_PROBE)
@@ -814,6 +848,8 @@ private:
     std::string status_{"Starting libmpv..."};
     bool have_frame_{false},new_frame_{false};
     playback::AudioSelectionGate audio_gate_{};
+    playback::PlayerVolume volume_{};
+    bool volume_applied_{false};
     playback::HlsPlaybackLease ready_lease_{};
     bool audio_failure_latched_{false};
     unsigned long long frames_{0};
@@ -988,6 +1024,12 @@ public:
         add_button(actions,"+10s",[this]{
             player_.seek(10);tv_controls_.activate(playback_clock_ms());update();
         });
+        add_button(actions,"Vol -10%",[this]{
+            (void)player_.change_volume(-10);tv_controls_.activate(playback_clock_ms());update();
+        });
+        add_button(actions,"Vol +10%",[this]{
+            (void)player_.change_volume(10);tv_controls_.activate(playback_clock_ms());update();
+        });
         add_button(actions,"Details",[this]{
             tv_controls_.diagnostics(playback_clock_ms());update();
         });
@@ -1026,6 +1068,14 @@ public:
         auto* two=new brls::Box(brls::Axis::ROW);two->setHeight(56);root->addView(two);
         add_button(two,"Seek -10s (L)",[this]{player_.seek(-10);update();});
         add_button(two,"Seek +10s (R)",[this]{player_.seek(10);update();});
+        auto* sound=new brls::Box(brls::Axis::ROW);
+        sound->setHeight(56);root->addView(sound);
+        add_button(sound,"Volume -10%",[this]{
+            (void)player_.change_volume(-10);update();
+        });
+        add_button(sound,"Volume +10%",[this]{
+            (void)player_.change_volume(10);update();
+        });
 #endif
         root->registerAction("Back",brls::BUTTON_B,[this](brls::View*) {
 #ifdef TTNX_M4_TV_PLAYER_UI

@@ -104,6 +104,11 @@ if(TTNX_BUILD_TESTS)
     target_link_libraries(tizentube_nx_adaptive_playback_policy_tests PRIVATE Threads::Threads)
     add_test(NAME adaptive_playback_policy COMMAND tizentube_nx_adaptive_playback_policy_tests)
 
+    add_executable(tizentube_nx_player_volume_tests
+        tests/player_volume_tests.cpp)
+    target_include_directories(tizentube_nx_player_volume_tests PRIVATE include)
+    add_test(NAME player_volume COMMAND tizentube_nx_player_volume_tests)
+
     add_executable(tizentube_nx_rolling_file_stream_tests
         tests/rolling_file_stream_tests.cpp)
     target_include_directories(tizentube_nx_rolling_file_stream_tests PRIVATE include)
