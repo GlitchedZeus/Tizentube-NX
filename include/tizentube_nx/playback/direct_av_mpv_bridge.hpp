@@ -65,6 +65,10 @@ public:
     }
 private:
     struct Cookie {
+        // Explicit constructor avoids -Wmissing-field-initializers for
+        // mutex and atomic callback state on GCC/devkitA64.
+        explicit Cookie(std::shared_ptr<BoundedDirectTrack> owner)
+            :track(std::move(owner)) {}
         std::shared_ptr<BoundedDirectTrack> track;
         std::atomic<std::uint64_t> pos{0};
         std::atomic<std::uint64_t> seek_generation{0};
