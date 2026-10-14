@@ -85,7 +85,7 @@ public:
             }
             size_=bytes.resource_size;
             window_first_=first;
-            window_=std::move(bytes.bytes);
+            window_.assign(bytes.bytes.begin(),bytes.bytes.end());
             ++ranges_fetched_;
         }
         const auto in_window=offset-window_first_;

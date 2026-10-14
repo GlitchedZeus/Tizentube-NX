@@ -37,7 +37,7 @@ public:
 int main() {
     FakeTransport fake;
     fake.source.resize(1024*1024+901,'A');
-    fake.source.replace(0,12,std::string("\0\0\0\x18ftypmp42",12));
+    fake.source.replace(0,12,std::string("\0\0\0\x18""ftypmp42",12));
     for(std::size_t i=12;i<fake.source.size();++i)
         fake.source[i]=static_cast<char>('a'+i%26);
     playback::MediaChunkReader http(fake);

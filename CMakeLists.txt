@@ -283,6 +283,11 @@ if(TTNX_BUILD_TESTS)
     add_test(NAME physical_cache_admission
         COMMAND tizentube_nx_physical_cache_admission_tests)
 
+    add_executable(tizentube_nx_bounded_direct_track_tests
+        tests/bounded_direct_track_tests.cpp)
+    target_link_libraries(tizentube_nx_bounded_direct_track_tests PRIVATE tizentube_nx_core)
+    add_test(NAME bounded_direct_track COMMAND tizentube_nx_bounded_direct_track_tests)
+
     add_executable(tizentube_nx_media_chunks_tests tests/media_chunks_tests.cpp)
     target_link_libraries(tizentube_nx_media_chunks_tests PRIVATE tizentube_nx_core)
     add_test(NAME media_chunks COMMAND tizentube_nx_media_chunks_tests)
