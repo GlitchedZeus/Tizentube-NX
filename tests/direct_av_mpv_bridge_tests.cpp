@@ -96,7 +96,15 @@ int main(){
     for(int i=0;i<5000 && !video.entered.load();++i)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     assert(video.entered.load());
+    // A blocked HTTPS call cannot freeze the UI statistics or seek callback.
+    const auto started=std::chrono::steady_clock::now();
+    assert(v->size()==650000);
+    assert(v->retained_bytes()<=2*playback::BoundedDirectTrack::kWindow);
+    assert(v->fetched_ranges()>0);
+    assert(v->range_retries()==0);
     assert(raced.seek_fn(raced.cookie,327680)==327680);
+    assert(std::chrono::steady_clock::now()-started<
+           std::chrono::milliseconds(500));
     video.release.store(true);
     pending.join();
     assert(obsolete.load()<0);

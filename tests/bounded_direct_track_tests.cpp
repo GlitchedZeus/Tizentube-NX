@@ -56,6 +56,8 @@ int main() {
     playback::BoundedDirectTrack track(http,url);
     assert(track.prime());
     assert(track.size()==static_cast<std::int64_t>(fake.source.size()));
+    assert(track.fetched_ranges()==1);
+    assert(track.range_retries()==0);
     assert(fake.calls==1);
     assert(track.retained_bytes()==262144);
     char block[32768]{};
